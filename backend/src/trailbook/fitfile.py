@@ -9,7 +9,7 @@ from datetime import datetime
 from garmin_fit_sdk import Decoder, Stream
 
 from . import geo
-from .sports import ON_FOOT, categorize
+from .sports import ON_FOOT_GROUPS, classify
 
 FIT_EPOCH_S = 631065600  # 1989-12-31T00:00:00Z
 FILE_TYPE_ACTIVITY = 4
@@ -143,6 +143,7 @@ class ParsedActivity:
     sport: str | None
     sub_sport: str | None
     category: str
+    activity_type: str
     indoor: bool
     name: str | None
     device: str | None
@@ -196,8 +197,8 @@ def parse_activity(data: bytes) -> ParsedActivity:
         sport, sub_sport = None, None
     sport = str(sport) if sport is not None else None
     sub_sport = str(sub_sport) if sub_sport is not None else None
-    category, indoor = categorize(sport, sub_sport)
-    on_foot = category in ON_FOOT
+    category, activity_type, indoor = classify(sport, sub_sport)
+    on_foot = category in ON_FOOT_GROUPS
 
     start_time = None
     if sessions:
@@ -311,6 +312,7 @@ def parse_activity(data: bytes) -> ParsedActivity:
         sport=sport,
         sub_sport=sub_sport,
         category=category,
+        activity_type=activity_type,
         indoor=indoor,
         name=name or None,
         device=device or None,

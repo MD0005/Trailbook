@@ -8,7 +8,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import __version__, db, importer
+from . import __version__, db, importer, sports
 
 
 def _set_low_priority() -> None:
@@ -99,14 +99,16 @@ def cmd_status(conn, args) -> int:
            GROUP BY skip_reason ORDER BY n DESC"""
     ):
         print(f"  {r['skip_reason'] or '-':18} {r['n']}")
-    print("Activities by person and category:")
+    print("Activities by person, group and type:")
     for r in conn.execute(
-        """SELECT p.label, a.category, COUNT(*) n, SUM(a.distance_m) d, SUM(a.moving_s) t
+        """SELECT p.label, a.category, a.activity_type, COUNT(*) n, SUM(a.distance_m) d,
+                  SUM(a.moving_s) t
            FROM activities a JOIN persons p ON p.id = a.person_id
-           GROUP BY p.label, a.category ORDER BY p.label, n DESC"""
+           GROUP BY p.label, a.category, a.activity_type
+           ORDER BY p.label, a.category, n DESC"""
     ):
         print(
-            f"  {r['label']:16} {r['category']:9} {r['n']:5}  "
+            f"  {r['label']:16} {r['category']:10} {r['activity_type']:16} {r['n']:5}  "
             f"{_fmt_km(r['d']):>12}  {_fmt_duration(r['t']):>10}"
         )
     return 0
@@ -140,7 +142,7 @@ def cmd_activities(conn, args) -> int:
     for r in conn.execute(sql, params):
         indoor = "(in)" if r["indoor"] else "    "
         print(
-            f"{r['id']:5} {r['start_time_utc']}  {r['category']:8}{indoor} "
+            f"{r['id']:5} {r['start_time_utc']}  {r['activity_type']:14}{indoor} "
             f"{_fmt_km(r['distance_m']):>10} {_fmt_duration(r['moving_s']):>9} "
             f"HR {r['avg_hr'] or '-':>3}  {r['name'] or ''}"
         )
@@ -172,6 +174,37 @@ def cmd_delete_activity(conn, args) -> int:
     ok = importer.delete_activity(conn, args.id)
     print("Deleted." if ok else f"No activity {args.id}")
     return 0 if ok else 1
+
+
+def cmd_reprocess(conn, args) -> int:
+    queued = importer.requeue_outdated(conn, everything=args.all)
+    print(f"Queued {queued} files for reprocessing.")
+    if queued and not args.no_import:
+        root = _setting(conn, "root")
+        if not root:
+            print("No root folder stored; run `trailbook scan <folder>` first.")
+            return 2
+        result = importer.run_queue(conn, root)
+        print(f"Reprocessed {result.imported}, errors {result.errors}.")
+    return 0
+
+
+def cmd_set_type(conn, args) -> int:
+    if args.type not in sports.TYPES:
+        print(f"Unknown type '{args.type}'. See `trailbook types`.")
+        return 2
+    importer.set_activity_type(conn, args.id, args.type)
+    print(f"Activity {args.id} is now {args.type}.")
+    return 0
+
+
+def cmd_types(conn, args) -> int:
+    for group, (en, pl) in sports.GROUPS.items():
+        print(f"{group}  —  {en} / {pl}")
+        for t in sports.TYPES.values():
+            if t.group == group:
+                print(f"    {t.key:18} {t.en} / {t.pl}{'  (indoor)' if t.indoor else ''}")
+    return 0
 
 
 def _setting(conn, key: str) -> str | None:
@@ -218,6 +251,18 @@ def main(argv: list[str] | None = None) -> int:
     )
     p.add_argument("id", type=int)
     p.set_defaults(func=cmd_delete_activity)
+
+    p = sub.add_parser("reprocess", help="rebuild activities made by an older importer")
+    p.add_argument("--all", action="store_true", help="rebuild every activity")
+    p.add_argument("--no-import", action="store_true", help="only queue the files")
+    p.set_defaults(func=cmd_reprocess)
+
+    p = sub.add_parser("set-type", help="change the type of an activity (kept on reimport)")
+    p.add_argument("id", type=int)
+    p.add_argument("type")
+    p.set_defaults(func=cmd_set_type)
+
+    sub.add_parser("types", help="list activity groups and types").set_defaults(func=cmd_types)
 
     args = parser.parse_args(argv)
     if hasattr(sys.stdout, "reconfigure"):

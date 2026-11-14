@@ -171,3 +171,22 @@ def test_sample_data_end_to_end(conn, tmp_path):
         ).fetchone()[0]
         == 0
     )
+
+
+@needs_samples
+def test_type_override_survives_reprocess(conn, tmp_path):
+    root = tmp_path / "root"
+    shutil.copytree(SAMPLE_DATA, root)
+    importer.scan(conn, root)
+    importer.run_queue(conn, root)
+
+    a = conn.execute("SELECT id FROM activities ORDER BY id LIMIT 1").fetchone()
+    importer.set_activity_type(conn, a["id"], "hike")
+    queued = importer.requeue_outdated(conn, everything=True)
+    assert queued > 0
+    assert importer.run_queue(conn, root).imported == queued
+
+    row = conn.execute(
+        "SELECT category, activity_type FROM activities WHERE id = ?", (a["id"],)
+    ).fetchone()
+    assert (row["category"], row["activity_type"]) == ("hike", "hike")

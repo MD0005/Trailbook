@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
-from . import IMPORTER_VERSION, fitfile, geo, streams
+from . import IMPORTER_VERSION, fitfile, geo, sports, streams
 
 TRACK_TOLERANCE_M = 5.0
 
@@ -318,6 +318,7 @@ def _store_activity(
         "sport": p.sport,
         "sub_sport": p.sub_sport,
         "category": p.category,
+        "activity_type": p.activity_type,
         "indoor": int(p.indoor),
         "name": p.name,
         "device": p.device,
@@ -335,11 +336,12 @@ def _store_activity(
     else:
         activity_id = replace_id
         current = conn.execute(
-            "SELECT category_overridden, name_overridden FROM activities WHERE id = ?",
+            "SELECT type_overridden, name_overridden FROM activities WHERE id = ?",
             (activity_id,),
         ).fetchone()
-        if current["category_overridden"]:
+        if current["type_overridden"]:
             values.pop("category")
+            values.pop("activity_type")
         if current["name_overridden"]:
             values.pop("name")
         assignments = ", ".join(f"{c} = ?" for c in values)
@@ -411,6 +413,31 @@ def delete_activity(conn: sqlite3.Connection, activity_id: int) -> bool:
         conn.execute("ROLLBACK")
         raise
     return cur.rowcount > 0
+
+
+def requeue_outdated(conn: sqlite3.Connection, everything: bool = False) -> int:
+    """Queue imported files again so their activities are rebuilt by the current importer.
+
+    Only files that are still on disk are requeued; activities of missing files keep their
+    data. User overrides (type, name) survive. Returns the number of queued files.
+    """
+    sql = """UPDATE files SET status = 'new'
+             WHERE status = 'imported' AND activity_id IS NOT NULL"""
+    params: tuple = ()
+    if not everything:
+        sql += " AND activity_id IN (SELECT id FROM activities WHERE importer_version < ?)"
+        params = (IMPORTER_VERSION,)
+    return conn.execute(sql, params).rowcount
+
+
+def set_activity_type(conn: sqlite3.Connection, activity_id: int, type_key: str) -> None:
+    """User override of the activity type; the group follows the type."""
+    t = sports.TYPES[type_key]
+    conn.execute(
+        """UPDATE activities SET activity_type = ?, category = ?, type_overridden = 1
+           WHERE id = ?""",
+        (t.key, t.group, activity_id),
+    )
 
 
 def dismiss_missing(conn: sqlite3.Connection, file_id: int) -> None:

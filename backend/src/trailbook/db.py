@@ -39,9 +39,10 @@ MIGRATIONS: list[str] = [
         utc_offset_s        INTEGER,            -- local time = UTC + offset
         sport               TEXT,               -- raw FIT sport
         sub_sport           TEXT,               -- raw FIT sub_sport
-        category            TEXT NOT NULL,
+        category            TEXT NOT NULL,      -- group, see sports.GROUPS
+        activity_type       TEXT NOT NULL,      -- see sports.TYPES
         indoor              INTEGER NOT NULL DEFAULT 0,
-        category_overridden INTEGER NOT NULL DEFAULT 0,
+        type_overridden     INTEGER NOT NULL DEFAULT 0, -- user changed type, keep on reimport
         name                TEXT,
         name_overridden     INTEGER NOT NULL DEFAULT 0,
         device              TEXT,
@@ -75,6 +76,7 @@ MIGRATIONS: list[str] = [
     );
     CREATE INDEX ix_activities_person_time ON activities(person_id, start_time_utc);
     CREATE INDEX ix_activities_person_cat ON activities(person_id, category);
+    CREATE INDEX ix_activities_person_type ON activities(person_id, activity_type);
 
     CREATE TABLE files (
         id              INTEGER PRIMARY KEY,

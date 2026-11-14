@@ -46,13 +46,39 @@ def test_peek_file_type():
     assert fitfile.peek_file_type(b"not a fit file at all") is None
 
 
-def test_categorize():
-    assert sports.categorize("running", "treadmill") == ("run", True)
-    assert sports.categorize("running", "generic") == ("run", False)
-    assert sports.categorize("cycling", "virtual_activity") == ("ride", True)
-    assert sports.categorize("training", "strength_training") == ("strength", False)
-    assert sports.categorize("training", "yoga") == ("other", False)
-    assert sports.categorize(None, None) == ("other", False)
+def test_classify():
+    assert sports.classify("running", "treadmill") == ("run", "treadmill_run", True)
+    assert sports.classify("running", "generic") == ("run", "run", False)
+    assert sports.classify("running", "trail") == ("run", "trail_run", False)
+    assert sports.classify("cycling", "virtual_activity") == ("ride", "virtual_ride", True)
+    assert sports.classify("cycling", "gravel_cycling") == ("ride", "gravel_ride", False)
+    assert sports.classify("training", "strength_training") == ("fitness", "strength", False)
+    assert sports.classify("training", "yoga") == ("mind_body", "yoga", False)
+    assert sports.classify("fitness_equipment", "yoga") == ("mind_body", "yoga", False)
+    assert sports.classify("racket", "padel") == ("racket", "padel", False)
+    assert sports.classify("swimming", "lap_swimming") == ("swim", "pool_swim", True)
+    assert sports.classify("walking", "generic") == ("walk", "walk", False)
+    assert sports.classify("some_new_sport", None) == ("other", "other", False)
+    assert sports.classify(None, None) == ("other", "other", False)
+
+
+def test_every_fit_sport_has_a_type():
+    from garmin_fit_sdk import Profile
+
+    unmapped = [
+        s
+        for s in Profile["types"]["sport"].values()
+        # Deliberately left as "other": too vague to be a useful type of their own.
+        if s not in ("all", "generic", "tactical", "para_sport")
+        and sports.resolve_type(s, None).key == "other"
+    ]
+    assert unmapped == [], unmapped
+
+
+def test_types_reference_known_groups():
+    for t in sports.TYPES.values():
+        assert t.group in sports.GROUPS, t
+        assert t.en and t.pl
 
 
 def test_migrations_are_idempotent(tmp_path):

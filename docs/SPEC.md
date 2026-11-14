@@ -197,11 +197,21 @@ are recomputed from stored streams where possible.
 
 ## 7. Domain rules
 
-### 7.1 Categories
-Trailbook categories: `run`, `ride`, `swim`, `walk`, `hike`, `ski`, `row`, `strength`,
-`other`, each with an `indoor` flag (treadmill, indoor cycling, virtual ride, pool swim).
-The mapping from FIT `sport`/`sub_sport` lives in one table in code. Users can override
-the category of an activity; overrides survive reprocessing.
+### 7.1 Activity groups and types
+Two levels, both defined in `backend/src/trailbook/sports.py` with EN and PL names:
+- **Group** (`activities.category`) for totals and filters: `run`, `ride`, `swim`, `walk`,
+  `hike`, `winter`, `water`, `fitness`, `mind_body`, `climbing`, `racket`, `team`, `combat`,
+  `multisport`, `other`.
+- **Type** (`activities.activity_type`) for detailed analysis, ~120 types covering the Garmin
+  sport list: e.g. `trail_run`, `treadmill_run`, `gravel_ride`, `virtual_ride`, `pool_swim`,
+  `ski_skate`, `yoga`, `pilates`, `strength`, `hiit`, `padel`, `bouldering`.
+
+Mapping from FIT `sport`/`sub_sport`: exact pair → sub-sport that means the same under any
+sport (yoga, strength_training, padel, …) → sport default → `other`. A test checks that every
+FIT sport known to the SDK has a type. Each activity also has an `indoor` flag.
+Users can change the type of an activity (the group follows); the override survives
+reprocessing. When the importer version increases, `trailbook reprocess` rebuilds older
+activities from files still on disk.
 
 ### 7.2 Thresholds per person (with `valid_from`)
 `hr_max`, `hr_rest`, `lthr` (lactate threshold HR), `ftp` (W), `threshold_pace` (s/km),
