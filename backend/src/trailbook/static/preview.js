@@ -335,7 +335,23 @@ function statStrip(items, cls = "") {
 
 // ---- Activities ---------------------------------------------------------------------
 
-const VIEWS = [["list", "List", ICON.list], ["small", "Small tiles", ICON.tilesSmall], ["large", "Large tiles", ICON.tilesLarge]];
+const VIEWS = [["list", "List", ICON.list], ["small", "Tiles", ICON.tilesSmall], ["large", "Large tiles", ICON.tilesLarge]];
+
+// Small speed-over-time chart for large tiles (higher = faster), with the average pace.
+function paceSpark(series) {
+  const pts = (series || []).map((v, i) => [i, v]).filter(([, v]) => v);
+  if (pts.length < 2) return `<span class="hint">no pace data</span>`;
+  const W = 300, H = 120, P = 8;
+  const vals = pts.map(([, v]) => v), lo = Math.min(...vals), hi = Math.max(...vals) || 1;
+  const n = (series.length - 1) || 1;
+  const xy = pts.map(([i, v]) => [P + (i / n) * (W - 2 * P), H - P - ((v - lo) / (hi - lo || 1)) * (H - 2 * P)]);
+  const line = xy.map(([x, y], i) => `${i ? "L" : "M"}${x.toFixed(1)},${y.toFixed(1)}`).join("");
+  const area = `${line}L${xy[xy.length - 1][0].toFixed(1)},${H - P}L${xy[0][0].toFixed(1)},${H - P}Z`;
+  const avg = vals.reduce((a, b) => a + b, 0) / vals.length;
+  return `<div class="spark"><span class="hint">Avg ${pace(avg)} · best ${pace(hi)}</span>
+    <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
+    <path d="${area}" fill="var(--accent)" opacity=".12"/><path d="${line}" fill="none" stroke="var(--accent)" stroke-width="2" vector-effect="non-scaling-stroke"/></svg></div>`;
+}
 
 function activitySummary(t) {
   const weeks = t.first && t.last ? Math.max(1, (Date.parse(t.last) - Date.parse(t.first)) / (7 * 864e5)) : 1;
@@ -358,7 +374,8 @@ async function renderActivities(params) {
   if (params.name) q.q = params.name;
   if (!isAll) q.person = CURRENT;
   else if (params.person) q.person = params.person;
-  if (mode === "large") q.track = "1";
+  const tileContent = store.get("tile-content") === "pace" ? "pace" : "route";
+  if (mode === "large") { if (tileContent === "pace") q.chart = "pace"; else q.track = "1"; }
   const fetchPage = (offset) => api("activities?" + new URLSearchParams({ ...q, offset }));
   const data = await fetchPage(0);
 
@@ -381,7 +398,7 @@ async function renderActivities(params) {
 
   const tile = (a) => `
     <a class="tile ${mode}" href="#/activity/${a.id}">
-      ${mode === "large" ? `<div class="tile-map">${a.polyline ? trackSvg(a.polyline, "tile-track") : `<span class="hint">${a.indoor ? "indoor" : "no route"}</span>`}</div>` : ""}
+      ${mode === "large" ? `<div class="tile-map">${tileContent === "pace" ? paceSpark(a.speed_series) : a.polyline ? trackSvg(a.polyline, "tile-track") : `<span class="hint">${a.indoor ? "indoor" : "no route"}</span>`}</div>` : ""}
       <div class="tile-head">
         <b>${esc(a.name || typeLabel(a.activity_type))}</b>
         <span class="hint">${esc(typeLabel(a.activity_type))} · ${localTime(a)}${isAll ? ` · ${esc(personLabel(a.person_id))}` : ""}</span>
@@ -414,10 +431,10 @@ async function renderActivities(params) {
   view.innerHTML = `
     ${pageHead("Activities", `
       ${badgeHtml("filter", "Filter", active.join(" · ") || "All", { panel: filterPanelHtml, on: active.length > 0 })}
+      ${badgeHtml("options", "Options", "", { panel: `<div class="opt-panel">${row("Large tiles", segCtl("tile-content", [["route", "Route map"], ["pace", "Pace chart"]], tileContent))}
+        <div class="hint" style="margin-top:6px">More chart types (intervals) will follow.</div></div>` })}
       <button class="badge ${showSummary ? "on" : ""}" data-kpis>Summary</button>`,
-      `<div class="segmented" role="group" aria-label="View">
-        ${VIEWS.map(([k, label, icon]) => `<button class="icon ${k === mode ? "active" : ""}" data-view="${k}" title="${label}" aria-label="${label}">${icon}</button>`).join("")}
-      </div>`)}
+      switchHtml("view", VIEWS.map(([k, label, icon]) => [k, `${icon}<span>${label}</span>`]), mode))}
     <div data-summary ${showSummary ? "" : "hidden"}>${activitySummary(data.totals)}</div>
     <div class="card">${body}</div>`;
   bindBadges(view.querySelector(".page-head"));
@@ -431,7 +448,12 @@ async function renderActivities(params) {
     e.currentTarget.classList.toggle("on", on);
     view.querySelector("[data-summary]").hidden = !on;
   };
-  view.querySelectorAll("[data-view]").forEach((b) => b.onclick = () => { store.set("view", b.dataset.view); renderActivities(params); });
+  view.querySelectorAll("[data-switch=view]").forEach((b) => b.onclick = () => { store.set("view", b.dataset.value); renderActivities(params); });
+  view.querySelectorAll("[data-chip=tile-content]").forEach((b) => b.onclick = () => {
+    store.set("tile-content", b.dataset.value);
+    if (mode === "large") renderActivities(params);
+    else view.querySelectorAll("[data-chip=tile-content]").forEach((x) => x.classList.toggle("on", x === b));
+  });
   view.addEventListener("click", async (e) => {
     const b = e.target.closest("[data-delete]");
     if (!b) return;
@@ -785,7 +807,34 @@ function bindBadges(root) {
     root.querySelectorAll(".badge.open").forEach((x) => x.classList.remove("open"));
   };
 }
-// Choice chips (one of many) and toggle chips (on/off) — used in all settings panels.
+// Compact option rows: label on the left, control on the right.
+const row = (label, control) => `<div class="opt-row"><span class="opt-label">${label}</span><div class="opt-control">${control}</div></div>`;
+const selectCtl = (name, options, current) => `<select name="${name}">${options.map(([v, l]) =>
+  `<option value="${esc(v)}" ${String(v) === String(current) ? "selected" : ""}>${esc(l)}</option>`).join("")}</select>`;
+const segCtl = (name, options, current) => `<div class="seg">${options.map(([v, l]) =>
+  `<button class="${String(v) === String(current) ? "on" : ""}" data-chip="${name}" data-value="${v}">${l}</button>`).join("")}</div>`;
+const checkCtl = (name, on, label, title = "") =>
+  `<label class="check" ${title ? `title="${esc(title)}"` : ""}><input type="checkbox" name="${name}" ${on ? "checked" : ""}> ${label}</label>`;
+
+// Accordion: one section open at a time.
+function accordion(sections, open) {
+  return `<div class="acc">${sections.map(([key, title, summary, body]) => `
+    <section class="acc-item ${key === open ? "open" : ""}" data-acc="${key}">
+      <button class="acc-head" data-acc-head="${key}"><span>${title}</span><span class="acc-sum">${summary}</span>${ICON.chevron}</button>
+      <div class="acc-body">${body}</div>
+    </section>`).join("")}</div>`;
+}
+function bindAccordion(el, onOpen) {
+  el.querySelectorAll("[data-acc-head]").forEach((h) => h.onclick = () => {
+    const item = h.closest(".acc-item");
+    const willOpen = !item.classList.contains("open");
+    el.querySelectorAll(".acc-item").forEach((x) => x.classList.remove("open"));
+    item.classList.toggle("open", willOpen);
+    if (onOpen) onOpen(willOpen ? item.dataset.acc : null);
+  });
+}
+
+// Choice chips (one of many) and toggle chips (on/off).
 const chips = (name, options, current) => `<div class="chips">${options.map(([v, l, title]) =>
   `<button class="chip ${String(v) === String(current) ? "on" : ""}" data-chip="${name}" data-value="${v}" ${title ? `title="${esc(title)}"` : ""}>${l}</button>`).join("")}</div>`;
 const toggleChip = (name, on, label, title = "") =>
@@ -794,11 +843,17 @@ const optRadio = (name, value, current, label, title = "") =>
   `<label class="opt" ${title ? `title="${esc(title)}"` : ""}><input type="radio" name="${name}" value="${value}" ${String(value) === String(current) ? "checked" : ""}><span>${label}</span></label>`;
 const optCheck = (name, on, label, title = "") =>
   `<label class="opt" ${title ? `title="${esc(title)}"` : ""}><input type="checkbox" name="${name}" ${on ? "checked" : ""}><span>${label}</span></label>`;
-const colorPicker = (name, current) => `<div class="swatch-row">${COLOR_PRESETS.map((c) =>
+const colorPickerOld = (name, current) => `<div class="swatch-row">${COLOR_PRESETS.map((c) =>
     `<button class="swatch ${c.toLowerCase() === String(current).toLowerCase() ? "active" : ""}" style="background:${c}" data-color="${name}" data-value="${c}" aria-label="${c}"></button>`).join("")}
     <label class="swatch custom" title="Any colour"><input type="color" name="${name}" value="${esc(current)}"></label></div>`;
-const rampPicker = (name, current) => `<div class="ramp-list">${Object.entries(RAMPS).map(([k, cols]) =>
+const rampPickerOld = (name, current) => `<div class="ramp-list">${Object.entries(RAMPS).map(([k, cols]) =>
     `<button class="ramp ${k === current ? "active" : ""}" data-ramp="${name}" data-value="${k}" title="${k}" style="background:linear-gradient(90deg,${cols.join(",")})"></button>`).join("")}</div>`;
+const colorPicker = (name, current) => `<div class="swatch-row small">${COLOR_PRESETS.map((c) =>
+    `<button class="swatch ${c.toLowerCase() === String(current).toLowerCase() ? "active" : ""}" style="background:${c}" data-color="${name}" data-value="${c}" aria-label="${c}"></button>`).join("")}
+    <label class="swatch custom" title="Any colour"><input type="color" name="${name}" value="${esc(current)}"></label></div>`;
+const RAMP_LABELS = { fire: "Fire", ice: "Ice", viridis: "Viridis", magma: "Magma" };
+const rampPicker = (name, current) => `<div class="ramp-select"><span class="ramp-preview" data-ramp-preview="${name}" style="background:linear-gradient(90deg,${(RAMPS[current] || RAMPS.fire).join(",")})"></span>
+    ${selectCtl(name, Object.keys(RAMPS).map((k) => [k, RAMP_LABELS[k]]), current)}</div>`;
 const section = (title, body) => `<div class="panel-section"><div class="panel-title">${title}</div>${body}</div>`;
 
 // ---- Heatmap page -------------------------------------------------------------------
@@ -825,8 +880,8 @@ async function renderHeatmap(params) {
       <div id="map" class="heat-map"></div>
       <div class="heat-overlay"><div class="heat-column">
         <div class="float-bar">${pageHead("Heatmap", `
-          ${badgeHtml("settings", "Settings", "", { panel: "<div data-settings></div>", wide: true })}
           ${badgeHtml("filter", "Filter", filterSummary(), { panel: filterPanel(), on: activeFilter })}
+          ${badgeHtml("settings", "Options", "", { panel: "<div data-settings></div>" })}
           <button class="badge ${s.kpis ? "on" : ""}" data-kpis>Summary</button>`,
           switchHtml("layer", [["heatmap", `${ICON_HEAT}<span>Heatmap</span>`], ["tiles", `${ICON_GRID}<span>Explorer tiles</span>`]], s.layer))}</div>
         <div id="heat-kpis" ${s.kpis ? "" : "hidden"}></div>
@@ -868,7 +923,8 @@ async function renderHeatmap(params) {
   map.on("mouseenter", "routes", () => { map.getCanvas().style.cursor = "pointer"; });
   map.on("mouseleave", "routes", () => { map.getCanvas().style.cursor = ""; });
   map.on("moveend", () => {
-    view.querySelectorAll("[data-km]").forEach((el) => { el.textContent = `${num(tileWidthKm(Number(el.dataset.km), map.getCenter().lat), el.dataset.km >= 16 ? 2 : 1)} km`; });
+    const sel = view.querySelector('select[name="tiles.zoom"]');
+    if (sel) [...sel.options].forEach((o) => { const z = Number(o.value); o.textContent = `${TILE_SIZES.find(([k]) => k === z)[1]} · ${num(tileWidthKm(z, map.getCenter().lat), z >= 16 ? 2 : 1)} km`; });
   });
 }
 
@@ -885,33 +941,34 @@ function filterPanel() {
 function renderSettingsPanel() {
   const s = heat.settings, M = s.map, H = s.heatmap, T = s.tiles;
   const lat = heat.map ? heat.map.getCenter().lat : 52;
-  const colorRow = (name, current) => colorPicker(name, current);
-  const mapCol = `<div class="panel-col"><div class="col-title">Map</div>
-      ${section("Base map", chips("map.source", [...(BASEMAPS || []).map((b) => [b.key, b.label.split(" (")[0]]), ["none", "None"]], M.source))}
-      ${section("Colours", `<div class="tone-grid">${BASE_TONES.map(([k, l]) =>
-        `<button class="tone ${k === M.tone ? "on" : ""}" data-chip="map.tone" data-value="${k}"><span class="tone-dot tone-${k}"></span>${l}</button>`).join("")}</div>`)}
-      ${section("Summary on the map", toggleChip("kpis", s.kpis, "Show summary"))}
-    </div>`;
-  const heatCol = `<div class="panel-col"><div class="col-title">Heatmap</div>
-      ${section("Style", chips("heatmap.style", [["density", "Density", "Overlapping routes get stronger"], ["coverage", "Coverage", "Solid lines"], ["glow", "Heat glow", "Colour gradient"]], H.style))}
-      ${section("Line colour", colorRow("heatmap.color", H.color) + (heat.isAll ? `<div style="margin-top:6px">${toggleChip("heatmap.perPerson", H.perPerson, "A colour per person")}</div>` : ""))}
-      ${section("Heat glow gradient", rampPicker("heatmap.ramp", H.ramp))}
-      ${section("Line width", `<input type="range" min="1" max="6" step="0.5" value="${H.width}" name="heatmap.width">`)}
-      ${section("Overlap strength", `<input type="range" min="0.1" max="0.9" step="0.05" value="${H.intensity}" name="heatmap.intensity">`)}
-    </div>`;
-  const tilesCol = `<div class="panel-col"><div class="col-title">Explorer tiles</div>
-      ${section("Tile size", `<div class="chips">${TILE_SIZES.map(([z, l]) =>
-        `<button class="chip ${z === T.zoom ? "on" : ""}" data-chip="tiles.zoom" data-value="${z}">${l} <span class="chip-note" data-km="${z}">${num(tileWidthKm(z, lat), z >= 16 ? 2 : 1)} km</span></button>`).join("")}</div>`)}
-      ${section("Style", chips("tiles.style", [["coverage", "Coverage"], ["heat", "By visits"]], T.style))}
-      ${section("Tile colour", colorRow("tiles.color", T.color))}
-      ${section("Visits gradient", rampPicker("tiles.ramp", T.ramp))}
-      ${section("Display", chips("tiles.display", [["grid", "Single tiles"], ["area", "One area"]], T.display))}
-      ${section("Highlights", `<div class="chips">${toggleChip("tiles.square", T.square, "Max square", "Largest square made only of visited tiles")}
-        ${toggleChip("tiles.cluster", T.cluster, "Cluster", "Largest connected group of tiles with visited tiles on all four sides")}
-        ${toggleChip("tiles.routes", T.routes, "Routes")}</div>`)}
-    </div>`;
+  const srcLabel = (BASEMAPS || []).find((b) => b.key === M.source)?.label.split(" (")[0] || "None";
+  const toneLabel = (BASE_TONES.find(([k]) => k === M.tone) || BASE_TONES[0])[1];
+  const sizeLabel = (TILE_SIZES.find(([z]) => z === T.zoom) || TILE_SIZES[1])[1];
+  const styleLabel = { density: "Density", coverage: "Coverage", glow: "Heat glow" }[H.style];
+  const mapBody = row("Base map", selectCtl("map.source", [...(BASEMAPS || []).map((b) => [b.key, b.label]), ["none", "None"]], M.source))
+    + row("Colours", selectCtl("map.tone", BASE_TONES.map(([k, l]) => [k, l]), M.tone));
+  const heatBody = row("Style", segCtl("heatmap.style", [["density", "Density"], ["coverage", "Coverage"], ["glow", "Heat glow"]], H.style))
+    + row("Line colour", colorPicker("heatmap.color", H.color))
+    + (heat.isAll ? row("People", checkCtl("heatmap.perPerson", H.perPerson, "A colour per person")) : "")
+    + row("Gradient", rampPicker("heatmap.ramp", H.ramp))
+    + row("Line width", `<input type="range" min="1" max="6" step="0.5" value="${H.width}" name="heatmap.width">`)
+    + row("Overlap", `<input type="range" min="0.1" max="0.9" step="0.05" value="${H.intensity}" name="heatmap.intensity">`);
+  const tilesBody = row("Tile size", selectCtl("tiles.zoom", TILE_SIZES.map(([z, l]) => [z, `${l} · ${num(tileWidthKm(z, lat), z >= 16 ? 2 : 1)} km`]), T.zoom))
+    + row("Style", segCtl("tiles.style", [["coverage", "Coverage"], ["heat", "By visits"]], T.style))
+    + row("Tile colour", colorPicker("tiles.color", T.color))
+    + row("Gradient", rampPicker("tiles.ramp", T.ramp))
+    + row("Display", segCtl("tiles.display", [["grid", "Single tiles"], ["area", "One area"]], T.display))
+    + row("Highlights", `<div class="checks">${checkCtl("tiles.square", T.square, "Max square", "Largest square made only of visited tiles")}
+        ${checkCtl("tiles.cluster", T.cluster, "Cluster", "Largest connected group of tiles with visited tiles on all four sides")}
+        ${checkCtl("tiles.routes", T.routes, "Routes")}</div>`);
+  heat.openAcc ??= s.layer;
   const el = view.querySelector("[data-settings]");
-  el.innerHTML = `<div class="panel-cols3">${mapCol}${heatCol}${tilesCol}</div>`;
+  el.innerHTML = accordion([
+    ["map", "Map", `${srcLabel} · ${toneLabel}`, mapBody],
+    ["heatmap", "Heatmap", styleLabel, heatBody],
+    ["tiles", "Explorer tiles", sizeLabel, tilesBody],
+  ], heat.openAcc);
+  bindAccordion(el, (key) => { heat.openAcc = key; });
   bindSettingsPanel(el);
 }
 
@@ -931,23 +988,24 @@ function bindSettingsPanel(el) {
     if (!shown(path)) return;
     if (kind === "paint") updatePaint(); else drawHeatLayers();
   };
-  el.querySelectorAll("[data-chip]").forEach((b) => b.onclick = () => {
-    const path = b.dataset.chip, value = path === "tiles.zoom" ? Number(b.dataset.value) : b.dataset.value;
-    set(path, value);
-    el.querySelectorAll(`[data-chip="${path}"]`).forEach((x) => x.classList.toggle("on", x === b));
-    refresh(path, "layers");
+  const summary = () => { const keep = heat.openAcc; renderSettingsPanel(); heat.openAcc = keep; };
+  el.querySelectorAll("select").forEach((sel) => sel.onchange = () => {
+    const value = sel.name === "tiles.zoom" ? Number(sel.value) : sel.value;
+    set(sel.name, value);
+    const paint = sel.name.endsWith(".ramp");
+    refresh(sel.name, paint ? "paint" : "layers");
+    if (paint) el.querySelector(`[data-ramp-preview="${sel.name}"]`).style.background = `linear-gradient(90deg,${RAMPS[value].join(",")})`;
+    else summary();
   });
-  el.querySelectorAll("[data-toggle]").forEach((b) => b.onclick = () => {
-    const path = b.dataset.toggle, on = !b.classList.contains("on");
-    b.classList.toggle("on", on);
-    if (path === "kpis") {
-      set("kpis", on);
-      document.getElementById("heat-kpis").hidden = !on;
-      view.querySelector("[data-kpis]")?.classList.toggle("on", on);
-      return;
-    }
-    set(path, on);
-    refresh(path, path === "heatmap.perPerson" ? "paint" : "layers");
+  el.querySelectorAll("[data-chip]").forEach((b) => b.onclick = () => {
+    set(b.dataset.chip, b.dataset.value);
+    el.querySelectorAll(`[data-chip="${b.dataset.chip}"]`).forEach((x) => x.classList.toggle("on", x === b));
+    refresh(b.dataset.chip, "layers");
+    if (b.dataset.chip === "heatmap.style") summary();
+  });
+  el.querySelectorAll("input[type=checkbox]").forEach((c) => c.onchange = () => {
+    set(c.name, c.checked);
+    refresh(c.name, c.name === "heatmap.perPerson" ? "paint" : "layers");
   });
   el.querySelectorAll("input[type=range]").forEach((r) => { r.oninput = () => { set(r.name, Number(r.value)); refresh(r.name, "paint"); }; });
   el.querySelectorAll("[data-color]").forEach((b) => b.onclick = () => {
@@ -961,11 +1019,6 @@ function bindSettingsPanel(el) {
     el.querySelectorAll(`[data-color="${inp.name}"]`).forEach((x) => x.classList.remove("active"));
     refresh(inp.name, "paint");
   }; });
-  el.querySelectorAll("[data-ramp]").forEach((b) => b.onclick = () => {
-    set(b.dataset.ramp, b.dataset.value);
-    el.querySelectorAll(`[data-ramp="${b.dataset.ramp}"]`).forEach((x) => x.classList.toggle("active", x === b));
-    refresh(b.dataset.ramp, "paint");
-  });
 }
 
 function applyBase(newSource) {
@@ -1188,11 +1241,20 @@ async function settingsGeneral(el) {
   const interval = (m) => (m === 0 ? "Off" : m < 60 ? `${m} min` : m === 60 ? "1 hour" : `${m / 60} hours`);
   const accent = store.get("accent") || "sky";
   el.innerHTML = `
-    <div class="card">
+    <div class="card appearance">
       <h3>Appearance</h3>
-      ${hint("Accent colour of buttons, links and highlights. Saved in this browser.")}
-      <div class="chips" style="margin-top:8px">${ACCENTS.map(([k, l, light, dark]) =>
-        `<button class="chip ${k === accent ? "on" : ""}" data-accent="${k}"><span class="dot" style="background:${document.documentElement.dataset.theme === "dark" ? dark : light}"></span>${l}</button>`).join("")}</div>
+      <div class="appearance-grid">
+        <div>
+          <div class="panel-title">Theme</div>
+          ${switchHtml("theme", [["light", `${ICON.sun}<span>Light</span>`], ["dark", `${ICON.moon}<span>Dark</span>`]], document.documentElement.dataset.theme === "dark" ? "dark" : "light")}
+        </div>
+        <div>
+          <div class="panel-title">Accent colour</div>
+          <div class="accents">${ACCENTS.map(([k, l, light, dark]) =>
+            `<button class="accent-pick ${k === accent ? "on" : ""}" data-accent="${k}" title="${l}" aria-label="${l}"><span style="background:${document.documentElement.dataset.theme === "dark" ? dark : light}"></span><small>${l}</small></button>`).join("")}</div>
+        </div>
+      </div>
+      ${hint("Saved in this browser.")}
     </div>
     <div class="card">
       <h3>Watched folder</h3>
@@ -1222,6 +1284,13 @@ async function settingsGeneral(el) {
     store.set("accent", b.dataset.accent);
     applyAccent();
     el.querySelectorAll("[data-accent]").forEach((x) => x.classList.toggle("on", x === b));
+  });
+  el.querySelectorAll("[data-switch=theme]").forEach((b) => b.onclick = () => {
+    document.documentElement.dataset.theme = b.dataset.value;
+    store.set("theme", b.dataset.value);
+    applyAccent();
+    setupTheme();
+    settingsGeneral(el);
   });
   el.querySelectorAll("[data-save]").forEach((btn) => btn.onclick = async () => {
     const key = btn.dataset.save, card = btn.closest(".card"), out = card.querySelector("[data-msg]");

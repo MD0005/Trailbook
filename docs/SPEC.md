@@ -364,7 +364,9 @@ The visual design is defined by the project owner; the technical preview follows
 | Compare | Everyone side by side (only with “Everyone” selected). |
 
 ### Page structure
-Every tab has the same header: the **title**, then **badges** in one row (rectangular, slightly
+Every tab has the same header: the **title**, then **badges** in one row (order: Filter,
+Options, Summary; the per-tab badge is called *Options* to keep it apart from the app
+Settings behind the gear) (rectangular, slightly
 rounded, clearly interactive). A badge either toggles something (e.g. KPIs) or opens a panel
 with settings; panels stay open while settings change. A main switch (e.g. Heatmap | Explorer
 tiles) is slightly larger than the other badges. Tab-specific tools (e.g. list/tile view) sit
@@ -487,7 +489,18 @@ API: `POST /api/export`, `GET /api/export/status`, `GET /api/export/{name}` (dow
 
 ---
 
-## 15. Open questions
+## 15. Known gaps (people & files)
+
+- **Folder renamed / files moved** (folder mode): old rows become *missing*, the same files in
+  the new place become *duplicates*, and activities stay with the old person. Planned fix:
+  treat a *missing* file whose content (sha256) reappears elsewhere as a **move** — transfer
+  the row and re-resolve the person.
+- **Mode switch does not re-assign** existing activities. Planned: a "re-apply rules" action
+  that recomputes the person of every file/activity from the current mode and watch links
+  (no re-parsing needed).
+- **No per-activity person override** yet (needed for a shared watch in shared-folder mode).
+
+## 16. Open questions
 
 - UI framework (Svelte vs. plain TS) — decide at milestone 2 with the design.
 - Exact OSMF vector tile/style endpoint and its usage policy for many installations.

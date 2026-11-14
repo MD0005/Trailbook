@@ -112,6 +112,25 @@ def _map_filters(q) -> tuple[str, list]:
     return " AND ".join(where), params
 
 
+def _speed_series(c: sqlite3.Connection, activity_id: int, points: int = 48) -> list:
+    """Speed (m/s) averaged into `points` equal time buckets, for small tile charts."""
+    row = c.execute(
+        "SELECT encoding, data FROM streams WHERE activity_id = ? AND channel = 'speed'",
+        (activity_id,),
+    ).fetchone()
+    if row is None:
+        return []
+    values = streams.decode(row["encoding"], row["data"])
+    if not values:
+        return []
+    size = max(1, len(values) // points)
+    out = []
+    for i in range(0, len(values), size):
+        chunk = [v for v in values[i : i + size] if v is not None]
+        out.append(round(sum(chunk) / len(chunk), 3) if chunk else None)
+    return out[:points]
+
+
 def _order(q, sorts: dict[str, str], default: str, tiebreak: str) -> str:
     key = q.get("sort") if q.get("sort") in sorts else default
     direction = "ASC" if q.get("dir") == "asc" else "DESC"
@@ -443,11 +462,15 @@ def create_app(db_path: str | Path) -> Starlette:
                     ORDER BY {order} LIMIT ? OFFSET ?""",
                 [*params, limit, offset],
             ).fetchall()
+            items = [dict(r) for r in rows]
+            if q.get("chart") == "pace":
+                for item in items:
+                    item["speed_series"] = _speed_series(c, item["id"])
             return JSONResponse(
                 {
                     "total": totals["count"],
                     "totals": dict(totals),
-                    "items": [dict(r) for r in rows],
+                    "items": items,
                 }
             )
 
