@@ -429,11 +429,12 @@ def _resolve_person(conn: sqlite3.Connection, row: sqlite3.Row, fid) -> str:
 
 
 def assign_device(conn: sqlite3.Connection, serial: int, person_id: str | None) -> int:
-    """Link a watch to a person and move its files and activities there.
+    """Link a watch to a person.
 
-    Folder mode: files in a person's subfolder stay with that person; files lying directly in
-    the root follow the watch. Device mode: everything of the watch moves.
-    Returns the number of activities that now belong to the person.
+    Rule: settings never re-assign data that already belongs to someone. The new link applies
+    to files imported from now on. The only data that moves is what is still *Unassigned*
+    (it never had a person), so a first scan with unlinked watches is not a dead end.
+    Returns the number of activities that moved from Unassigned to the person.
     """
     conn.execute("BEGIN")
     try:
@@ -444,28 +445,15 @@ def assign_device(conn: sqlite3.Connection, serial: int, person_id: str | None) 
                ON CONFLICT(serial) DO UPDATE SET person_id = excluded.person_id""",
             (serial, person_id, now, now),
         )
-        if person_id is None:
-            ensure_unassigned(conn)
-        target = person_id or UNASSIGNED
-        if person_mode(conn) == "folders":
-            # The subfolder decides; only files lying directly in the root (and anything
-            # still unassigned) follow the watch.
-            follow = "(instr(rel_path, '/') = 0 OR person_id = ?)"
+        moved = 0
+        if person_id is not None:
             conn.execute(
-                f"UPDATE files SET person_id = ? WHERE device_serial = ? AND {follow}",
-                (target, serial, UNASSIGNED),
+                "UPDATE files SET person_id = ? WHERE device_serial = ? AND person_id = ?",
+                (person_id, serial, UNASSIGNED),
             )
             moved = conn.execute(
-                """UPDATE activities SET person_id = ?
-                    WHERE id IN (SELECT activity_id FROM files
-                                 WHERE device_serial = ? AND activity_id IS NOT NULL
-                                   AND status = 'imported' AND person_id = ?)""",
-                (target, serial, target),
-            ).rowcount
-        else:
-            conn.execute("UPDATE files SET person_id = ? WHERE device_serial = ?", (target, serial))
-            moved = conn.execute(
-                "UPDATE activities SET person_id = ? WHERE device_serial = ?", (target, serial)
+                "UPDATE activities SET person_id = ? WHERE device_serial = ? AND person_id = ?",
+                (person_id, serial, UNASSIGNED),
             ).rowcount
         conn.execute("COMMIT")
     except Exception:

@@ -142,7 +142,7 @@ def test_static_files_are_revalidated(client):
     assert cl.get("/preview.js").headers["cache-control"] == "no-cache"
 
 
-def test_folder_mode_watch_change_moves_only_unassigned(conn, tmp_path):
+def test_watch_change_keeps_assigned_data(conn, tmp_path):
     root = tmp_path / "root"
     write(root / "alice" / "a.fit", make_fit(49, serial=111, created=T0))
     write(root / "loose.fit", make_fit(49, serial=111, created=T0 + 60))  # no folder person
@@ -155,8 +155,8 @@ def test_folder_mode_watch_change_moves_only_unassigned(conn, tmp_path):
     conn.execute("INSERT INTO persons (id, label) VALUES ('bob', 'Bob')")
     importer.assign_device(conn, 111, "bob")
     owners = dict(conn.execute("SELECT rel_path, person_id FROM files").fetchall())
-    assert owners["alice/a.fit"] == "alice"  # the folder still decides
-    assert owners["loose.fit"] == "bob"  # root-level file follows the watch
+    # Settings never re-assign data that already has a person.
+    assert owners == {"alice/a.fit": "alice", "loose.fit": "alice"}
 
 
 def test_person_order_icon_and_compare(client):
@@ -184,3 +184,31 @@ def test_activity_list_totals_and_type_sources(client):
     types = {t["key"]: t for t in cl.get("/api/types").json()["types"]}
     assert "training / yoga" in " ".join(types["yoga"]["fit"]) or "* / yoga" in types["yoga"]["fit"]
     assert types["run"]["fit"] == ["running / street", "running / *"]
+
+
+def test_first_scan_with_unlinked_watches(conn, tmp_path):
+    """Shared folder, several watches, none linked yet: everything waits in Unassigned and
+    moves to a person when the watch is linked - once; later re-links move nothing."""
+    root = tmp_path / "root"
+    write(root / "a.fit", make_fit(49, serial=111, created=T0))
+    write(root / "b.fit", make_fit(49, serial=222, created=T0 + 60))
+    db.set_setting(conn, "person_mode", "devices")
+    importer.scan(conn, root)
+    importer.run_queue(conn, root)
+
+    def owners():
+        return dict(conn.execute("SELECT device_serial, person_id FROM files").fetchall())
+
+    assert owners() == {111: importer.UNASSIGNED, 222: importer.UNASSIGNED}
+
+    conn.execute("INSERT INTO persons (id, label) VALUES ('alice', 'Alice'), ('bob', 'Bob')")
+    importer.assign_device(conn, 111, "alice")
+    assert owners() == {111: "alice", 222: importer.UNASSIGNED}
+    importer.assign_device(conn, 111, "bob")  # re-link: existing data stays
+    assert owners()[111] == "alice"
+
+    write(root / "c.fit", make_fit(44, serial=111, created=T0 + 120))  # new file follows link
+    importer.scan(conn, root)
+    importer.run_queue(conn, root)
+    new = conn.execute("SELECT person_id FROM files WHERE rel_path = 'c.fit'").fetchone()
+    assert new["person_id"] == "bob"

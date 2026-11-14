@@ -191,8 +191,7 @@ function rowHtml(columns, r) {
 
 function listBar(columns, params, shown, total) {
   const filtered = columns.some((c) => c.filter && params[c.key]);
-  return `<div class="tablebar"><span class="hint" data-count>${countText(shown, total)}</span>
-    ${filtered ? `<button class="small" data-clear>Clear filters</button>` : ""}</div>`;
+  return filtered ? `<div class="tablebar"><button class="small" data-clear>Clear filters</button></div>` : "";
 }
 
 function tableHtml(columns, rows, params, total) {
@@ -820,7 +819,7 @@ const checkCtl = (name, on, label, title = "") =>
 function accordion(sections, open) {
   return `<div class="acc">${sections.map(([key, title, summary, body]) => `
     <section class="acc-item ${key === open ? "open" : ""}" data-acc="${key}">
-      <button class="acc-head" data-acc-head="${key}"><span>${title}</span><span class="acc-sum">${summary}</span>${ICON.chevron}</button>
+      <button class="acc-head" data-acc-head="${key}"><span>${title}</span>${ICON.chevron}</button>
       <div class="acc-body">${body}</div>
     </section>`).join("")}</div>`;
 }
@@ -947,17 +946,17 @@ function renderSettingsPanel() {
   const styleLabel = { density: "Density", coverage: "Coverage", glow: "Heat glow" }[H.style];
   const mapBody = row("Base map", selectCtl("map.source", [...(BASEMAPS || []).map((b) => [b.key, b.label]), ["none", "None"]], M.source))
     + row("Colours", selectCtl("map.tone", BASE_TONES.map(([k, l]) => [k, l]), M.tone));
-  const heatBody = row("Style", segCtl("heatmap.style", [["density", "Density"], ["coverage", "Coverage"], ["glow", "Heat glow"]], H.style))
+  const heatBody = row("Style", selectCtl("heatmap.style", [["density", "Density — overlaps get stronger"], ["coverage", "Coverage — solid lines"], ["glow", "Heat glow — colour gradient"]], H.style))
     + row("Line colour", colorPicker("heatmap.color", H.color))
     + (heat.isAll ? row("People", checkCtl("heatmap.perPerson", H.perPerson, "A colour per person")) : "")
     + row("Gradient", rampPicker("heatmap.ramp", H.ramp))
     + row("Line width", `<input type="range" min="1" max="6" step="0.5" value="${H.width}" name="heatmap.width">`)
     + row("Overlap", `<input type="range" min="0.1" max="0.9" step="0.05" value="${H.intensity}" name="heatmap.intensity">`);
   const tilesBody = row("Tile size", selectCtl("tiles.zoom", TILE_SIZES.map(([z, l]) => [z, `${l} · ${num(tileWidthKm(z, lat), z >= 16 ? 2 : 1)} km`]), T.zoom))
-    + row("Style", segCtl("tiles.style", [["coverage", "Coverage"], ["heat", "By visits"]], T.style))
+    + row("Style", selectCtl("tiles.style", [["coverage", "Coverage"], ["heat", "By number of visits"]], T.style))
     + row("Tile colour", colorPicker("tiles.color", T.color))
     + row("Gradient", rampPicker("tiles.ramp", T.ramp))
-    + row("Display", segCtl("tiles.display", [["grid", "Single tiles"], ["area", "One area"]], T.display))
+    + row("Display", selectCtl("tiles.display", [["grid", "Single tiles"], ["area", "One area"]], T.display))
     + row("Highlights", `<div class="checks">${checkCtl("tiles.square", T.square, "Max square", "Largest square made only of visited tiles")}
         ${checkCtl("tiles.cluster", T.cluster, "Cluster", "Largest connected group of tiles with visited tiles on all four sides")}
         ${checkCtl("tiles.routes", T.routes, "Routes")}</div>`);
@@ -1223,11 +1222,16 @@ async function renderCompare(params) {
 
 // ---- Settings: General / People / Import / Types ------------------------------------
 
-const SETTINGS_TABS = [["general", "General"], ["people", "People"], ["import", "Import"], ["types", "Activity types"]];
+const SETTINGS_TABS = [
+  ["general", "General", svg(`<path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/>`)],
+  ["people", "People", svg(`<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.8-3.6 3.4-5.5 6.5-5.5s5.7 1.9 6.5 5.5"/><path d="M16 4.5a3.5 3.5 0 0 1 0 7M18 14.8c2 .7 3.2 2.5 3.6 5.2"/>`)],
+  ["import", "Import", svg(`<path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 17v3h16v-3"/>`)],
+  ["types", "Activity types", svg(`<path d="M3 12V4h8l9 9-8 8z"/><circle cx="7.5" cy="8.5" r="1.5"/>`)],
+];
 
 async function renderSettings(tab, params) {
   tab = SETTINGS_TABS.some(([k]) => k === tab) ? tab : "general";
-  view.innerHTML = `${pageHead("Settings", switchHtml("tab", SETTINGS_TABS, tab))}<div id="tab"></div>`;
+  view.innerHTML = `${pageHead("Settings", "", switchHtml("tab", SETTINGS_TABS.map(([k, l, icon]) => [k, `${icon}<span>${l}</span>`]), tab))}<div id="tab"></div>`;
   view.querySelectorAll("[data-switch=tab]").forEach((b) => b.onclick = () => { location.hash = "#/settings/" + b.dataset.value; });
   const el = document.getElementById("tab");
   if (tab === "people") await settingsPeople(el);
@@ -1269,7 +1273,11 @@ async function settingsGeneral(el) {
         <span><b>One subfolder per person</b><span class="hint">folder/alice/…, folder/bob/… — the folder decides. Works when two people share a watch.</span></span></label>
       <label class="choice"><input type="radio" name="person_mode" value="devices" ${s.person_mode === "devices" ? "checked" : ""}>
         <span><b>One shared folder, assign by watch</b><span class="hint">Any folder layout. Each watch is linked to a person in Settings › People.</span></span></label>
-      ${hint("Switching keeps existing activities where they are; the new rule applies to files imported from now on.")}
+      <div class="note">
+        <b>Applies only to files imported from now on.</b> Activities that are already imported keep their person.
+        Nothing is imported twice: every activity is recognised by its FIT id (watch serial number + creation time),
+        so changing this setting never re-imports or duplicates anything.
+      </div>
       <div class="card-row" style="margin-top:12px"><button class="primary" data-save="person_mode">Save</button><span data-msg></span></div>
     </div>
     <div class="card">
@@ -1335,9 +1343,8 @@ async function settingsPeople(el) {
     <div class="card">
       <h3>Watches</h3>
       ${hint("FIT files contain no Garmin account id, but every file carries the serial number of the watch that recorded it.")}
-      ${hint(byFolder
-        ? "Mode “one subfolder per person”: the folder decides who a file belongs to. A watch's person only applies to files lying directly in the watched folder. Two people can share one watch in this mode."
-        : "Mode “one shared folder”: the linked person decides. Changing a watch moves all of its files and activities to the new person.")}
+      <div class="note"><b>Linking a watch applies to files imported from now on.</b> Activities that already have a person stay where they are; only activities still <i>Unassigned</i> move to the linked person.
+        ${byFolder ? "In “one subfolder per person” mode the folder decides; a watch only matters for files lying directly in the watched folder." : ""}</div>
       <div class="scroll"><table class="data"><thead><tr><th>Serial</th><th>Model</th><th>Person</th>
         <th>Found in folders</th><th class="num">Activities</th><th class="num">Files</th><th>Last seen</th></tr></thead>
       <tbody>${devices.map((d) => `<tr><td><code>${d.serial}</code></td><td>${esc(d.product_name || "–")}</td>
@@ -1389,7 +1396,7 @@ async function settingsPeople(el) {
     try {
       const r = await api("devices/" + sel.dataset.serial, { method: "PATCH", body: JSON.stringify({ person_id: sel.value || null }) });
       await settingsPeople(el);
-      msg(`Watch linked · ${r.moved_activities} activit${r.moved_activities === 1 ? "y" : "ies"} assigned`);
+      msg(r.moved_activities ? `Watch linked · ${r.moved_activities} unassigned activit${r.moved_activities === 1 ? "y" : "ies"} moved` : "Watch linked · applies to new imports");
     } catch (e) { msg(e.message, "bad"); }
   });
   const add = el.querySelector("#add");

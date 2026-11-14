@@ -106,10 +106,15 @@ person modes (setting `person_mode`):
   watch; files of unknown watches go to *Unassigned* until the user links the watch on the
   People page, which moves its files and activities.
 
+**Rule: settings apply to files imported from now on.** Switching the person mode or
+re-linking a watch never moves activities that already have a person, and nothing is
+imported twice (each activity is recognised by its FIT id = watch serial + creation time).
+The one exception: activities still *Unassigned* (they never had a person) move to the
+person a watch is linked to — so a first scan in shared-folder mode with several unlinked
+watches simply waits in *Unassigned* until the watches are linked.
+
 In folder mode, files lying directly in the watched folder (not in a person's subfolder) are
-assigned by their watch as well; changing a watch's person moves only those, never files in
-a person's subfolder. Two people sharing one watch therefore need folder mode.
-Switching the mode keeps existing assignments; the new rule applies to files imported later.
+assigned by their watch. Two people sharing one watch need folder mode.
 
 ```
 /share/trailbook/            ← root folder (configurable; must be inside an HA-mapped dir)
@@ -495,9 +500,8 @@ API: `POST /api/export`, `GET /api/export/status`, `GET /api/export/{name}` (dow
   the new place become *duplicates*, and activities stay with the old person. Planned fix:
   treat a *missing* file whose content (sha256) reappears elsewhere as a **move** — transfer
   the row and re-resolve the person.
-- **Mode switch does not re-assign** existing activities. Planned: a "re-apply rules" action
-  that recomputes the person of every file/activity from the current mode and watch links
-  (no re-parsing needed).
+- **Mode switch / watch re-link does not re-assign** existing activities (by design, see
+  section 4). Possible later: an explicit "re-apply rules" action the user starts on purpose.
 - **No per-activity person override** yet (needed for a shared watch in shared-folder mode).
 
 ## 16. Open questions
