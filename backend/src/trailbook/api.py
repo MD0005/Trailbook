@@ -202,6 +202,18 @@ def create_app(db_path: str | Path) -> Starlette:
                 }
             )
 
+    async def type_counts(request: Request):
+        """Activities per type for one person (or everyone): filters list only used types."""
+        pid = request.query_params.get("person")
+        sql = "SELECT activity_type, COUNT(*) FROM activities"
+        args: tuple = ()
+        if pid:
+            sql += " WHERE person_id = ?"
+            args = (pid,)
+        with closing(conn()) as c:
+            counts = dict(c.execute(sql + " GROUP BY activity_type", args).fetchall())
+        return JSONResponse(counts)
+
     async def types(request: Request):
         sources = sports.fit_sources()
         with closing(conn()) as c:
@@ -834,6 +846,7 @@ def create_app(db_path: str | Path) -> Starlette:
     routes = [
         Route("/api/info", info),
         Route("/api/types", types),
+        Route("/api/types/counts", type_counts),
         Route("/api/persons", persons),
         Route("/api/persons", person_create, methods=["POST"]),
         Route("/api/persons/order", persons_order, methods=["PUT"]),

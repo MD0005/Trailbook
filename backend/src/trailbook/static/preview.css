@@ -431,11 +431,10 @@ header .brand .logo { width: 24px; height: 24px; color: var(--accent); }
 .watches[hidden] { display: none; }
 .panel-actions { display: flex; justify-content: flex-end; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
 
-/* ---- Page never jumps sideways when a vertical scrollbar appears ---- */
-html { scrollbar-gutter: stable; overflow-y: scroll; }
-@supports (scrollbar-gutter: stable) { html { overflow-y: auto; } }
+/* ---- Page never jumps sideways: the vertical scrollbar is always shown ---- */
+html { overflow-y: scroll; } /* the scrollbar track is always there, the header ends at it */
 /* The full-screen map never scrolls, so it takes the whole width. */
-html:has(body.fullmap) { scrollbar-gutter: auto; overflow: hidden; }
+html:has(body.fullmap) { overflow: hidden; }
 body.fullmap { overflow: hidden; }
 /* …but the header and the floating bar keep the same position as on scrolling pages
    (--sbw = scrollbar width, measured in preview.js). */
@@ -448,7 +447,6 @@ body.fullmap .heat-overlay { right: var(--sbw, 0px); }
 .switch button:hover { background: var(--surface-2); color: var(--fg); }
 .switch button.on { background: var(--surface-2); color: var(--accent); box-shadow: none; font-weight: 600; }
 .switch button.on svg { color: var(--accent); }
-.float-bar .switch { background: var(--surface); border-radius: 10px; padding: 2px; }
 
 /* ---- Activity type icons ---- */
 .tb-activity-icon { color: var(--accent); }
@@ -493,3 +491,7 @@ tr.filters-row .tpick { min-width: 150px; }
 .garmin-form input { height: 30px; }
 .garmin-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 @media (max-width: 760px) { .garmin-form { grid-template-columns: 1fr; } }
+
+.tpick-n { margin-left: auto; padding-left: 12px; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.tpick-item.on .tpick-n { color: var(--accent); }
+.tpick-empty { padding: 6px 8px; }

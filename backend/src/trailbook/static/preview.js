@@ -8,6 +8,7 @@
 
 const view = document.getElementById("view");
 let TYPES = null;
+let TYPE_COUNTS = {}; // activity type → number of activities of the selected person
 let PERSONS = [];
 let CURRENT = null; // selected person id or "all"
 let timer = null;
@@ -135,7 +136,7 @@ function avatar(p, size = 26) {
 const NAV = [
   { key: "activities", label: "Activities" },
   { key: "calendar", label: "Calendar" },
-  { key: "heatmap", label: "Heatmap" },
+  { key: "heatmap", label: "Map" },
   { key: "fitness", label: "Fitness", single: true },
   { key: "wellbeing", label: "Wellbeing", single: true },
   { key: "stats", label: "Statistics", single: true },
@@ -256,13 +257,17 @@ function infinite(root, loaded, total, fetchPage, append) {
 function typePicker(attr, key, value, all = "All types") {
   const label = (v) => (!v ? all : v.startsWith("g:") ? `All ${groupLabel(v.slice(2)).toLowerCase()}` : typeLabel(v));
   const icon = (v) => (!v ? "" : v.startsWith("g:") ? groupIcon(v.slice(2)) : typeIcon(v));
-  const item = (v, text, ic, cls = "") =>
-    `<button type="button" class="tpick-item ${cls} ${v === value ? "on" : ""}" data-v="${esc(v)}" data-search="${esc(text.toLowerCase())}">${ic}<span>${esc(text)}</span></button>`;
+  // Only types that have activities (plus the current choice), each with its count.
+  const n = (k) => TYPE_COUNTS[k] || 0;
+  const item = (v, text, ic, cls = "", count = null) =>
+    `<button type="button" class="tpick-item ${cls} ${v === value ? "on" : ""}" data-v="${esc(v)}" data-search="${esc(text.toLowerCase())}">${ic}<span>${esc(text)}</span>${count != null ? `<small class="tpick-n">${num(count)}</small>` : ""}</button>`;
   const groups = TYPES.groups.map((g) => {
-    const types = TYPES.types.filter((t) => t.group === g.key);
-    return `<div class="tpick-group" data-group>${item(`g:${g.key}`, `All ${g.en.toLowerCase()}`, groupIcon(g.key), "grp")}
-      ${types.map((t) => item(t.key, t.en, typeIcon(t.key), "sub")).join("")}</div>`;
-  }).join("");
+    const types = TYPES.types.filter((t) => t.group === g.key && (n(t.key) > 0 || t.key === value));
+    if (!types.length && value !== `g:${g.key}`) return "";
+    const total = types.reduce((sum, t) => sum + n(t.key), 0);
+    return `<div class="tpick-group" data-group>${item(`g:${g.key}`, `All ${g.en.toLowerCase()}`, groupIcon(g.key), "grp", total)}
+      ${types.map((t) => item(t.key, t.en, typeIcon(t.key), "sub", n(t.key))).join("")}</div>`;
+  }).join("") || `<div class="hint tpick-empty">No activities yet.</div>`;
   return `<div class="tpick">
     <input type="hidden" ${attr}="${key}" value="${esc(value)}">
     <button type="button" class="tpick-btn" data-tpick-btn>${icon(value)}<span class="tpick-label">${esc(label(value))}</span>${ICON.chevron}</button>
@@ -304,7 +309,7 @@ document.addEventListener("click", (e) => {
     pick.querySelectorAll(".tpick-item.on").forEach((x) => x.classList.remove("on"));
     item.classList.add("on");
     const b = pick.querySelector("[data-tpick-btn]");
-    b.innerHTML = item.innerHTML.replace(/<span>/, '<span class="tpick-label">') + ICON.chevron;
+    b.innerHTML = item.innerHTML.replace(/<span>/, '<span class="tpick-label">').replace(/<small[^>]*>.*?<\/small>/, "") + ICON.chevron;
     pick.querySelector(".tpick-menu").hidden = true;
     input.dispatchEvent(new Event("change", { bubbles: true }));
   }
@@ -987,7 +992,7 @@ async function renderHeatmap(params) {
   view.innerHTML = `<div class="heat-wrap">
       <div id="map" class="heat-map"></div>
       <div class="heat-overlay"><div class="heat-column">
-        <div class="float-bar">${pageHead("Heatmap", `
+        <div class="float-bar">${pageHead("Map", `
           ${badgeHtml("filter", "Filter", filterSummary(), { panel: filterPanel(), on: activeFilter })}
           ${activeFilter ? `<button class="badge" data-clear-map title="Clear filters">✕ Clear</button>` : ""}
           ${badgeHtml("settings", "Options", "", { panel: "<div data-settings></div>" })}
@@ -1854,6 +1859,7 @@ async function route() {
     // Views that only make sense for one person / for everyone.
     if (CURRENT === "all" && (section === "fitness" || section === "stats" || section === "wellbeing")) { location.hash = "#/compare"; return; }
     if (CURRENT !== "all" && section === "compare") { location.hash = "#/activities"; return; }
+    TYPE_COUNTS = await api("types/counts" + (CURRENT && CURRENT !== "all" ? "?" + new URLSearchParams({ person: CURRENT }) : ""));
     renderHeader(section);
     document.documentElement.style.setProperty("--header-h", document.querySelector("header").offsetHeight + "px");
     if (parts[0] === "activity") await renderActivity(parts[1]);

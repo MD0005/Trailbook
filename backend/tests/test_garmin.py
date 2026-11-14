@@ -191,3 +191,24 @@ def test_api_garmin_accounts(tmp_path, monkeypatch):
         assert not bad["ok"] and bad["account"]["status"] == "auth_error"
         assert client.delete("/api/garmin/anna").status_code == 200
         assert client.get("/api/garmin").json()["accounts"] == {}
+
+
+def test_type_counts_per_person(tmp_path):
+    from starlette.testclient import TestClient
+
+    from trailbook import api, db
+
+    path = tmp_path / "t.db"
+    with db.connect(path) as c:
+        c.execute("INSERT INTO persons (id, label) VALUES ('anna', 'Anna'), ('ben', 'Ben')")
+        rows = [("anna", "run"), ("anna", "run"), ("anna", "yoga"), ("ben", "walk")]
+        for i, (pid, t) in enumerate(rows):
+            c.execute(
+                "INSERT INTO activities (person_id, fit_uid, start_time_utc, category,"
+                " activity_type, importer_version)"
+                " VALUES (?, ?, '2026-01-01T00:00:00Z', 'x', ?, 1)",
+                (pid, f"uid{i}", t),
+            )
+    with TestClient(api.create_app(path)) as client:
+        assert client.get("/api/types/counts?person=anna").json() == {"run": 2, "yoga": 1}
+        assert client.get("/api/types/counts").json() == {"run": 2, "yoga": 1, "walk": 1}

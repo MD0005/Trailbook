@@ -120,8 +120,11 @@ Settings › General › *Data connection* chooses where new activities come fro
      `garmin_activities` remembers every downloaded id → nothing is downloaded twice.
    - Optional *Download from* date per person limits the history.
    - The key is stored in the database (never returned by the API, only `…last4`).
-   - Later: sleep, HRV, stress, resting HR, steps, weight for the Wellbeing tab, stored per
-     person + day.
+   - Later: sleep, HRV, stress, resting HR, steps, weight for the Wellbeing tab. Stored with
+     the key person + day (+ metric), written as upserts, so a day fetched again (or the same
+     day from another source, e.g. sleep FIT files from a folder) replaces the row instead of
+     adding one. Priority when two sources disagree: Garmin API values (Garmin's own
+     processed result) over values computed from raw FIT files.
 2. **Upload a ZIP** — one-time import of a Garmin export / ZIP of FIT files / single .fit for a
    chosen person (`POST /api/uploads`). Uploads are kept in `uploads/` next to the database,
    tracked as `@uploads/<person>/<file>` and never touched by folder scans.
@@ -430,14 +433,17 @@ at the right end of the row.
 - The main switch (e.g. Heatmap | Explorer tiles, List | Tiles | Large tiles, settings tabs)
   looks like the main navigation: no box, the selected option on a light tint in the accent
   colour.
-- The page keeps space for the vertical scrollbar (`scrollbar-gutter: stable`), so nothing
-  jumps when a long page gets a scrollbar; full-screen map pages shift header and bar by the
-  measured scrollbar width so they line up with the other pages.
+- The vertical scrollbar is always shown (`html { overflow-y: scroll }`), so nothing jumps
+  when a page gets long and the header ends at the scrollbar; the full-screen map has no
+  scrollbar and shifts header and bar by the measured scrollbar width to line up.
+- The heatmap / explorer tiles page is called **Map** in the navigation and its title.
 - **Activity type icons** (“Trailbook B” set, `assets/icons/`, served from `static/icons/`,
   `TrailbookIcons.render(key, {size})`, unknown → `other`): small (18 px) next to activity
   names and types in every list and filter, larger (32–40 px) only in Activities › tiles.
   The type filter is a custom dropdown with icons and search (a native select cannot show
-  icons); it keeps its value in a hidden input, so staged filters work unchanged.
+  icons); it keeps its value in a hidden input, so staged filters work unchanged. It lists
+  only types (and groups) with activities of the selected person, each with its count
+  (`GET /api/types/counts?person=`).
 - Lists load **50 rows at a time** while scrolling (no page buttons) — the rule for every
   list (activities, tiles, import files, later calendar lists).
 - Summary instead of big KPI cards: one compact strip (label, value, small note), e.g.
