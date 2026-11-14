@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "trailbook"
+version = "0.1.0"
+description = "Self-hosted training log: FIT import, route map, statistics and charts"
+license = { text = "MIT" }
+requires-python = ">=3.11"
+dependencies = [
+    # Pure Python, works on aarch64 without compilation.
+    "garmin-fit-sdk>=21.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[project.scripts]
+trailbook = "trailbook.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

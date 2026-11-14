@@ -32,3 +32,18 @@ like the Home Assistant Yellow.
 ## License
 
 [MIT](LICENSE).
+
+## Development
+
+The importer can be run on a PC without Home Assistant:
+
+```bash
+python -m venv .venv
+.venv/Scripts/python -m pip install -e "backend[dev]"   # Linux/macOS: .venv/bin/...
+.venv/Scripts/trailbook scan sample-data                # one subfolder per person
+.venv/Scripts/trailbook status
+.venv/Scripts/trailbook activities
+```
+
+Tests: `cd backend && ../.venv/Scripts/python -m pytest`. Put your own FIT files in
+`sample-data/<person>/` (ignored by git) to also run the end-to-end test.
