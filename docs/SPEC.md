@@ -95,7 +95,11 @@ Browser: static HTML/JS (MapLibre GL + ECharts) — all rendering client-side
 ## 3a. Data connection
 
 Settings › General › *Data connection* chooses where new activities come from (setting
-`data_source`); only the options of the chosen source are shown below it:
+`data_source`); only the options of the chosen source are shown below it. Garmin Connect is
+the recommended source and the UI says so: it gives the most complete data — the same
+original FIT files as an export or a folder, plus the values only the Garmin Connect API has
+(see [`GARMIN-DATA.md`](GARMIN-DATA.md)). Goal: import the full set of activity data and,
+with the Wellbeing stage, the full set of lifestyle data (steps, sleep, stress, HRV, weight, …).
 
 1. **Garmin Connect** — each person connects their own account with a Garmin *personal API
    key* (self-service in Garmin Connect, expires after 30/90/180/365 days). Module `garmin.py`
@@ -125,6 +129,8 @@ Settings › General › *Data connection* chooses where new activities come fro
      day from another source, e.g. sleep FIT files from a folder) replaces the row instead of
      adding one. Priority when two sources disagree: Garmin API values (Garmin's own
      processed result) over values computed from raw FIT files.
+     Everything Garmin offers (activities and lifestyle, FIT vs API) is listed in
+     [`GARMIN-DATA.md`](GARMIN-DATA.md).
 2. **Upload a ZIP** — one-time import of a Garmin export / ZIP of FIT files / single .fit for a
    chosen person (`POST /api/uploads`). Uploads are kept in `uploads/` next to the database,
    tracked as `@uploads/<person>/<file>` and never touched by folder scans.

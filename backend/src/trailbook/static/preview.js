@@ -1483,7 +1483,7 @@ async function settingsGeneral(el) {
       <h3>Data connection</h3>
       ${hint("Where new activities come from.")}
       <div class="source-grid">
-        ${choice("data_source", "garmin", source, "Garmin Connect", "Download automatically for every person with their personal API key.")}
+        ${choice("data_source", "garmin", source, "Garmin Connect", "Download automatically for every person with their personal API key. Recommended: the most complete data — the original FIT files plus what only Garmin Connect has (names and edits, weather, training status, Body Battery, sleep score and more).")}
         ${choice("data_source", "upload", source, "Upload a ZIP", "One-time import of a Garmin export or FIT files for a chosen person.")}
         ${choice("data_source", "folder", source, "Watch a folder", "Import FIT files that appear in a folder, e.g. saved by a Home Assistant automation.")}
       </div>
