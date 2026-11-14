@@ -212,6 +212,17 @@ MIGRATIONS: list[str] = [
     UPDATE persons SET sort_order = (
         SELECT COUNT(*) FROM persons p2 WHERE p2.rowid <= persons.rowid);
     """,
+    # v5 — explorer tiles (zoom 14) visited by each activity.
+    """
+    CREATE TABLE activity_tiles (
+        activity_id INTEGER NOT NULL REFERENCES activities(id) ON DELETE CASCADE,
+        x           INTEGER NOT NULL,
+        y           INTEGER NOT NULL,
+        PRIMARY KEY (activity_id, x, y)
+    ) WITHOUT ROWID;
+    CREATE INDEX ix_activity_tiles_xy ON activity_tiles(x, y);
+    ALTER TABLE activities ADD COLUMN tiles_version INTEGER NOT NULL DEFAULT 0;
+    """,
 ]
 
 SCHEMA_VERSION = len(MIGRATIONS)

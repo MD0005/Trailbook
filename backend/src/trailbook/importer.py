@@ -11,9 +11,12 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
-from . import IMPORTER_VERSION, db, fitfile, geo, sports, streams
+from . import IMPORTER_VERSION, db, explorer, fitfile, geo, sports, streams
 
 TRACK_TOLERANCE_M = 5.0
+
+# Bump when the tile computation changes; activities are then re-tiled from stored streams.
+TILES_VERSION = 1
 
 STATUSES = ("new", "imported", "skipped", "duplicate", "error", "missing", "removed")
 
@@ -239,6 +242,51 @@ def read_file_bytes(root: Path, rel_path: str, zip_member: str) -> bytes:
         with zipfile.ZipFile(path) as zf:
             return zf.read(zip_member)
     return path.read_bytes()
+
+
+def _store_tiles(conn: sqlite3.Connection, activity_id: int, lats: list, lons: list) -> int:
+    tiles = explorer.tiles_of_track(lats, lons) if lats and lons else set()
+    conn.execute("DELETE FROM activity_tiles WHERE activity_id = ?", (activity_id,))
+    conn.executemany(
+        "INSERT INTO activity_tiles (activity_id, x, y) VALUES (?, ?, ?)",
+        [(activity_id, x, y) for x, y in tiles],
+    )
+    conn.execute(
+        "UPDATE activities SET tiles_version = ? WHERE id = ?", (TILES_VERSION, activity_id)
+    )
+    return len(tiles)
+
+
+def backfill_tiles(conn: sqlite3.Connection, progress=None) -> int:
+    """Compute explorer tiles for activities that have none yet, from stored GPS streams.
+
+    No FIT file is read, so this also works for activities whose file is gone.
+    """
+    ids = [
+        r[0]
+        for r in conn.execute(
+            "SELECT id FROM activities WHERE has_gps = 1 AND tiles_version < ?", (TILES_VERSION,)
+        )
+    ]
+    for i, activity_id in enumerate(ids, start=1):
+        rows = {
+            r["channel"]: streams.decode(r["encoding"], r["data"])
+            for r in conn.execute(
+                """SELECT channel, encoding, data FROM streams
+                   WHERE activity_id = ? AND channel IN ('lat', 'lon')""",
+                (activity_id,),
+            )
+        }
+        conn.execute("BEGIN")
+        try:
+            _store_tiles(conn, activity_id, rows.get("lat", []), rows.get("lon", []))
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+        if progress:
+            progress(i, len(ids))
+    return len(ids)
 
 
 def run_queue(
@@ -508,7 +556,7 @@ def _store_activity(
         conn.execute(
             f"UPDATE activities SET {assignments} WHERE id = ?", [*values.values(), activity_id]
         )
-        for table in ("tracks", "streams", "laps", "best_efforts"):
+        for table in ("tracks", "streams", "laps", "best_efforts", "activity_tiles"):
             conn.execute(f"DELETE FROM {table} WHERE activity_id = ?", (activity_id,))
 
     if p.track:
@@ -517,6 +565,9 @@ def _store_activity(
             "INSERT INTO tracks (activity_id, polyline, point_count) VALUES (?, ?, ?)",
             (activity_id, geo.encode_polyline(simplified), len(simplified)),
         )
+
+    if p.track:
+        _store_tiles(conn, activity_id, p.streams.get("lat", []), p.streams.get("lon", []))
 
     for channel, values_list in p.streams.items():
         kind = "f64" if channel in ("lat", "lon", "time") else "f32"

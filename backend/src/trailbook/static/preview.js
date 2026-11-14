@@ -414,7 +414,7 @@ async function renderActivity(id) {
       ${stat("Ascent", meters(a.ascent_m))}${stat("Descent", meters(a.descent_m))}
       ${stat("Calories", kcal(a.calories))}
     </div></div>
-    ${track ? `<div class="card"><h3>Route</h3>${hint(`${num(track.points)} points, simplified. The map comes with the Heatmap stage.`)}<br>${trackSvg(track.polyline)}</div>` : ""}
+    ${track ? `<div class="card"><h3>Route</h3><div id="route-map" class="map"></div>${hint(`${num(track.points)} route points (simplified to 5 m). Green: start, red: finish.`)}</div>` : ""}
     <div class="card"><h3>Streams</h3>${hint(a.channels.join(", ") || "No streams")}<br>${charts}</div>
     ${a.laps.length ? `<div class="card"><h3>Laps</h3>${hint(`${a.laps.length} laps`)}<div class="scroll"><table class="data">
       <thead><tr><th>#</th><th class="num">Distance</th><th class="num">Time</th><th class="num">Pace</th>
@@ -430,11 +430,199 @@ async function renderActivity(id) {
     await api("activities/" + id, { method: "PATCH", body: JSON.stringify({ type: e.target.value }) });
     renderActivity(id);
   };
+  if (track) showRouteMap("route-map", track.polyline).catch((e) => {
+    document.getElementById("route-map").outerHTML = state("Map unavailable: " + esc(e.message), "bad") + trackSvg(track.polyline);
+  });
   document.getElementById("del").onclick = async () => {
     if (!confirm("Delete this activity from the database?\n\nThe FIT file is not touched. It will not be imported again unless you remove it from the import history.")) return;
     await api("activities/" + id, { method: "DELETE" });
     location.hash = "#/activities";
   };
+}
+
+
+// ---- Maps (MapLibre GL, loaded on first use from the local vendor folder) -----------
+
+let maplibreReady = null;
+function loadMapLibre() {
+  maplibreReady ??= new Promise((resolve, reject) => {
+    const css = document.createElement("link");
+    css.rel = "stylesheet"; css.href = "vendor/maplibre-gl.css";
+    document.head.appendChild(css);
+    const js = document.createElement("script");
+    js.src = "vendor/maplibre-gl.js";
+    js.onload = () => resolve(window.maplibregl);
+    js.onerror = () => reject(new Error("Map library failed to load"));
+    document.head.appendChild(js);
+  });
+  return maplibreReady;
+}
+
+let activeMap = null;
+function disposeMap() {
+  if (activeMap) { activeMap.remove(); activeMap = null; }
+}
+
+function baseStyle() {
+  const dark = document.documentElement.dataset.theme !== "light";
+  const tiles = new URL("api/basemap/", document.baseURI).href + "{z}/{x}/{y}.png";
+  return {
+    version: 8,
+    sources: {
+      base: { type: "raster", tiles: [tiles], tileSize: 256, maxzoom: 19,
+              attribution: "© OpenStreetMap contributors" },
+    },
+    layers: [{
+      id: "base", type: "raster", source: "base",
+      paint: dark
+        ? { "raster-saturation": -1, "raster-brightness-max": 0.32, "raster-contrast": 0.15 }
+        : { "raster-saturation": -0.6, "raster-brightness-min": 0.05 },
+    }],
+  };
+}
+
+async function createMap(container, opts = {}) {
+  const ml = await loadMapLibre();
+  disposeMap();
+  activeMap = new ml.Map({ container, style: baseStyle(), center: [10, 50], zoom: 3,
+                           attributionControl: { compact: true }, ...opts });
+  activeMap.addControl(new ml.NavigationControl({ showCompass: false }), "top-right");
+  await new Promise((resolve) => activeMap.on("load", resolve));
+  return activeMap;
+}
+
+function fitTo(map, coordsList, padding = 40) {
+  let w = 180, s = 90, e = -180, n = -90;
+  for (const coords of coordsList) for (const [lon, lat] of coords) {
+    w = Math.min(w, lon); e = Math.max(e, lon); s = Math.min(s, lat); n = Math.max(n, lat);
+  }
+  if (w <= e) map.fitBounds([[w, s], [e, n]], { padding, duration: 0, maxZoom: 15 });
+}
+
+const lonLat = (polyline) => decodePolyline(polyline).map(([lat, lon]) => [lon, lat]);
+
+function tileBounds(x, y, z) {
+  const n = 2 ** z;
+  const lon = (xx) => (xx / n) * 360 - 180;
+  const lat = (yy) => (Math.atan(Math.sinh(Math.PI * (1 - (2 * yy) / n))) * 180) / Math.PI;
+  return [lon(x), lat(y + 1), lon(x + 1), lat(y)];
+}
+const tilePolygon = (x, y, z, props = {}) => {
+  const [w, s, e, n] = tileBounds(x, y, z);
+  return { type: "Feature", properties: props,
+           geometry: { type: "Polygon", coordinates: [[[w, s], [e, s], [e, n], [w, n], [w, s]]] } };
+};
+
+// ---- Heatmap ------------------------------------------------------------------------
+
+const LAYERS = [["routes", "Routes"], ["tiles", "Explorer tiles"], ["cluster", "Cluster"], ["square", "Max square"]];
+
+async function renderHeatmap(params) {
+  const isAll = CURRENT === "all";
+  const q = {};
+  if (!isAll) q.person = CURRENT;
+  if (params.type) q.type = params.type;
+  if (params.year) q.year = params.year;
+  const qs = new URLSearchParams(q);
+  const [tracks, tiles] = await Promise.all([api("heatmap/tracks?" + qs), api("heatmap/tiles?" + qs)]);
+  let shown;
+  try { shown = JSON.parse(store.get("map-layers") || "null"); } catch (e) { shown = null; }
+  shown ??= { routes: true, tiles: true, cluster: true, square: true };
+  const sq = tiles.max_square;
+  const go = (changes) => {
+    const p = Object.fromEntries(Object.entries({ ...params, ...changes }).filter(([, v]) => v));
+    location.hash = "#/heatmap?" + new URLSearchParams(p);
+  };
+  view.innerHTML = `
+    <div class="page-head"><h2>Heatmap</h2>
+      <select id="h-type"><option value="">All types</option>${typeOptions().map((g) =>
+        `<optgroup label="${esc(g.group)}">${g.options.map(([v, l]) => `<option value="${esc(v)}" ${v === params.type ? "selected" : ""}>${esc(l)}</option>`).join("")}</optgroup>`).join("")}</select>
+      <select id="h-year"><option value="">All years</option>${tracks.years.map((y) => `<option ${y === params.year ? "selected" : ""}>${y}</option>`).join("")}</select>
+    </div>
+    <div class="kpis">
+      ${kpi("Activities on the map", num(tracks.items.length))}
+      ${kpi("Explorer tiles", `${num(tiles.count)} tiles`)}
+      ${kpi("Max square", sq.size ? `${sq.size} × ${sq.size} tiles` : "–")}
+      ${kpi("Cluster", `${num(tiles.cluster.size)} tiles`)}
+    </div>
+    <div class="card map-card">
+      <div class="card-row map-tools">
+        ${LAYERS.map(([k, l]) => `<label class="pill"><input type="checkbox" data-layer="${k}" ${shown[k] ? "checked" : ""}> ${l}</label>`).join("")}
+        <span class="spacer"></span>
+        ${tiles.pending_activities ? state(`Tiles not computed yet for ${num(tiles.pending_activities)} activities — they appear after the next folder scan`, "warn") : ""}
+      </div>
+      <div id="map" class="map big"></div>
+      ${hint(`Explorer tiles are squares of the zoom-${tiles.zoom} map grid touched by a route. The cluster is the largest group of tiles surrounded on all four sides by visited tiles; the max square is the largest square of visited tiles. Routes are drawn semi-transparent, so often used ways look brighter.`)}
+    </div>`;
+  document.getElementById("h-type").onchange = (e) => go({ type: e.target.value });
+  document.getElementById("h-year").onchange = (e) => go({ year: e.target.value });
+
+  const map = await createMap("map");
+  const z = tiles.zoom;
+  const accent = getComputedStyle(document.documentElement).getPropertyValue("--accent").trim();
+  const routes = tracks.items.map((t) => ({
+    type: "Feature",
+    properties: { id: t.id, day: t.day, type: typeLabel(t.activity_type), person: personLabel(t.person_id),
+                  color: isAll ? personColor(person(t.person_id), Math.max(0, realPeople().findIndex((p) => p.id === t.person_id))) : accent },
+    geometry: { type: "LineString", coordinates: lonLat(t.polyline) },
+  }));
+  map.addSource("tiles", { type: "geojson", data: { type: "FeatureCollection",
+    features: tiles.tiles.map(([x, y, first, visits]) => tilePolygon(x, y, z, { first, visits })) } });
+  map.addSource("cluster", { type: "geojson", data: { type: "FeatureCollection",
+    features: tiles.cluster.tiles.map(([x, y]) => tilePolygon(x, y, z)) } });
+  map.addSource("square", { type: "geojson", data: sq.size
+    ? { type: "Feature", properties: {}, geometry: { type: "Polygon", coordinates: [(() => {
+        const [w, , , n] = tileBounds(sq.x, sq.y, z), [, s, e] = tileBounds(sq.x + sq.size - 1, sq.y + sq.size - 1, z);
+        return [[w, s], [e, s], [e, n], [w, n], [w, s]]; })()] } }
+    : { type: "FeatureCollection", features: [] } });
+  map.addSource("routes", { type: "geojson", data: { type: "FeatureCollection", features: routes } });
+
+  map.addLayer({ id: "tiles", type: "fill", source: "tiles", paint: { "fill-color": "#3ecf8e", "fill-opacity": 0.14 } });
+  map.addLayer({ id: "tiles-line", type: "line", source: "tiles", paint: { "line-color": "#3ecf8e", "line-opacity": 0.35, "line-width": 0.6 } });
+  map.addLayer({ id: "cluster", type: "fill", source: "cluster", paint: { "fill-color": "#a678ff", "fill-opacity": 0.3 } });
+  map.addLayer({ id: "square", type: "line", source: "square", paint: { "line-color": "#f0b429", "line-width": 2.5 } });
+  map.addLayer({ id: "routes", type: "line", source: "routes",
+    layout: { "line-join": "round", "line-cap": "round" },
+    paint: { "line-color": ["get", "color"], "line-opacity": 0.45,
+             "line-width": ["interpolate", ["linear"], ["zoom"], 8, 1, 13, 2, 16, 4] } });
+
+  const visibility = () => {
+    const set = (id, on) => map.getLayer(id) && map.setLayoutProperty(id, "visibility", on ? "visible" : "none");
+    set("routes", shown.routes); set("tiles", shown.tiles); set("tiles-line", shown.tiles);
+    set("cluster", shown.cluster); set("square", shown.square);
+  };
+  visibility();
+  view.querySelectorAll("[data-layer]").forEach((cb) => cb.onchange = () => {
+    shown[cb.dataset.layer] = cb.checked;
+    store.set("map-layers", JSON.stringify(shown));
+    visibility();
+  });
+
+  map.on("click", "routes", (e) => {
+    const items = [...new Map(e.features.map((f) => [f.properties.id, f.properties])).values()].slice(0, 6);
+    new maplibregl.Popup({ closeButton: false, maxWidth: "260px" }).setLngLat(e.lngLat)
+      .setHTML(items.map((p) => `<a href="#/activity/${p.id}">${esc(p.type)} · ${esc(p.day)}</a>${isAll ? ` <span class="hint">${esc(p.person)}</span>` : ""}`).join("<br>"))
+      .addTo(map);
+  });
+  map.on("mouseenter", "routes", () => { map.getCanvas().style.cursor = "pointer"; });
+  map.on("mouseleave", "routes", () => { map.getCanvas().style.cursor = ""; });
+
+  if (routes.length) fitTo(map, routes.map((r) => r.geometry.coordinates));
+  else if (tiles.tiles.length) fitTo(map, tiles.tiles.map(([x, y]) => { const [w, s, e, n] = tileBounds(x, y, z); return [[w, s], [e, n]]; }));
+}
+
+async function showRouteMap(container, polyline) {
+  const map = await createMap(container, { interactive: true });
+  const coords = lonLat(polyline);
+  const accent = getComputedStyle(document.documentElement).getPropertyValue("--accent").trim();
+  map.addSource("route", { type: "geojson", data: { type: "Feature", properties: {}, geometry: { type: "LineString", coordinates: coords } } });
+  map.addLayer({ id: "route", type: "line", source: "route", layout: { "line-join": "round", "line-cap": "round" },
+                 paint: { "line-color": accent, "line-width": 3.5 } });
+  map.addSource("ends", { type: "geojson", data: { type: "FeatureCollection", features: [
+    { type: "Feature", properties: { c: "#3ecf8e" }, geometry: { type: "Point", coordinates: coords[0] } },
+    { type: "Feature", properties: { c: "#ff6b6b" }, geometry: { type: "Point", coordinates: coords[coords.length - 1] } }] } });
+  map.addLayer({ id: "ends", type: "circle", source: "ends", paint: { "circle-radius": 5, "circle-color": ["get", "c"], "circle-stroke-width": 2, "circle-stroke-color": "#fff" } });
+  fitTo(map, [coords]);
 }
 
 // ---- Coming-soon pages --------------------------------------------------------------
@@ -443,11 +631,6 @@ const PLANNED = {
   calendar: ["Calendar", "Stage 4", [
     "Month and year view with every activity on its day, coloured by type.",
     "Weekly totals (distance, time, load) at the end of each week.",
-  ]],
-  heatmap: ["Heatmap", "Stage 3", [
-    "Map of every route of the selected person; frequently used routes glow brighter.",
-    "Explorer tiles (zoom 14 squares): visited tiles, max square, cluster.",
-    "Filters by type and year.",
   ]],
   fitness: ["Fitness", "Stage 4", [
     "Training load per activity, fitness (CTL), fatigue (ATL) and form (TSB) over time.",
@@ -776,6 +959,7 @@ function settingsTypes(el, params) {
 
 async function route() {
   clearTimeout(timer);
+  disposeMap();
   const [path, query] = (location.hash.slice(1) || "/activities").split("?");
   const params = Object.fromEntries(new URLSearchParams(query || ""));
   const parts = path.split("/").filter(Boolean);
@@ -791,6 +975,7 @@ async function route() {
     if (parts[0] === "activity") await renderActivity(parts[1]);
     else if (section === "settings") await renderSettings(parts[1], params);
     else if (section === "compare") await renderCompare(params);
+    else if (section === "heatmap") await renderHeatmap(params);
     else if (PLANNED[section]) renderPlanned(section);
     else await renderActivities(params);
   } catch (e) {

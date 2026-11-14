@@ -375,11 +375,21 @@ The visual design is defined by the project owner; the technical preview follows
 
 ## 11. Map
 
-- Base map: OpenStreetMap Foundation vector tiles (as used by Home Assistant since 2026.10),
-  fetched and cached on disk by the add-on proxy. Style URL configurable so users can use
-  another provider.
-- Routes: one MapLibre line layer per person; opacity ~0.15–0.3 so frequent routes saturate.
-- Target: 5 000 activities × ~300 points renders smoothly on a mid-range phone.
+- Library: MapLibre GL JS 4.7.1 (BSD), shipped in `static/vendor/` and loaded only on map
+  pages — the browser never calls a CDN.
+- Base map: OpenStreetMap raster tiles fetched by the add-on (`/api/basemap/{z}/{x}/{y}.png`)
+  with a proper User-Agent and a permanent disk cache next to the database, as the OSMF tile
+  policy requires; each tile is downloaded once. Source configurable (setting `basemap_url`).
+  Dark theme: desaturated and darkened tiles. Vector tiles (as in HA 2026.10) are a later
+  option.
+- Routes: one line layer, semi-transparent (opacity 0.45) so frequent routes look brighter;
+  with *Everyone* selected each person has their colour. Click a line for the activity.
+- Explorer tiles (zoom 14), computed at import from full-resolution GPS points (gaps between
+  points are filled; GPS dropouts are not bridged) and stored per activity
+  (`activity_tiles`). Older activities are tiled from stored streams during the next scan.
+  The API returns visited tiles (first visit, visits), the max square and the cluster for the
+  current filters (person, type or group, year).
+- Layers can be toggled: routes, explorer tiles, cluster, max square.
 
 ---
 
@@ -441,7 +451,7 @@ API: `POST /api/export`, `GET /api/export/status`, `GET /api/export/{name}` (dow
    import manager (scan, statuses, duplicates, missing), CLI to run it on a PC. Tested on a
    real Garmin export.
 2. **API + minimal UI** — activity list and detail with streams. *(done: `trailbook serve`, technical preview UI)*
-3. **Map / Heatmap** — all routes, heatmap effect, tile proxy, explorer tiles (visited tiles, max square, cluster).
+3. **Map / Heatmap** *(done)* — all routes, heatmap effect, tile proxy, explorer tiles (visited tiles, max square, cluster).
 4. **Statistics** — totals, load, CTL/ATL/TSB, best efforts and curves.
 5. **Add-on** — packaging, Ingress, stdin trigger, multi-arch CI, install on HA Yellow.
 6. **Export / restore** — migration ZIP (section 13), tested by moving a PC install to HA Yellow.

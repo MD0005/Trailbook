@@ -13,13 +13,27 @@ from contextlib import asynccontextmanager, closing
 from pathlib import Path
 
 from starlette.applications import Starlette
+from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException
+from starlette.middleware import Middleware
+from starlette.middleware.gzip import GZipMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
-from . import __version__, db, fitfile, importer, jobs, scheduler, sports, streams
+from . import (
+    __version__,
+    basemap,
+    db,
+    explorer,
+    fitfile,
+    importer,
+    jobs,
+    scheduler,
+    sports,
+    streams,
+)
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -77,6 +91,27 @@ FILE_TEXT_FILTERS = {
 }
 
 
+def _map_filters(q) -> tuple[str, list]:
+    """person / type (or g:group) / year filters shared by the map endpoints."""
+    where, params = ["a.has_gps = 1"], []
+    if q.get("person"):
+        values = q["person"].split(",")
+        where.append(f"a.person_id IN ({','.join('?' for _ in values)})")
+        params += values
+    if q.get("type"):
+        t = q["type"]
+        if t.startswith("g:"):
+            where.append("a.category = ?")
+            params.append(t[2:])
+        else:
+            where.append("a.activity_type = ?")
+            params.append(t)
+    if q.get("year"):
+        where.append("substr(a.start_time_utc, 1, 4) = ?")
+        params.append(q["year"])
+    return " AND ".join(where), params
+
+
 def _order(q, sorts: dict[str, str], default: str, tiebreak: str) -> str:
     key = q.get("sort") if q.get("sort") in sorts else default
     direction = "ASC" if q.get("dir") == "asc" else "DESC"
@@ -111,6 +146,7 @@ def create_app(db_path: str | Path) -> Starlette:
     db.connect(db_path).close()  # apply migrations once
     job = jobs.ImportJob(db_path)
     sched = scheduler.Scheduler(db_path, job)
+    tiles = basemap.TileCache(Path(db_path).parent / "tilecache")
 
     def conn() -> sqlite3.Connection:
         return db.connect(db_path, apply_migrations=False)
@@ -492,6 +528,68 @@ def create_app(db_path: str | Path) -> Starlette:
             raise HTTPException(404, "activity has no track")
         return JSONResponse({"polyline": row["polyline"], "points": row["point_count"]})
 
+    # ---- heatmap ---------------------------------------------------------------------
+
+    async def heatmap_tracks(request: Request):
+        where, params = _map_filters(request.query_params)
+        with closing(conn()) as c:
+            rows = c.execute(
+                f"""SELECT a.id, a.person_id, a.activity_type, a.category,
+                           substr(a.start_time_utc, 1, 10) day, t.polyline
+                    FROM activities a JOIN tracks t ON t.activity_id = a.id
+                    WHERE {where} ORDER BY a.start_time_utc""",
+                params,
+            ).fetchall()
+            years = [
+                r[0]
+                for r in c.execute(
+                    "SELECT DISTINCT substr(start_time_utc, 1, 4) y FROM activities "
+                    "WHERE has_gps = 1 ORDER BY y DESC"
+                )
+            ]
+        return JSONResponse({"years": years, "items": [dict(r) for r in rows]})
+
+    async def heatmap_tiles(request: Request):
+        where, params = _map_filters(request.query_params)
+        with closing(conn()) as c:
+            rows = c.execute(
+                f"""SELECT t.x, t.y, MIN(a.start_time_utc) first, COUNT(*) visits
+                    FROM activity_tiles t JOIN activities a ON a.id = t.activity_id
+                    WHERE {where} GROUP BY t.x, t.y""",
+                params,
+            ).fetchall()
+            pending = c.execute(
+                "SELECT COUNT(*) FROM activities WHERE has_gps = 1 AND tiles_version < ?",
+                (importer.TILES_VERSION,),
+            ).fetchone()[0]
+        tiles = {(r["x"], r["y"]) for r in rows}
+        size, sx, sy = explorer.max_square(tiles)
+        clus = explorer.cluster(tiles)
+        return JSONResponse(
+            {
+                "zoom": explorer.ZOOM,
+                "count": len(tiles),
+                "tiles": [[r["x"], r["y"], r["first"], r["visits"]] for r in rows],
+                "max_square": {"size": size, "x": sx, "y": sy},
+                "cluster": {"size": len(clus), "tiles": sorted(clus)},
+                "pending_activities": pending,
+            }
+        )
+
+    async def basemap_tile(request: Request):
+        z, x, y = (request.path_params[k] for k in ("z", "x", "y"))
+        if not (0 <= z <= 19 and 0 <= x < 2**z and 0 <= y < 2**z):
+            raise HTTPException(404, "tile out of range")
+        with closing(conn()) as c:
+            template = db.get_setting(c, "basemap_url") or basemap.DEFAULT_URL
+        try:
+            data, media_type = await run_in_threadpool(tiles.get, template, z, x, y)
+        except basemap.TileError as exc:
+            raise HTTPException(502, str(exc)) from exc
+        return Response(
+            data, media_type=media_type, headers={"Cache-Control": "public, max-age=604800"}
+        )
+
     # ---- import manager --------------------------------------------------------------
 
     async def import_status(request: Request):
@@ -611,6 +709,9 @@ def create_app(db_path: str | Path) -> Starlette:
         Route("/api/activities/{id:int}", activity_delete, methods=["DELETE"]),
         Route("/api/activities/{id:int}/streams", activity_streams),
         Route("/api/activities/{id:int}/track", activity_track),
+        Route("/api/heatmap/tracks", heatmap_tracks),
+        Route("/api/heatmap/tiles", heatmap_tiles),
+        Route("/api/basemap/{z:int}/{x:int}/{y:int}.png", basemap_tile),
         Route("/api/import/status", import_status),
         Route("/api/import/scan", import_scan, methods=["POST"]),
         Route("/api/import/files", import_files),
@@ -627,7 +728,10 @@ def create_app(db_path: str | Path) -> Starlette:
         await sched.stop()
 
     app = Starlette(
-        routes=routes, exception_handlers={HTTPException: http_error}, lifespan=lifespan
+        routes=routes,
+        exception_handlers={HTTPException: http_error},
+        lifespan=lifespan,
+        middleware=[Middleware(GZipMiddleware, minimum_size=1024)],
     )
     app.state.import_job = job
     app.state.scheduler = sched

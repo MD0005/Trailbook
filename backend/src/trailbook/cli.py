@@ -76,6 +76,15 @@ def cmd_scan(conn, args) -> int:
                     )  # fmt: skip
 
             result = importer.run_queue(conn, root, progress=progress, limit=args.limit)
+
+            def tile_progress(i, total):
+                jobs.write_progress(
+                    conn, state="running", phase="tiles", started_at=started, done=i, total=total
+                )
+
+            tiled = importer.backfill_tiles(conn, progress=tile_progress)
+            if tiled:
+                out(f"Explorer tiles computed for {tiled} activities.")
             out(
                 f"Import finished in {time.monotonic() - t1:.1f} s: {result.imported} imported, "
                 f"{result.skipped} skipped, {result.duplicates} duplicates, "
