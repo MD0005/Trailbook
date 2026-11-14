@@ -256,7 +256,7 @@ function infinite(root, loaded, total, fetchPage, append) {
 // same data-filter / data-pfilter attribute as other filters, and fires "change".
 function typePicker(attr, key, value, all = "All types") {
   const label = (v) => (!v ? all : v.startsWith("g:") ? `All ${groupLabel(v.slice(2)).toLowerCase()}` : typeLabel(v));
-  const icon = (v) => (!v ? "" : v.startsWith("g:") ? groupIcon(v.slice(2)) : typeIcon(v));
+  const icon = (v) => (!v || v.startsWith("g:") ? "" : typeIcon(v)); // groups have no icon
   // Only types that have activities (plus the current choice), each with its count.
   const n = (k) => TYPE_COUNTS[k] || 0;
   const item = (v, text, ic, cls = "", count = null) =>
@@ -265,7 +265,7 @@ function typePicker(attr, key, value, all = "All types") {
     const types = TYPES.types.filter((t) => t.group === g.key && (n(t.key) > 0 || t.key === value));
     if (!types.length && value !== `g:${g.key}`) return "";
     const total = types.reduce((sum, t) => sum + n(t.key), 0);
-    return `<div class="tpick-group" data-group>${item(`g:${g.key}`, `All ${g.en.toLowerCase()}`, groupIcon(g.key), "grp", total)}
+    return `<div class="tpick-group" data-group>${item(`g:${g.key}`, `All ${g.en.toLowerCase()}`, "", "grp", total)}
       ${types.map((t) => item(t.key, t.en, typeIcon(t.key), "sub", n(t.key))).join("")}</div>`;
   }).join("") || `<div class="hint tpick-empty">No activities yet.</div>`;
   return `<div class="tpick">
