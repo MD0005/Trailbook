@@ -537,11 +537,10 @@ async function renderActivities(params) {
     return v;
   });
   const filterPanelHtml = `<div class="panel-grid">${filterCols.map((c) => section(c.label, filterControl(c, params).replace("data-filter=", "data-pfilter="))).join("")}</div>
-    <div class="panel-actions"><button class="primary small" data-apply>Apply</button></div>`;
+    <div class="panel-actions">${active.length ? `<button class="primary small" data-clear title="Remove all filters">Clear filters</button>` : ""}<button class="primary small" data-apply>Apply</button></div>`;
   view.innerHTML = `
     ${pageHead("Activities", `
       ${badgeHtml("filter", "Filter", active.join(" · ") || "All", { panel: filterPanelHtml, on: active.length > 0 })}
-      ${active.length ? `<button class="badge" data-clear title="Clear filters">✕ Clear</button>` : ""}
       ${badgeHtml("options", "Options", "", { panel: `<div class="opt-panel">${row("Large tiles", selectCtl("tile-content", [["route", "Route map"], ["pace", "Pace chart"]], tileContent))}
         <div class="hint" style="margin-top:6px">More chart types (intervals) will follow.</div></div>` })}
       <button class="badge ${showSummary ? "on" : ""}" data-kpis>Summary</button>`,
@@ -995,7 +994,6 @@ async function renderHeatmap(params) {
       <div class="heat-overlay"><div class="heat-column">
         <div class="float-bar">${pageHead("Map", `
           ${badgeHtml("filter", "Filter", filterSummary(), { panel: filterPanel(), on: activeFilter })}
-          ${activeFilter ? `<button class="badge" data-clear-map title="Clear filters">✕ Clear</button>` : ""}
           ${badgeHtml("settings", "Options", "", { panel: "<div data-settings></div>" })}
           <button class="badge ${s.kpis ? "on" : ""}" data-kpis>Summary</button>`,
           switchHtml("layer", [["heatmap", `${ICON_HEAT}<span>Heatmap</span>`], ["tiles", `${ICON_GRID}<span>Explorer tiles</span>`]], s.layer))}</div>
@@ -1045,7 +1043,7 @@ function filterPanel() {
   return `<div class="panel-grid">${section("Activity type", typePicker("data-pfilter", "type", heat.params.type || ""))}
     ${section("Year", `<div class="chips">${[["", "All"], ...heat.years.map((y) => [y, y])].map(([v, l]) =>
       `<button class="chip ${v === (heat.params.year || "") ? "on" : ""}" data-pchip="year" data-value="${v}">${l}</button>`).join("")}</div>`)}</div>
-    <div class="panel-actions"><button class="primary small" data-apply>Apply</button></div>`;
+    <div class="panel-actions">${heat.params.type || heat.params.year ? `<button class="primary small" data-clear-map title="Remove all filters">Clear filters</button>` : ""}<button class="primary small" data-apply>Apply</button></div>`;
 }
 
 function renderSettingsPanel() {

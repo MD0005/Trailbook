@@ -318,10 +318,9 @@ async function renderTotals(params, sw) {
       ${section("Year", `<select data-pfilter="year"><option value="">All years</option>${data.years.map((y) => `<option ${y === params.year ? "selected" : ""}>${y}</option>`).join("")}</select>`)}
       ${section("Group by", `<select data-pfilter="by">${[["year", "Year"], ["month", "Month"], ["week", "Week"]].map(([v, l]) => `<option value="${v}" ${v === by ? "selected" : ""}>${l}</option>`).join("")}</select>`)}
       ${section("Chart", `<select data-pfilter="metric">${STAT_METRICS.map(([v, l]) => `<option value="${v}" ${v === metric ? "selected" : ""}>${l}</option>`).join("")}</select>`)}
-    </div><div class="panel-actions"><button class="primary small" data-apply>Apply</button></div>`;
+    </div><div class="panel-actions">${params.type || params.year ? `<button class="primary small" data-clear-stats title="Remove all filters">Clear filters</button>` : ""}<button class="primary small" data-apply>Apply</button></div>`;
   const active = params.type || params.year;
-  const badges = badgeHtml("filter", "Filter", [typeText !== "All" ? typeText : "", params.year || ""].filter(Boolean).join(" · ") || "All", { panel: filterPanel, on: !!active })
-    + (active ? `<div class="badge-wrap"><button class="badge" data-clear-stats>✕ Clear</button></div>` : "");
+  const badges = badgeHtml("filter", "Filter", [typeText !== "All" ? typeText : "", params.year || ""].filter(Boolean).join(" · ") || "All", { panel: filterPanel, on: !!active });
   const rows = data.rows;
   const t = (k) => rows.reduce((s, r) => s + (r[k] || 0), 0);
   const strip = statStrip([
