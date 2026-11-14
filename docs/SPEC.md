@@ -382,14 +382,26 @@ The visual design is defined by the project owner; the technical preview follows
   policy requires; each tile is downloaded once. Source configurable (setting `basemap_url`).
   Dark theme: desaturated and darkened tiles. Vector tiles (as in HA 2026.10) are a later
   option.
-- Routes: one line layer, semi-transparent (opacity 0.45) so frequent routes look brighter;
-  with *Everyone* selected each person has their colour. Click a line for the activity.
-- Explorer tiles (zoom 14), computed at import from full-resolution GPS points (gaps between
-  points are filled; GPS dropouts are not bridged) and stored per activity
-  (`activity_tiles`). Older activities are tiled from stored streams during the next scan.
-  The API returns visited tiles (first visit, visits), the max square and the cluster for the
-  current filters (person, type or group, year).
-- Layers can be toggled: routes, explorer tiles, cluster, max square.
+- The Heatmap page is full screen: a bar of badges under the header, the map below.
+  Badges, in order of importance (the first two are larger):
+  1. **Map** — base map (OpenStreetMap, OpenTopoMap, CyclOSM or none; only these sources are
+     proxied) and its colours (original, muted, grayscale, dark, faded light). Labels are part
+     of raster tiles and cannot be toggled.
+  2. **Heatmap | Explorer tiles** — what is drawn.
+  3. Heatmap options: *Style* (density — semi-transparent lines, overlaps stronger; coverage —
+     solid lines; heat glow — colour gradient from points spaced ~30 m along the routes),
+     *Colours* (line colour or gradient; with Everyone: a colour per person, drawn in the
+     configured order), *Weight* (width, overlap strength).
+  4. Tile options: *Tile size* (zoom 14 explorer tiles, zoom 16, zoom 17 small squares),
+     *Style* (coverage or by number of visits), *Colours*, *Display* (single tiles with grid
+     or one area), *Highlights* (max square, cluster, routes under tiles).
+  5. *Filter* (type or group, year) and a *KPIs* switch (overlay with activities, distance,
+     time, and tiles / max square / cluster).
+- All choices are saved per browser and separately per mode, so switching between heatmap
+  and tiles restores each mode's colours.
+- Tiles, max square and cluster on this page are computed **in the browser** from the route
+  polylines for the chosen tile size; the server stores zoom-14 tiles per activity for
+  statistics. MapLibre has no blend modes, so overlapping people are not colour-mixed.
 
 ---
 

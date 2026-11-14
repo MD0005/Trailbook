@@ -72,13 +72,16 @@ def test_tile_cache_fetches_once(tmp_path, monkeypatch):
 
 def test_basemap_endpoint_validates_and_reports_errors(tmp_path, monkeypatch):
     client = TestClient(create_app(tmp_path / "t.db"))
-    assert client.get("/api/basemap/3/99/0.png").status_code == 404
+    assert {b["key"] for b in client.get("/api/basemaps").json()} == {"osm", "topo", "cyclosm"}
+    assert client.get("/api/basemap/osm/3/99/0.png").status_code == 404
+    assert client.get("/api/basemap/topo/18/0/0.png").status_code == 404  # above max zoom
+    assert client.get("/api/basemap/evil/3/1/1.png").status_code == 404  # no open proxy
 
     def boom(*a, **k):
         raise basemap.urllib.error.URLError("offline")
 
     monkeypatch.setattr(basemap.urllib.request, "urlopen", boom)
-    assert client.get("/api/basemap/3/1/1.png").status_code == 502
+    assert client.get("/api/basemap/osm/3/1/1.png").status_code == 502
 
 
 @pytest.mark.skipif(not SAMPLE_DATA.is_dir(), reason="no local sample-data")

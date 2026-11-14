@@ -535,7 +535,8 @@ def create_app(db_path: str | Path) -> Starlette:
         with closing(conn()) as c:
             rows = c.execute(
                 f"""SELECT a.id, a.person_id, a.activity_type, a.category,
-                           substr(a.start_time_utc, 1, 10) day, t.polyline
+                           substr(a.start_time_utc, 1, 10) day, a.distance_m, a.moving_s,
+                           a.ascent_m, t.polyline
                     FROM activities a JOIN tracks t ON t.activity_id = a.id
                     WHERE {where} ORDER BY a.start_time_utc""",
                 params,
@@ -576,12 +577,22 @@ def create_app(db_path: str | Path) -> Starlette:
             }
         )
 
+    async def basemaps(request: Request):
+        return JSONResponse(
+            [
+                {"key": k, "label": label, "max_zoom": mz, "attribution": attr}
+                for k, (_, mz, attr, label) in basemap.SOURCES.items()
+            ]
+        )
+
     async def basemap_tile(request: Request):
+        source = request.path_params["source"]
         z, x, y = (request.path_params[k] for k in ("z", "x", "y"))
-        if not (0 <= z <= 19 and 0 <= x < 2**z and 0 <= y < 2**z):
+        if source not in basemap.SOURCES:
+            raise HTTPException(404, "unknown base map")
+        template, max_zoom, _, _ = basemap.SOURCES[source]
+        if not (0 <= z <= max_zoom and 0 <= x < 2**z and 0 <= y < 2**z):
             raise HTTPException(404, "tile out of range")
-        with closing(conn()) as c:
-            template = db.get_setting(c, "basemap_url") or basemap.DEFAULT_URL
         try:
             data, media_type = await run_in_threadpool(tiles.get, template, z, x, y)
         except basemap.TileError as exc:
@@ -711,7 +722,8 @@ def create_app(db_path: str | Path) -> Starlette:
         Route("/api/activities/{id:int}/track", activity_track),
         Route("/api/heatmap/tracks", heatmap_tracks),
         Route("/api/heatmap/tiles", heatmap_tiles),
-        Route("/api/basemap/{z:int}/{x:int}/{y:int}.png", basemap_tile),
+        Route("/api/basemaps", basemaps),
+        Route("/api/basemap/{source}/{z:int}/{x:int}/{y:int}.png", basemap_tile),
         Route("/api/import/status", import_status),
         Route("/api/import/scan", import_scan, methods=["POST"]),
         Route("/api/import/files", import_files),

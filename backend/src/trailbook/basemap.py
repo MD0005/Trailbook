@@ -23,6 +23,24 @@ DEFAULT_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
 USER_AGENT = f"Trailbook/{__version__} (self-hosted training log; tile cache)"
 TIMEOUT_S = 10
 
+# Base maps the user can choose from. Only these URLs are fetched (no open proxy).
+# key: (url template, max zoom, attribution, label)
+SOURCES: dict[str, tuple[str, int, str, str]] = {
+    "osm": (DEFAULT_URL, 19, "© OpenStreetMap contributors", "OpenStreetMap"),
+    "topo": (
+        "https://tile.opentopomap.org/{z}/{x}/{y}.png",
+        17,
+        "© OpenStreetMap contributors, SRTM · style © OpenTopoMap (CC-BY-SA)",
+        "OpenTopoMap (terrain)",
+    ),
+    "cyclosm": (
+        "https://a.tile-cyclosm.openstreetmap.fr/cyclosm/{z}/{x}/{y}.png",
+        20,
+        "© OpenStreetMap contributors · style © CyclOSM",
+        "CyclOSM (cycling & trails)",
+    ),
+}
+
 
 class TileError(Exception):
     pass

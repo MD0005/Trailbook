@@ -463,31 +463,80 @@ function disposeMap() {
   if (activeMap) { activeMap.remove(); activeMap = null; }
 }
 
-function baseStyle() {
+// Base maps offered by the server (fetched once).
+let BASEMAPS = null;
+const BASE_TONES = [
+  ["original", "Original colours", {}],
+  ["muted", "Muted", { "raster-saturation": -0.55 }],
+  ["grayscale", "Grayscale", { "raster-saturation": -1 }],
+  ["dark", "Dark", { "raster-saturation": -1, "raster-brightness-max": 0.32, "raster-contrast": 0.15 }],
+  ["faded", "Faded light", { "raster-saturation": -0.8, "raster-brightness-min": 0.3, "raster-contrast": -0.2 }],
+];
+
+// ---- saved map settings -------------------------------------------------------------
+
+const LINE_COLORS = [
+  ["blue", "#4c8dff"], ["orange", "#ff8a3d"], ["red", "#ff5d5d"], ["magenta", "#ff4fd8"],
+  ["purple", "#a678ff"], ["green", "#3ecf8e"], ["yellow", "#ffd23f"], ["white", "#f4f4f4"],
+];
+const RAMPS = {
+  fire: ["#3b0f70", "#a3195b", "#f0562a", "#ffc23f", "#fff7c2"],
+  ice: ["#0b1e3f", "#1e5aa8", "#3fa9f5", "#9be7ff", "#ffffff"],
+  viridis: ["#440154", "#3b528b", "#21918c", "#5ec962", "#fde725"],
+  magma: ["#1c1044", "#6b1d81", "#c63d73", "#fb8761", "#fcfdbf"],
+};
+const TILE_SIZES = [
+  [14, "Explorer tiles", "zoom 14 — the standard explorer tiles"],
+  [16, "Medium squares", "zoom 16 — four times smaller, good for cities"],
+  [17, "Small squares", "zoom 17 — small squares"],
+];
+
+function defaultMapSettings() {
   const dark = document.documentElement.dataset.theme !== "light";
-  const tiles = new URL("api/basemap/", document.baseURI).href + "{z}/{x}/{y}.png";
   return {
-    version: 8,
-    sources: {
-      base: { type: "raster", tiles: [tiles], tileSize: 256, maxzoom: 19,
-              attribution: "© OpenStreetMap contributors" },
-    },
-    layers: [{
-      id: "base", type: "raster", source: "base",
-      paint: dark
-        ? { "raster-saturation": -1, "raster-brightness-max": 0.32, "raster-contrast": 0.15 }
-        : { "raster-saturation": -0.6, "raster-brightness-min": 0.05 },
-    }],
+    map: { source: "osm", tone: dark ? "dark" : "muted" },
+    layer: "heatmap",
+    heatmap: { style: "density", color: "blue", ramp: "fire", width: 2, intensity: 0.45, perPerson: true },
+    tiles: { zoom: 14, style: "coverage", color: "green", ramp: "viridis", display: "grid",
+             square: true, cluster: true, routes: true },
+    kpis: true,
   };
 }
 
-async function createMap(container, opts = {}) {
+function loadMapSettings() {
+  const d = defaultMapSettings();
+  let s = null;
+  try { s = JSON.parse(store.get("map-settings") || "null"); } catch (e) { s = null; }
+  if (!s) return d;
+  return { ...d, ...s, map: { ...d.map, ...s.map }, heatmap: { ...d.heatmap, ...s.heatmap },
+           tiles: { ...d.tiles, ...s.tiles } };
+}
+const saveMapSettings = (s) => store.set("map-settings", JSON.stringify(s));
+const colorHex = (key) => (LINE_COLORS.find(([k]) => k === key) || LINE_COLORS[0])[1];
+
+function baseStyle(mapSettings) {
+  const src = (BASEMAPS || []).find((b) => b.key === mapSettings.source);
+  const style = { version: 8, sources: {}, layers: [
+    { id: "background", type: "background", paint: { "background-color": getComputedStyle(document.documentElement).getPropertyValue("--surface-2").trim() || "#1e222b" } },
+  ] };
+  if (src) {
+    const tiles = new URL(`api/basemap/${src.key}/`, document.baseURI).href + "{z}/{x}/{y}.png";
+    style.sources.base = { type: "raster", tiles: [tiles], tileSize: 256, maxzoom: src.max_zoom, attribution: src.attribution };
+    const tone = (BASE_TONES.find(([k]) => k === mapSettings.tone) || BASE_TONES[0])[2];
+    style.layers.push({ id: "base", type: "raster", source: "base", paint: tone });
+  }
+  return style;
+}
+
+async function createMap(container, mapSettings, opts = {}) {
   const ml = await loadMapLibre();
+  BASEMAPS ??= await api("basemaps");
   disposeMap();
-  activeMap = new ml.Map({ container, style: baseStyle(), center: [10, 50], zoom: 3,
+  activeMap = new ml.Map({ container, style: baseStyle(mapSettings), center: [10, 50], zoom: 3,
                            attributionControl: { compact: true }, ...opts });
   activeMap.addControl(new ml.NavigationControl({ showCompass: false }), "top-right");
   await new Promise((resolve) => activeMap.on("load", resolve));
+  activeMap.resize();
   return activeMap;
 }
 
@@ -501,21 +550,104 @@ function fitTo(map, coordsList, padding = 40) {
 
 const lonLat = (polyline) => decodePolyline(polyline).map(([lat, lon]) => [lon, lat]);
 
+// ---- explorer tiles, computed in the browser for any tile size ----------------------
+// (The server only sends the routes; nothing here runs on the Home Assistant box.)
+
+function tileOf(lat, lon, z) {
+  const n = 2 ** z;
+  lat = Math.max(Math.min(lat, 85.0511), -85.0511);
+  const r = (lat * Math.PI) / 180;
+  const x = Math.floor(((lon + 180) / 360) * n);
+  const y = Math.floor(((1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2) * n);
+  return [Math.min(Math.max(x, 0), n - 1), Math.min(Math.max(y, 0), n - 1)];
+}
+
 function tileBounds(x, y, z) {
   const n = 2 ** z;
   const lon = (xx) => (xx / n) * 360 - 180;
   const lat = (yy) => (Math.atan(Math.sinh(Math.PI * (1 - (2 * yy) / n))) * 180) / Math.PI;
   return [lon(x), lat(y + 1), lon(x + 1), lat(y)];
 }
-const tilePolygon = (x, y, z, props = {}) => {
-  const [w, s, e, n] = tileBounds(x, y, z);
-  return { type: "Feature", properties: props,
-           geometry: { type: "Polygon", coordinates: [[[w, s], [e, s], [e, n], [w, n], [w, s]]] } };
+
+const tileKey = (x, y) => x * 4194304 + y; // 2^22 > 2^17 tiles per row
+
+function computeTiles(tracks, z) {
+  const tiles = new Map(); // key -> {x, y, visits, first}
+  for (const t of tracks) {
+    const seen = new Set();
+    let prev = null;
+    for (const [lon, lat] of t.coords) {
+      const [x, y] = tileOf(lat, lon, z);
+      const add = (tx, ty) => {
+        const k = tileKey(tx, ty);
+        if (seen.has(k)) return;
+        seen.add(k);
+        const cur = tiles.get(k);
+        if (cur) { cur.visits += 1; if (t.day < cur.first) cur.first = t.day; }
+        else tiles.set(k, { x: tx, y: ty, visits: 1, first: t.day });
+      };
+      add(x, y);
+      if (prev) {
+        const steps = Math.max(Math.abs(x - prev[2]), Math.abs(y - prev[3]));
+        if (steps > 1) {
+          const k = steps * 4;
+          for (let i = 1; i < k; i++) {
+            const f = i / k;
+            const [ix, iy] = tileOf(prev[1] + (lat - prev[1]) * f, prev[0] + (lon - prev[0]) * f, z);
+            add(ix, iy);
+          }
+        }
+      }
+      prev = [lon, lat, x, y];
+    }
+  }
+  return tiles;
+}
+
+function maxSquare(tiles) {
+  const dp = new Map();
+  let best = { size: 0, x: 0, y: 0 };
+  const list = [...tiles.values()].sort((a, b) => a.y - b.y || a.x - b.x);
+  for (const { x, y } of list) {
+    const size = 1 + Math.min(dp.get(tileKey(x - 1, y)) || 0, dp.get(tileKey(x, y - 1)) || 0, dp.get(tileKey(x - 1, y - 1)) || 0);
+    dp.set(tileKey(x, y), size);
+    if (size > best.size) best = { size, x: x - size + 1, y: y - size + 1 };
+  }
+  return best;
+}
+
+function clusterOf(tiles) {
+  const has = (x, y) => tiles.has(tileKey(x, y));
+  const inner = new Map();
+  for (const t of tiles.values()) {
+    if (has(t.x - 1, t.y) && has(t.x + 1, t.y) && has(t.x, t.y - 1) && has(t.x, t.y + 1)) inner.set(tileKey(t.x, t.y), t);
+  }
+  let best = [];
+  const seen = new Set();
+  for (const [k, start] of inner) {
+    if (seen.has(k)) continue;
+    const group = [start]; seen.add(k);
+    for (let i = 0; i < group.length; i++) {
+      const { x, y } = group[i];
+      for (const [nx, ny] of [[x - 1, y], [x + 1, y], [x, y - 1], [x, y + 1]]) {
+        const nk = tileKey(nx, ny);
+        if (inner.has(nk) && !seen.has(nk)) { seen.add(nk); group.push(inner.get(nk)); }
+      }
+    }
+    if (group.length > best.length) best = group;
+  }
+  return best;
+}
+
+const tileFeature = (t, z, props = {}) => {
+  const [w, s, e, n] = tileBounds(t.x, t.y, z);
+  return { type: "Feature", properties: props, geometry: { type: "Polygon", coordinates: [[[w, s], [e, s], [e, n], [w, n], [w, s]]] } };
 };
+const tileWidthKm = (z, lat) => (40075 * Math.cos((lat * Math.PI) / 180)) / 2 ** z;
 
-// ---- Heatmap ------------------------------------------------------------------------
+// ---- Heatmap page -------------------------------------------------------------------
 
-const LAYERS = [["routes", "Routes"], ["tiles", "Explorer tiles"], ["cluster", "Cluster"], ["square", "Max square"]];
+let heat = null; // page state: { settings, tracks, tiles cache, map, params }
 
 async function renderHeatmap(params) {
   const isAll = CURRENT === "all";
@@ -523,81 +655,21 @@ async function renderHeatmap(params) {
   if (!isAll) q.person = CURRENT;
   if (params.type) q.type = params.type;
   if (params.year) q.year = params.year;
-  const qs = new URLSearchParams(q);
-  const [tracks, tiles] = await Promise.all([api("heatmap/tracks?" + qs), api("heatmap/tiles?" + qs)]);
-  let shown;
-  try { shown = JSON.parse(store.get("map-layers") || "null"); } catch (e) { shown = null; }
-  shown ??= { routes: true, tiles: true, cluster: true, square: true };
-  const sq = tiles.max_square;
-  const go = (changes) => {
-    const p = Object.fromEntries(Object.entries({ ...params, ...changes }).filter(([, v]) => v));
-    location.hash = "#/heatmap?" + new URLSearchParams(p);
-  };
-  view.innerHTML = `
-    <div class="page-head"><h2>Heatmap</h2>
-      <select id="h-type"><option value="">All types</option>${typeOptions().map((g) =>
-        `<optgroup label="${esc(g.group)}">${g.options.map(([v, l]) => `<option value="${esc(v)}" ${v === params.type ? "selected" : ""}>${esc(l)}</option>`).join("")}</optgroup>`).join("")}</select>
-      <select id="h-year"><option value="">All years</option>${tracks.years.map((y) => `<option ${y === params.year ? "selected" : ""}>${y}</option>`).join("")}</select>
-    </div>
-    <div class="kpis">
-      ${kpi("Activities on the map", num(tracks.items.length))}
-      ${kpi("Explorer tiles", `${num(tiles.count)} tiles`)}
-      ${kpi("Max square", sq.size ? `${sq.size} × ${sq.size} tiles` : "–")}
-      ${kpi("Cluster", `${num(tiles.cluster.size)} tiles`)}
-    </div>
-    <div class="card map-card">
-      <div class="card-row map-tools">
-        ${LAYERS.map(([k, l]) => `<label class="pill"><input type="checkbox" data-layer="${k}" ${shown[k] ? "checked" : ""}> ${l}</label>`).join("")}
-        <span class="spacer"></span>
-        ${tiles.pending_activities ? state(`Tiles not computed yet for ${num(tiles.pending_activities)} activities — they appear after the next folder scan`, "warn") : ""}
-      </div>
-      <div id="map" class="map big"></div>
-      ${hint(`Explorer tiles are squares of the zoom-${tiles.zoom} map grid touched by a route. The cluster is the largest group of tiles surrounded on all four sides by visited tiles; the max square is the largest square of visited tiles. Routes are drawn semi-transparent, so often used ways look brighter.`)}
+  const [data] = await Promise.all([api("heatmap/tracks?" + new URLSearchParams(q)), (async () => { BASEMAPS ??= await api("basemaps"); })()]);
+  const tracks = data.items.map((t) => ({ ...t, coords: lonLat(t.polyline) }));
+  heat = { settings: loadMapSettings(), tracks, years: data.years, tileCache: new Map(), params, isAll, map: null };
+
+  document.body.classList.add("fullmap");
+  document.documentElement.style.setProperty("--header-h", document.querySelector("header").offsetHeight + "px");
+  view.innerHTML = `<div class="heat-wrap">
+      <div id="heat-bar" class="badge-bar"></div>
+      <div class="heat-map-wrap"><div id="map" class="heat-map"></div><div id="heat-kpis" class="map-kpis"></div></div>
     </div>`;
-  document.getElementById("h-type").onchange = (e) => go({ type: e.target.value });
-  document.getElementById("h-year").onchange = (e) => go({ year: e.target.value });
-
-  const map = await createMap("map");
-  const z = tiles.zoom;
-  const accent = getComputedStyle(document.documentElement).getPropertyValue("--accent").trim();
-  const routes = tracks.items.map((t) => ({
-    type: "Feature",
-    properties: { id: t.id, day: t.day, type: typeLabel(t.activity_type), person: personLabel(t.person_id),
-                  color: isAll ? personColor(person(t.person_id), Math.max(0, realPeople().findIndex((p) => p.id === t.person_id))) : accent },
-    geometry: { type: "LineString", coordinates: lonLat(t.polyline) },
-  }));
-  map.addSource("tiles", { type: "geojson", data: { type: "FeatureCollection",
-    features: tiles.tiles.map(([x, y, first, visits]) => tilePolygon(x, y, z, { first, visits })) } });
-  map.addSource("cluster", { type: "geojson", data: { type: "FeatureCollection",
-    features: tiles.cluster.tiles.map(([x, y]) => tilePolygon(x, y, z)) } });
-  map.addSource("square", { type: "geojson", data: sq.size
-    ? { type: "Feature", properties: {}, geometry: { type: "Polygon", coordinates: [(() => {
-        const [w, , , n] = tileBounds(sq.x, sq.y, z), [, s, e] = tileBounds(sq.x + sq.size - 1, sq.y + sq.size - 1, z);
-        return [[w, s], [e, s], [e, n], [w, n], [w, s]]; })()] } }
-    : { type: "FeatureCollection", features: [] } });
-  map.addSource("routes", { type: "geojson", data: { type: "FeatureCollection", features: routes } });
-
-  map.addLayer({ id: "tiles", type: "fill", source: "tiles", paint: { "fill-color": "#3ecf8e", "fill-opacity": 0.14 } });
-  map.addLayer({ id: "tiles-line", type: "line", source: "tiles", paint: { "line-color": "#3ecf8e", "line-opacity": 0.35, "line-width": 0.6 } });
-  map.addLayer({ id: "cluster", type: "fill", source: "cluster", paint: { "fill-color": "#a678ff", "fill-opacity": 0.3 } });
-  map.addLayer({ id: "square", type: "line", source: "square", paint: { "line-color": "#f0b429", "line-width": 2.5 } });
-  map.addLayer({ id: "routes", type: "line", source: "routes",
-    layout: { "line-join": "round", "line-cap": "round" },
-    paint: { "line-color": ["get", "color"], "line-opacity": 0.45,
-             "line-width": ["interpolate", ["linear"], ["zoom"], 8, 1, 13, 2, 16, 4] } });
-
-  const visibility = () => {
-    const set = (id, on) => map.getLayer(id) && map.setLayoutProperty(id, "visibility", on ? "visible" : "none");
-    set("routes", shown.routes); set("tiles", shown.tiles); set("tiles-line", shown.tiles);
-    set("cluster", shown.cluster); set("square", shown.square);
-  };
-  visibility();
-  view.querySelectorAll("[data-layer]").forEach((cb) => cb.onchange = () => {
-    shown[cb.dataset.layer] = cb.checked;
-    store.set("map-layers", JSON.stringify(shown));
-    visibility();
-  });
-
+  renderHeatBar();
+  const map = await createMap("map", heat.settings.map);
+  heat.map = map;
+  drawHeatLayers();
+  if (tracks.length) fitTo(map, tracks.map((t) => t.coords));
   map.on("click", "routes", (e) => {
     const items = [...new Map(e.features.map((f) => [f.properties.id, f.properties])).values()].slice(0, 6);
     new maplibregl.Popup({ closeButton: false, maxWidth: "260px" }).setLngLat(e.lngLat)
@@ -606,13 +678,280 @@ async function renderHeatmap(params) {
   });
   map.on("mouseenter", "routes", () => { map.getCanvas().style.cursor = "pointer"; });
   map.on("mouseleave", "routes", () => { map.getCanvas().style.cursor = ""; });
+  // Tile sizes in km depend on latitude: refresh the bar after moving, unless a panel is open.
+  map.on("moveend", () => { if (!document.getElementById("heat-bar")?.dataset.open) renderHeatBar(); });
+}
 
-  if (routes.length) fitTo(map, routes.map((r) => r.geometry.coordinates));
-  else if (tiles.tiles.length) fitTo(map, tiles.tiles.map(([x, y]) => { const [w, s, e, n] = tileBounds(x, y, z); return [[w, s], [e, n]]; }));
+function heatTiles() {
+  const z = heat.settings.tiles.zoom;
+  if (!heat.tileCache.has(z)) {
+    const tiles = computeTiles(heat.tracks, z);
+    heat.tileCache.set(z, { tiles, square: maxSquare(tiles), cluster: clusterOf(tiles) });
+  }
+  return heat.tileCache.get(z);
+}
+
+// A badge: button with a label and current value; clicking opens its panel.
+function badge(id, label, value, panel, { primary = false, active = false } = {}) {
+  return `<div class="badge-wrap">
+    <button class="badge ${primary ? "primary-badge" : ""} ${active ? "on" : ""}" data-badge="${id}">
+      <span class="badge-label">${label}</span>${value ? `<span class="badge-value">${value}</span>` : ""}${panel ? ICON.chevron : ""}
+    </button>
+    ${panel ? `<div class="badge-panel" data-panel="${id}" hidden>${panel}</div>` : ""}
+  </div>`;
+}
+const radio = (group, value, current, label, sub = "") =>
+  `<label class="opt"><input type="radio" name="${group}" value="${value}" ${String(value) === String(current) ? "checked" : ""}>
+     <span>${label}${sub ? `<span class="hint">${sub}</span>` : ""}</span></label>`;
+const swatches = (group, current) => `<div class="swatch-row">${LINE_COLORS.map(([k, c]) =>
+  `<button class="swatch ${k === current ? "active" : ""}" style="background:${c}" data-set="${group}" data-value="${k}" title="${k}"></button>`).join("")}</div>`;
+const ramps = (group, current) => `<div class="ramp-list">${Object.entries(RAMPS).map(([k, cols]) =>
+  `<button class="ramp ${k === current ? "active" : ""}" data-set="${group}" data-value="${k}" title="${k}" style="background:linear-gradient(90deg,${cols.join(",")})"></button>`).join("")}</div>`;
+const check = (group, on, label, sub = "") =>
+  `<label class="opt"><input type="checkbox" data-check="${group}" ${on ? "checked" : ""}><span>${label}${sub ? `<span class="hint">${sub}</span>` : ""}</span></label>`;
+
+function renderHeatBar() {
+  const s = heat.settings, H = s.heatmap, T = s.tiles;
+  const src = (BASEMAPS || []).find((b) => b.key === s.map.source);
+  const toneLabel = (BASE_TONES.find(([k]) => k === s.map.tone) || BASE_TONES[0])[1];
+  const lat = heat.map ? heat.map.getCenter().lat : 52;
+
+  const mapPanel = `<div class="panel-title">Base map</div>
+      ${(BASEMAPS || []).map((b) => radio("map.source", b.key, s.map.source, b.label)).join("")}
+      ${radio("map.source", "none", s.map.source, "No base map", "only your data on a plain background")}
+      <div class="panel-title">Colours of the base map</div>
+      ${BASE_TONES.map(([k, l]) => radio("map.tone", k, s.map.tone, l)).join("")}
+      <div class="hint">Labels are part of these map images and cannot be switched off separately.</div>`;
+
+  const layerSwitch = `<div class="seg-badge">
+      <button class="badge primary-badge ${s.layer === "heatmap" ? "on" : ""}" data-layer-set="heatmap">Heatmap</button>
+      <button class="badge primary-badge ${s.layer === "tiles" ? "on" : ""}" data-layer-set="tiles">Explorer tiles</button>
+    </div>`;
+
+  let sub = "";
+  if (s.layer === "heatmap") {
+    const styleLabel = { density: "Density", coverage: "Coverage", glow: "Heat glow" }[H.style];
+    sub += badge("h-style", "Style", styleLabel, `<div class="panel-title">How routes are drawn</div>
+        ${radio("heatmap.style", "density", H.style, "Density", "semi-transparent lines — where routes overlap the colour gets stronger")}
+        ${radio("heatmap.style", "coverage", H.style, "Coverage", "solid lines — shows only where you have been")}
+        ${radio("heatmap.style", "glow", H.style, "Heat glow", "classic heat map: a colour gradient from rarely to often visited")}`);
+    sub += badge("h-colors", "Colours", "", H.style === "glow"
+      ? `<div class="panel-title">Colour gradient</div>${ramps("heatmap.ramp", H.ramp)}`
+      : `<div class="panel-title">Line colour</div>${swatches("heatmap.color", H.color)}
+         ${heat.isAll ? check("heatmap.perPerson", H.perPerson, "A colour per person", "uses each person's colour from Settings › People; people are drawn in their configured order") : ""}`);
+    sub += badge("h-weight", "Weight", "", `<div class="panel-title">Line width</div>
+        <input type="range" min="1" max="6" step="0.5" value="${H.width}" data-range="heatmap.width">
+        ${H.style !== "coverage" ? `<div class="panel-title">Overlap strength</div><input type="range" min="0.1" max="0.9" step="0.05" value="${H.intensity}" data-range="heatmap.intensity"><div class="hint">Lower = more contrast between rarely and often used routes.</div>` : ""}`);
+  } else {
+    const size = TILE_SIZES.find(([z]) => z === T.zoom) || TILE_SIZES[0];
+    sub += badge("t-size", "Tile size", size[1], `<div class="panel-title">Tile size</div>
+        ${TILE_SIZES.map(([z, l, d]) => radio("tiles.zoom", z, T.zoom, `${l} · ~${num(tileWidthKm(z, lat), z >= 16 ? 2 : 1)} km`, d)).join("")}
+        <div class="hint">Size shown for the centre of the map; tiles get smaller towards the poles.</div>`);
+    sub += badge("t-style", "Style", T.style === "heat" ? "By visits" : "Coverage", `<div class="panel-title">Tile colouring</div>
+        ${radio("tiles.style", "coverage", T.style, "Coverage", "every visited tile looks the same")}
+        ${radio("tiles.style", "heat", T.style, "By number of visits", "tiles you visit often are stronger")}`);
+    sub += badge("t-colors", "Colours", "", T.style === "heat"
+      ? `<div class="panel-title">Colour gradient</div>${ramps("tiles.ramp", T.ramp)}`
+      : `<div class="panel-title">Tile colour</div>${swatches("tiles.color", T.color)}`);
+    sub += badge("t-display", "Display", T.display === "area" ? "Area" : "Grid", `<div class="panel-title">Show tiles as</div>
+        ${radio("tiles.display", "grid", T.display, "Single tiles", "every tile with its own outline")}
+        ${radio("tiles.display", "area", T.display, "One area", "no inner lines — visited land as one shape")}`);
+    sub += badge("t-extras", "Highlights", "", `<div class="panel-title">Highlight</div>
+        ${check("tiles.square", T.square, "Max square", "the largest square made only of visited tiles")}
+        ${check("tiles.cluster", T.cluster, "Cluster", "the largest connected group of tiles that have visited tiles on all four sides — i.e. fully explored area")}
+        ${check("tiles.routes", T.routes, "Routes under tiles", "thin lines of your routes")}`);
+  }
+
+  const typeSel = `<select data-filter-set="type"><option value="">All types</option>${typeOptions().map((g) =>
+      `<optgroup label="${esc(g.group)}">${g.options.map(([v, l]) => `<option value="${esc(v)}" ${v === heat.params.type ? "selected" : ""}>${esc(l)}</option>`).join("")}</optgroup>`).join("")}</select>`;
+  const yearSel = `<select data-filter-set="year"><option value="">All years</option>${heat.years.map((y) =>
+      `<option ${y === heat.params.year ? "selected" : ""}>${y}</option>`).join("")}</select>`;
+  const pt = heat.params.type || "";
+  const filterValue = [pt.startsWith("g:") ? groupLabel(pt.slice(2)) : pt ? typeLabel(pt) : "", heat.params.year || ""]
+    .filter(Boolean).join(" · ");
+
+  const bar = document.getElementById("heat-bar");
+  bar.innerHTML = `
+    ${badge("map", "Map", `${src ? src.label.split(" (")[0] : "None"} · ${toneLabel}`, mapPanel, { primary: true })}
+    ${layerSwitch}
+    <span class="badge-sep"></span>
+    ${sub}
+    <span class="badge-sep"></span>
+    ${badge("filter", "Filter", filterValue || "All activities", `<div class="panel-title">Activity type</div>${typeSel}<div class="panel-title">Year</div>${yearSel}`)}
+    <span class="spacer"></span>
+    <button class="badge ${s.kpis ? "on" : ""}" data-toggle-kpis>KPIs</button>`;
+  bindHeatBar(bar);
+  renderHeatKpis();
+}
+
+function bindHeatBar(bar) {
+  const s = heat.settings;
+  const setPath = (path, value) => {
+    const [a, b] = path.split(".");
+    s[a][b] = value;
+    saveMapSettings(s);
+    if (a === "map") {
+      heat.map.setStyle(baseStyle(s.map));
+      heat.map.once("styledata", () => drawHeatLayers());
+    } else drawHeatLayers();
+    renderHeatBar();
+    const panelId = bar.dataset.open;
+    if (panelId) openPanel(panelId);
+  };
+  const openPanel = (id) => {
+    document.querySelectorAll(".badge-panel").forEach((p) => { p.hidden = p.dataset.panel !== id; });
+    document.getElementById("heat-bar").dataset.open = id;
+  };
+  bar.querySelectorAll("[data-badge]").forEach((b) => b.onclick = (e) => {
+    e.stopPropagation();
+    const panel = bar.querySelector(`[data-panel="${b.dataset.badge}"]`);
+    if (!panel) return;
+    const willOpen = panel.hidden;
+    document.querySelectorAll(".badge-panel").forEach((p) => { p.hidden = true; });
+    panel.hidden = !willOpen;
+    bar.dataset.open = willOpen ? b.dataset.badge : "";
+  });
+  bar.querySelectorAll(".badge-panel").forEach((p) => p.onclick = (e) => e.stopPropagation());
+  document.onclick = () => { document.querySelectorAll(".badge-panel").forEach((p) => { p.hidden = true; }); bar.dataset.open = ""; };
+  bar.querySelectorAll("input[type=radio]").forEach((r) => r.onchange = () => {
+    const v = r.name === "tiles.zoom" ? Number(r.value) : r.value;
+    setPath(r.name, v);
+  });
+  bar.querySelectorAll("[data-set]").forEach((b) => b.onclick = (e) => { e.stopPropagation(); setPath(b.dataset.set, b.dataset.value); });
+  bar.querySelectorAll("[data-check]").forEach((c) => c.onchange = () => setPath(c.dataset.check, c.checked));
+  bar.querySelectorAll("[data-range]").forEach((r) => r.oninput = () => setPath(r.dataset.range, Number(r.value)));
+  bar.querySelectorAll("[data-layer-set]").forEach((b) => b.onclick = () => {
+    s.layer = b.dataset.layerSet; saveMapSettings(s); drawHeatLayers(); renderHeatBar();
+  });
+  bar.querySelector("[data-toggle-kpis]").onclick = () => { s.kpis = !s.kpis; saveMapSettings(s); renderHeatBar(); };
+  bar.querySelectorAll("[data-filter-set]").forEach((sel) => sel.onchange = () => {
+    const p = Object.fromEntries(Object.entries({ ...heat.params, [sel.dataset.filterSet]: sel.value }).filter(([, v]) => v));
+    location.hash = "#/heatmap?" + new URLSearchParams(p);
+  });
+}
+
+function renderHeatKpis() {
+  const el = document.getElementById("heat-kpis");
+  if (!heat.settings.kpis) { el.hidden = true; return; }
+  el.hidden = false;
+  const t = heat.tracks;
+  const sum = (k) => t.reduce((a, x) => a + (x[k] || 0), 0);
+  let html = `${kpi("Activities", num(t.length))}${kpi("Distance", km(sum("distance_m")))}${kpi("Moving time", hours(sum("moving_s")))}`;
+  if (heat.settings.layer === "tiles") {
+    const { tiles, square, cluster } = heatTiles();
+    html += `${kpi("Tiles", num(tiles.size))}${kpi("Max square", square.size ? `${square.size} × ${square.size}` : "–")}${kpi("Cluster", `${num(cluster.length)} tiles`)}`;
+  } else {
+    html += kpi("Ascent", meters(sum("ascent_m")));
+  }
+  el.innerHTML = html;
+}
+
+// Evenly spaced points along all routes (for the heat-glow layer). Spacing ~30 m, larger
+// when there is a lot of data, so the browser never gets more than ~1.5 million points.
+function densify(tracks) {
+  const segLen = ([lon1, lat1], [lon2, lat2]) => {
+    const k = Math.cos(((lat1 + lat2) / 2) * Math.PI / 180);
+    return Math.hypot((lon2 - lon1) * k, lat2 - lat1) * 111320;
+  };
+  let total = 0;
+  for (const t of tracks) for (let i = 1; i < t.coords.length; i++) total += segLen(t.coords[i - 1], t.coords[i]);
+  const step = Math.max(30, total / 1.5e6);
+  const out = [];
+  for (const t of tracks) {
+    let carry = 0;
+    for (let i = 1; i < t.coords.length; i++) {
+      const a = t.coords[i - 1], b = t.coords[i], len = segLen(a, b);
+      let d = step - carry;
+      while (d <= len) {
+        const f = d / len;
+        out.push([a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f]);
+        d += step;
+      }
+      carry = len - (d - step);
+    }
+  }
+  return out;
+}
+
+const HEAT_LAYERS = ["routes", "routes-glow", "tiles-fill", "tiles-line", "cluster", "square"];
+
+function drawHeatLayers() {
+  const map = heat.map, s = heat.settings;
+  if (!map) return;
+  for (const id of HEAT_LAYERS) if (map.getLayer(id)) map.removeLayer(id);
+  for (const id of ["routes", "route-points", "tiles", "cluster", "square"]) if (map.getSource(id)) map.removeSource(id);
+  const people = realPeople();
+  const colorFor = (pid) => personColor(person(pid), Math.max(0, people.findIndex((p) => p.id === pid)));
+
+  // Routes (used by heatmap and as an optional layer under tiles). People later in the
+  // order are drawn first, so the first person ends up on top.
+  const order = (pid) => people.findIndex((p) => p.id === pid);
+  const routes = [...heat.tracks].sort((a, b) => order(b.person_id) - order(a.person_id)).map((t) => ({
+    type: "Feature",
+    properties: { id: t.id, day: t.day, type: typeLabel(t.activity_type), person: personLabel(t.person_id),
+                  color: heat.isAll && s.heatmap.perPerson ? colorFor(t.person_id) : colorHex(s.heatmap.color) },
+    geometry: { type: "LineString", coordinates: t.coords },
+  }));
+  map.addSource("routes", { type: "geojson", data: { type: "FeatureCollection", features: routes } });
+
+  if (s.layer === "heatmap") {
+    const H = s.heatmap;
+    if (H.style === "glow") {
+      const pts = densify(heat.tracks).map((c) => ({ type: "Feature", properties: {}, geometry: { type: "Point", coordinates: c } }));
+      map.addSource("route-points", { type: "geojson", data: { type: "FeatureCollection", features: pts } });
+      const r = RAMPS[H.ramp] || RAMPS.fire;
+      map.addLayer({ id: "routes-glow", type: "heatmap", source: "route-points", paint: {
+        "heatmap-radius": ["interpolate", ["linear"], ["zoom"], 6, 2 * H.width, 12, 6 * H.width, 16, 14 * H.width],
+        "heatmap-weight": 0.15 * H.intensity,
+        "heatmap-intensity": ["interpolate", ["linear"], ["zoom"], 6, 0.5, 14, 1],
+        "heatmap-opacity": 0.9,
+        "heatmap-color": ["interpolate", ["linear"], ["heatmap-density"], 0, "rgba(0,0,0,0)", 0.08, r[0], 0.3, r[1], 0.55, r[2], 0.8, r[3], 1, r[4]],
+      } });
+      // Invisible lines keep routes clickable.
+      map.addLayer({ id: "routes", type: "line", source: "routes", paint: { "line-opacity": 0, "line-width": 8 } });
+    } else {
+      map.addLayer({ id: "routes", type: "line", source: "routes", layout: { "line-join": "round", "line-cap": "round" }, paint: {
+        "line-color": ["get", "color"],
+        "line-opacity": H.style === "coverage" ? 1 : H.intensity,
+        "line-width": ["interpolate", ["linear"], ["zoom"], 8, H.width * 0.5, 13, H.width, 16, H.width * 2],
+      } });
+    }
+  } else {
+    const T = s.tiles, z = T.zoom;
+    const { tiles, square, cluster } = heatTiles();
+    if (T.routes) {
+      map.addLayer({ id: "routes", type: "line", source: "routes", paint: {
+        "line-color": "#ffffff", "line-opacity": 0.35, "line-width": ["interpolate", ["linear"], ["zoom"], 8, 0.5, 14, 1.2] } });
+    }
+    const max = Math.max(1, ...[...tiles.values()].map((t) => t.visits));
+    map.addSource("tiles", { type: "geojson", data: { type: "FeatureCollection",
+      features: [...tiles.values()].map((t) => tileFeature(t, z, { v: t.visits, f: Math.log(t.visits) / Math.log(max + 1) })) } });
+    const ramp = RAMPS[T.ramp] || RAMPS.viridis;
+    const fillColor = T.style === "heat"
+      ? ["interpolate", ["linear"], ["get", "f"], 0, ramp[0], 0.25, ramp[1], 0.5, ramp[2], 0.75, ramp[3], 1, ramp[4]]
+      : colorHex(T.color);
+    map.addLayer({ id: "tiles-fill", type: "fill", source: "tiles", paint: {
+      "fill-color": fillColor, "fill-opacity": T.style === "heat" ? 0.55 : 0.32, "fill-antialias": T.display === "grid" } });
+    if (T.display === "grid") {
+      map.addLayer({ id: "tiles-line", type: "line", source: "tiles", paint: {
+        "line-color": T.style === "heat" ? "#ffffff" : colorHex(T.color), "line-opacity": 0.35, "line-width": 0.6 } });
+    }
+    if (T.cluster && cluster.length) {
+      map.addSource("cluster", { type: "geojson", data: { type: "FeatureCollection", features: cluster.map((t) => tileFeature(t, z)) } });
+      map.addLayer({ id: "cluster", type: "fill", source: "cluster", paint: { "fill-color": "#a678ff", "fill-opacity": 0.35 } });
+    }
+    if (T.square && square.size) {
+      const [w, , , n] = tileBounds(square.x, square.y, z);
+      const [, sth, e] = tileBounds(square.x + square.size - 1, square.y + square.size - 1, z);
+      map.addSource("square", { type: "geojson", data: { type: "Feature", properties: {}, geometry: { type: "Polygon", coordinates: [[[w, sth], [e, sth], [e, n], [w, n], [w, sth]]] } } });
+      map.addLayer({ id: "square", type: "line", source: "square", paint: { "line-color": "#ffd23f", "line-width": 3 } });
+    }
+  }
+  renderHeatKpis();
 }
 
 async function showRouteMap(container, polyline) {
-  const map = await createMap(container, { interactive: true });
+  const map = await createMap(container, loadMapSettings().map, { interactive: true });
   const coords = lonLat(polyline);
   const accent = getComputedStyle(document.documentElement).getPropertyValue("--accent").trim();
   map.addSource("route", { type: "geojson", data: { type: "Feature", properties: {}, geometry: { type: "LineString", coordinates: coords } } });
@@ -960,6 +1299,7 @@ function settingsTypes(el, params) {
 async function route() {
   clearTimeout(timer);
   disposeMap();
+  document.body.classList.remove("fullmap");
   const [path, query] = (location.hash.slice(1) || "/activities").split("?");
   const params = Object.fromEntries(new URLSearchParams(query || ""));
   const parts = path.split("/").filter(Boolean);
