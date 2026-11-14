@@ -966,8 +966,11 @@ const colorPicker = (name, current) => `<div class="swatch-row small">${COLOR_PR
     `<button class="swatch ${c.toLowerCase() === String(current).toLowerCase() ? "active" : ""}" style="background:${c}" data-color="${name}" data-value="${c}" aria-label="${c}"></button>`).join("")}
     <label class="swatch custom" title="Any colour"><input type="color" name="${name}" value="${esc(current)}"></label></div>`;
 const RAMP_LABELS = { fire: "Fire", ice: "Ice", viridis: "Viridis", magma: "Magma" };
-const rampPicker = (name, current) => `<div class="ramp-select"><span class="ramp-preview" data-ramp-preview="${name}" style="background:linear-gradient(90deg,${(RAMPS[current] || RAMPS.fire).join(",")})"></span>
-    ${selectCtl(name, Object.keys(RAMPS).map((k) => [k, RAMP_LABELS[k]]), current)}</div>`;
+// All options visible, one chosen (radio-like list); `extra(value)` adds e.g. a gradient bar.
+const pickList = (name, options, current, extra = () => "") => `<div class="pick-list" role="radiogroup">${options.map(([v, l]) =>
+  `<button type="button" role="radio" aria-checked="${String(v) === String(current)}" class="pick-item ${String(v) === String(current) ? "on" : ""}" data-pick="${name}" data-value="${esc(v)}"><span class="pick-dot"></span><span class="pick-label">${esc(l)}</span>${extra(v)}</button>`).join("")}</div>`;
+const rampPicker = (name, current) => pickList(name, Object.keys(RAMPS).map((k) => [k, RAMP_LABELS[k] || k]), current,
+  (k) => `<span class="pick-ramp" style="background:linear-gradient(90deg,${RAMPS[k].join(",")})"></span>`);
 const section = (title, body) => `<div class="panel-section"><div class="panel-title">${title}</div>${body}</div>`;
 
 // ---- Heatmap page -------------------------------------------------------------------
@@ -1054,8 +1057,8 @@ function renderSettingsPanel() {
   const toneLabel = (BASE_TONES.find(([k]) => k === M.tone) || BASE_TONES[0])[1];
   const sizeLabel = (TILE_SIZES.find(([z]) => z === T.zoom) || TILE_SIZES[1])[1];
   const styleLabel = { density: "Density", coverage: "Coverage", glow: "Heat glow" }[H.style];
-  const mapBody = row("Base map", selectCtl("map.source", [...(BASEMAPS || []).map((b) => [b.key, b.label]), ["none", "None"]], M.source))
-    + row("Colours", selectCtl("map.tone", BASE_TONES.map(([k, l]) => [k, l]), M.tone));
+  const mapBody = row("Base map", pickList("map.source", [...(BASEMAPS || []).map((b) => [b.key, b.label]), ["none", "None"]], M.source))
+    + row("Colours", pickList("map.tone", BASE_TONES.map(([k, l]) => [k, l]), M.tone));
   const heatBody = row("Style", selectCtl("heatmap.style", [["density", "Density — overlaps get stronger"], ["coverage", "Coverage — solid lines"], ["glow", "Heat glow — colour gradient"]], H.style))
     + row("Line colour", colorPicker("heatmap.color", H.color))
     + (heat.isAll ? row("People", checkCtl("heatmap.perPerson", H.perPerson, "A colour per person")) : "")
@@ -1101,10 +1104,19 @@ function bindSettingsPanel(el) {
   el.querySelectorAll("select").forEach((sel) => sel.onchange = () => {
     const value = sel.name === "tiles.zoom" ? Number(sel.value) : sel.value;
     set(sel.name, value);
-    const paint = sel.name.endsWith(".ramp");
-    refresh(sel.name, paint ? "paint" : "layers");
-    if (paint) el.querySelector(`[data-ramp-preview="${sel.name}"]`).style.background = `linear-gradient(90deg,${RAMPS[value].join(",")})`;
-    else summary();
+    refresh(sel.name, "layers");
+    summary();
+  });
+  el.querySelectorAll("[data-pick]").forEach((b) => b.onclick = () => {
+    const name = b.dataset.pick;
+    set(name, b.dataset.value);
+    el.querySelectorAll(`[data-pick="${name}"]`).forEach((x) => {
+      x.classList.toggle("on", x === b);
+      x.setAttribute("aria-checked", String(x === b));
+    });
+    const paint = name.endsWith(".ramp");
+    refresh(name, paint ? "paint" : "layers");
+    if (!paint) summary(); // the section header shows the chosen base map / colours
   });
   el.querySelectorAll("[data-chip]").forEach((b) => b.onclick = () => {
     set(b.dataset.chip, b.dataset.value);
