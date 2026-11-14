@@ -619,6 +619,7 @@ async function renderActivity(id) {
       ${stat("Calories", kcal(a.calories))}
     </div></div>
     ${track ? `<div class="card"><h3>Route</h3><div id="route-map" class="map"></div>${hint(`${num(track.points)} route points (simplified to 5 m). Green: start, red: finish.`)}</div>` : ""}
+    ${activityTrainingHtml(a)}
     <div class="card"><h3>Streams</h3>${hint(a.channels.join(", ") || "No streams")}<br>${charts}</div>
     ${a.laps.length ? `<div class="card"><h3>Laps</h3>${hint(`${a.laps.length} laps`)}<div class="scroll"><table class="data">
       <thead><tr><th>#</th><th class="num">Distance</th><th class="num">Time</th><th class="num">Pace</th>
@@ -1285,18 +1286,6 @@ const PLANNED = {
     "Data from the Garmin Connect personal API (sleep, HRV, stress, resting heart rate, steps, weight).",
     "Some daily values (resting heart rate, steps) will also appear in the Calendar.",
   ]],
-  calendar: ["Calendar", "Stage 4", [
-    "Month and year view with every activity on its day, coloured by type.",
-    "Weekly totals (distance, time, load) at the end of each week.",
-  ]],
-  fitness: ["Fitness", "Stage 4", [
-    "Training load per activity, fitness (CTL), fatigue (ATL) and form (TSB) over time.",
-    "Uses the thresholds set for the person (HR max, threshold HR, FTP, threshold pace).",
-  ]],
-  stats: ["Statistics", "Stage 4", [
-    "Totals per week, month and year by activity type; year-over-year comparison.",
-    "Power, pace and heart-rate duration curves and personal records.",
-  ]],
 };
 
 function renderPlanned(key) {
@@ -1689,6 +1678,8 @@ async function settingsPeople(el) {
       msg("Person added");
     } catch (e) { msg(e.message, "bad"); }
   };
+  el.insertAdjacentHTML("beforeend", `<div data-thresholds></div>`);
+  await renderThresholds(el.querySelector("[data-thresholds]"));
 }
 
 const FILE_PAGE = 100;
@@ -1866,6 +1857,9 @@ async function route() {
     else if (section === "settings") await renderSettings(parts[1], params);
     else if (section === "compare") await renderCompare(params);
     else if (section === "heatmap") await renderHeatmap(params);
+    else if (section === "calendar") await renderCalendar(params);
+    else if (section === "fitness") await renderFitness(params);
+    else if (section === "stats") await renderStats(params);
     else if (PLANNED[section]) renderPlanned(section);
     else await renderActivities(params);
   } catch (e) {
@@ -1875,4 +1869,6 @@ async function route() {
 
 applyAccent();
 window.addEventListener("hashchange", route);
-route();
+// Pages in training.js are loaded after this file; start once every script is in.
+if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", route);
+else route();

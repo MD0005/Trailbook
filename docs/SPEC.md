@@ -295,24 +295,39 @@ activities from files still on disk.
 `hr_max`, `hr_rest`, `lthr` (lactate threshold HR), `ftp` (W), `threshold_pace` (s/km),
 `swim_css` (s/100 m), `weight` (kg). All optional.
 
+Set in Settings › People › *Training thresholds* as rows with a *valid from* date; each
+field comes from the latest row that sets it, so older activities keep older values. Empty
+fields are estimated: HR max = highest plausible max HR recorded (100–230 bpm), resting HR
+= 60 bpm, threshold HR = 90 % of HR max. Saving or deleting a row recomputes the load of
+that person's activities in the background.
+
 ### 7.3 Training load
-Chosen per activity, first available:
-1. Power-based TSS (power data + FTP).
-2. Pace-based load for running (pace + threshold pace).
-3. HR-based TRIMP/hrTSS (HR + LTHR or HR max/rest).
+Computed after import by `analysis.py` from the stored streams (phase `analysis` of the
+importer process; `activities.analysis_version` marks what is done, 0 = to do — set on
+(re)import, type change and threshold change). Chosen per activity, first available:
+1. Power TSS: NP (4th-power mean of the 30 s rolling power) + FTP,
+   TSS = h × IF² × 100 with IF = NP / FTP.
+2. Running pace (rTSS): runs with threshold pace, IF = avg speed / threshold speed.
+3. hrTSS: Banister TRIMP per second (HRr × 0.64 e^(1.92 HRr)), scaled so that one hour
+   at threshold HR = 100; average HR × moving time when there is no HR stream.
 4. None (activity counts in totals but not in load).
-The method used is stored with the value.
+The method used is stored with the value (`load`, `load_method`).
 
 ### 7.4 Fitness model
-Daily load per person → CTL (42-day exponential average), ATL (7-day), TSB = CTL − ATL
-(yesterday's values). Stored in `daily_load`, recomputed incrementally from the earliest
-changed date.
+Daily load per person (by the activity's local day) → CTL (42-day exponential average),
+ATL (7-day), TSB = CTL − ATL (yesterday's values). Computed on request (`GET /api/fitness`,
+a few ms for ten years), so it can never be stale; the `daily_load` table stays unused.
+Form zones: > 25 transition, 5…25 fresh, −10…5 grey zone, −30…−10 optimal, < −30 high risk.
 
 ### 7.5 Best efforts
-- Power: 5 s, 15 s, 30 s, 1 min, 5 min, 10 min, 20 min, 60 min.
-- Pace (run): 400 m, 1 km, 5 km, 10 km, half marathon, marathon.
+- Power: 5 s, 15 s, 30 s, 1 min, 5 min, 10 min, 20 min, 60 min (any activity with power;
+  Statistics filters cycling / running).
+- Pace (running group): 400 m, 1 km, 1 mile, 5 km, 10 km, half marathon, marathon —
+  fastest time within any run from the distance stream (interpolated), not only races.
 - HR: max average over 1, 5, 20, 60 min.
-These feed the duration curves (all-time, per year, last 90 days).
+Streams are resampled to 1 s; gaps > 10 s break a window. Stored in `best_efforts`; shown on
+the activity page and as records + curve in Statistics (all time, last 90 days, per year,
+with the all-time curve dashed for comparison).
 
 ---
 
@@ -370,9 +385,12 @@ All JSON, prefix `/api`. Read endpoints accept `person`, `from`, `to`, `category
 | PATCH | `/activities/{id}` | Name, category override. |
 | DELETE | `/activities/{id}` | Delete activity (used for missing files). |
 | GET | `/tracks` | All simplified tracks for a filter, as compact binary/GeoJSON, cacheable (ETag). |
-| GET | `/stats/summary` | Totals per period and category. |
-| GET | `/stats/fitness` | Daily load, CTL, ATL, TSB. |
-| GET | `/stats/curves` | Power / pace / HR duration curves. |
+| GET | `/fitness?person&from` | Daily load, CTL, ATL, TSB; methods; thresholds in use. |
+| GET | `/calendar?from&to&person` | Activities by local day. |
+| GET | `/stats/totals?person&by&type&year` | Totals per year / month / week and per group. |
+| GET | `/stats/records?person&kind&range&type` | Best effort per distance / duration. |
+| GET/PUT | `/thresholds/{person}` | Threshold rows, values in use (set / auto / default). |
+| DELETE | `/thresholds/{person}/{valid_from}` | Delete a threshold row. |
 | GET | `/import/status` | Queue progress, last run. |
 | POST | `/import/scan` | Start scan + import. |
 | GET | `/garmin` | Garmin account state per person (key hint, status, counts; never the key). |
@@ -407,11 +425,11 @@ The visual design is defined by the project owner; the technical preview follows
 |---|---|
 | Activities | KPI row (count, distance, time, ascent, calories for the current filters); list / small tiles / large tiles (with route) switch at the right of the page title; sortable columns with a filter row. |
 | Activity | Route, stream charts, laps, best efforts; change type; delete. |
-| Calendar | Month/year view with activities per day and weekly totals. |
+| Calendar | Month view (Mon–Sun, activity chips with type icon and distance or time, week totals: time, distance, load, count) and year view (12 small month grids coloured by moving time per day); ‹ › and Today; summary strip for the shown month/year. With Everyone: a person dot on each chip. |
 | Heatmap | All routes as low-opacity lines; explorer tiles, max square, cluster. |
-| Fitness | Load, CTL / ATL / TSB. |
+| Fitness | Summary (fitness, fatigue, form with zone, ramp rate, 7-day load); chart of fitness / fatigue lines over daily load bars and a form chart with zone bands, shared hover tooltip; range 3 / 6 / 12 months / all; card explaining methods with counts and the thresholds in use. |
 | Wellbeing | Sleep, stress, heart rate (mostly charts), from the Garmin API; some daily values also in the Calendar. Later stage. |
-| Statistics | Totals by week/month/year and type; duration curves; records. |
+| Statistics | *Totals*: filter (type, year, group by year/month/week, chart metric), bar chart, table per period (years link to their months), moving time by group. *Records*: running pace / power / heart rate, range all / 90 days / year, curve + table with links to activities. |
 | Compare | Everyone side by side (only with “Everyone” selected). |
 
 ### Page structure
@@ -549,7 +567,8 @@ API: `POST /api/export`, `GET /api/export/status`, `GET /api/export/{name}` (dow
    real Garmin export.
 2. **API + minimal UI** — activity list and detail with streams. *(done: `trailbook serve`, technical preview UI)*
 3. **Map / Heatmap** *(done)* — all routes, heatmap effect, tile proxy, explorer tiles (visited tiles, max square, cluster).
-4. **Statistics** — totals, load, CTL/ATL/TSB, best efforts and curves.
+4. **Statistics** *(done)* — thresholds, training load, CTL/ATL/TSB (Fitness), best efforts and
+   record curves, totals (Statistics), Calendar.
 5. **Add-on** — packaging, Ingress, stdin trigger, multi-arch CI, install on HA Yellow.
 6. **Export / restore** — migration ZIP (section 13), tested by moving a PC install to HA Yellow.
 7. **UI design pass** — owner's design, i18n EN/PL, docs and screenshots, first public release.

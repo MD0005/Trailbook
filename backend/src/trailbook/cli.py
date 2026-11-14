@@ -8,7 +8,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import __version__, db, garmin, importer, jobs, sports
+from . import __version__, analysis, db, garmin, importer, jobs, sports
 
 
 def _set_low_priority() -> None:
@@ -104,6 +104,15 @@ def cmd_scan(conn, args) -> int:
                 )
 
             tiled = importer.backfill_tiles(conn, progress=tile_progress)
+
+            def analysis_progress(i, total):
+                jobs.write_progress(
+                    conn, state="running", phase="analysis", started_at=started, done=i, total=total
+                )
+
+            analysed = analysis.backfill(conn, progress=analysis_progress)
+            if analysed:
+                out(f"Training load and best efforts computed for {analysed} activities.")
             if tiled:
                 out(f"Explorer tiles computed for {tiled} activities.")
             out(

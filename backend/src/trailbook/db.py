@@ -253,6 +253,12 @@ MIGRATIONS: list[str] = [
         PRIMARY KEY (person_id, activity_id)
     ) WITHOUT ROWID;
     """,
+    # v7 — analysis (training load, best efforts) is computed after import from the stored
+    # streams; this version says which analysis an activity has (0 = not yet).
+    """
+    ALTER TABLE activities ADD COLUMN analysis_version INTEGER NOT NULL DEFAULT 0;
+    CREATE INDEX ix_activities_analysis ON activities(analysis_version);
+    """,
 ]
 
 SCHEMA_VERSION = len(MIGRATIONS)

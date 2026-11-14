@@ -11,6 +11,7 @@ import re
 import sqlite3
 import zipfile
 from contextlib import asynccontextmanager, closing
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from starlette.applications import Starlette
@@ -25,6 +26,7 @@ from starlette.staticfiles import StaticFiles
 
 from . import (
     __version__,
+    analysis,
     basemap,
     db,
     explorer,
@@ -506,6 +508,14 @@ def create_app(db_path: str | Path) -> Starlette:
                 r["channel"]
                 for r in c.execute("SELECT channel FROM streams WHERE activity_id = ?", (aid,))
             ]
+            a["best_efforts"] = [
+                dict(r)
+                for r in c.execute(
+                    "SELECT kind, key, value FROM best_efforts WHERE activity_id = ?"
+                    " ORDER BY kind, key",
+                    (aid,),
+                )
+            ]
             a["files"] = [
                 dict(r)
                 for r in c.execute(
@@ -524,6 +534,7 @@ def create_app(db_path: str | Path) -> Starlette:
                 if body["type"] not in sports.TYPES:
                     raise HTTPException(400, "unknown activity type")
                 importer.set_activity_type(c, aid, body["type"])
+                analysis.analyse_one(c, aid)  # the group decides e.g. running best efforts
             if "name" in body:
                 c.execute(
                     "UPDATE activities SET name = ?, name_overridden = 1 WHERE id = ?",
@@ -715,6 +726,230 @@ def create_app(db_path: str | Path) -> Starlette:
         started = job.start(trigger="upload")
         return JSONResponse({"queued": queued, "started": started, "bytes": size}, status_code=202)
 
+    # ---- training: thresholds, fitness, calendar, statistics ---------------------------
+
+    def _single_person(c: sqlite3.Connection, request: Request) -> str:
+        pid = request.query_params.get("person") or request.path_params.get("id") or ""
+        if not c.execute("SELECT 1 FROM persons WHERE id = ?", (pid,)).fetchone():
+            raise HTTPException(400, "choose a person")
+        return pid
+
+    def _thresholds_state(c: sqlite3.Connection, pid: str) -> dict:
+        rows = analysis.threshold_rows(c, pid)
+        auto_max = analysis.auto_hr_max(c, pid)
+        th = analysis.thresholds_for(rows, importer.now_iso()[:10], auto_max)
+        return {
+            "rows": [dict(r) for r in rows],
+            "effective": {
+                "hr_max": th.hr_max, "hr_rest": th.hr_rest, "lthr": th.lthr, "ftp": th.ftp,
+                "threshold_pace": th.threshold_pace, "sources": th.sources,
+            },
+            "auto_hr_max": auto_max,
+            "pending": c.execute(
+                "SELECT COUNT(*) FROM activities WHERE person_id = ? AND analysis_version < ?",
+                (pid, analysis.ANALYSIS_VERSION),
+            ).fetchone()[0],
+        }  # fmt: skip
+
+    async def thresholds_get(request: Request):
+        with closing(conn()) as c:
+            pid = _single_person(c, request)
+            return JSONResponse(_thresholds_state(c, pid))
+
+    THRESHOLD_LIMITS = {
+        "hr_max": (100, 230), "hr_rest": (25, 120), "lthr": (80, 220), "ftp": (30, 700),
+        "threshold_pace": (120, 900), "swim_css": (40, 400), "weight": (20, 300),
+    }  # fmt: skip
+
+    async def thresholds_put(request: Request):
+        body = await request.json()
+        valid_from = str(body.get("valid_from") or "1970-01-01")
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", valid_from):
+            raise HTTPException(400, "valid from must be a date (YYYY-MM-DD)")
+        values = {}
+        for f, (lo, hi) in THRESHOLD_LIMITS.items():
+            v = body.get(f)
+            if v in (None, ""):
+                values[f] = None
+                continue
+            try:
+                v = float(v)
+            except (TypeError, ValueError) as exc:
+                raise HTTPException(400, f"invalid {f}") from exc
+            if not lo <= v <= hi:
+                raise HTTPException(400, f"{f} must be between {lo} and {hi}")
+            values[f] = v
+        cols = ", ".join(values)
+        marks = ", ".join("?" for _ in values)
+        with closing(conn()) as c:
+            pid = _single_person(c, request)
+            c.execute(
+                f"""INSERT OR REPLACE INTO person_thresholds (person_id, valid_from, {cols})
+                    VALUES (?, ?, {marks})""",
+                (pid, valid_from, *values.values()),
+            )
+            analysis.reset_person(c, pid)
+            result = _thresholds_state(c, pid)
+        job.start(trigger="analysis")
+        return JSONResponse(result)
+
+    async def thresholds_delete(request: Request):
+        with closing(conn()) as c:
+            pid = _single_person(c, request)
+            c.execute(
+                "DELETE FROM person_thresholds WHERE person_id = ? AND valid_from = ?",
+                (pid, request.path_params["valid_from"]),
+            )
+            analysis.reset_person(c, pid)
+            result = _thresholds_state(c, pid)
+        job.start(trigger="analysis")
+        return JSONResponse(result)
+
+    async def fitness(request: Request):
+        with closing(conn()) as c:
+            pid = _single_person(c, request)
+            series = analysis.fitness_series(analysis.daily_loads(c, pid))
+            methods = {
+                (r[0] or "none"): r[1]
+                for r in c.execute(
+                    "SELECT load_method, COUNT(*) FROM activities WHERE person_id = ?"
+                    " GROUP BY load_method",
+                    (pid,),
+                )
+            }
+            th = _thresholds_state(c, pid)
+        since = request.query_params.get("from")
+        shown = [d for d in series if not since or d["date"] >= since]
+        return JSONResponse(
+            {
+                "series": shown,
+                "first": series[0]["date"] if series else None,
+                "methods": methods,
+                "thresholds": th["effective"],
+                "pending": th["pending"],
+            }
+        )
+
+    async def calendar(request: Request):
+        q = request.query_params
+        start, end = q.get("from", ""), q.get("to", "")
+        for d in (start, end):
+            if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", d):
+                raise HTTPException(400, "from / to must be dates (YYYY-MM-DD)")
+        day = analysis.LOCAL_DAY_SQL
+        where, params = [f"{day} BETWEEN ? AND ?"], [start, end]
+        if q.get("person") and q["person"] != "all":
+            where.append("person_id = ?")
+            params.append(q["person"])
+        with closing(conn()) as c:
+            rows = c.execute(
+                f"""SELECT id, person_id, start_time_utc, utc_offset_s, activity_type, category,
+                           name, distance_m, moving_s, ascent_m, load, {day} AS day
+                    FROM activities WHERE {" AND ".join(where)} ORDER BY start_time_utc""",
+                params,
+            ).fetchall()
+        return JSONResponse({"activities": [dict(r) for r in rows]})
+
+    async def stats_totals(request: Request):
+        q = request.query_params
+        period = {
+            "year": "substr(day, 1, 4)",
+            "month": "substr(day, 1, 7)",
+            "week": "strftime('%Y-W%W', day)",
+        }.get(q.get("by", "year"))
+        if period is None:
+            raise HTTPException(400, "by must be year, month or week")
+        day = analysis.LOCAL_DAY_SQL
+        with closing(conn()) as c:
+            pid = _single_person(c, request)
+            where, params = ["person_id = ?"], [pid]
+            t = q.get("type", "")
+            if t.startswith("g:"):
+                where.append("category = ?")
+                params.append(t[2:])
+            elif t:
+                where.append("activity_type = ?")
+                params.append(t)
+            inner = f"SELECT *, {day} AS day FROM activities WHERE {' AND '.join(where)}"
+            outer = ""
+            if q.get("year"):
+                outer = "WHERE substr(day, 1, 4) = ?"
+                params.append(q["year"])
+            rows = c.execute(
+                f"""SELECT {period} AS period, COUNT(*) AS count, SUM(distance_m) AS distance_m,
+                           SUM(moving_s) AS moving_s, SUM(ascent_m) AS ascent_m,
+                           SUM(load) AS load, SUM(calories) AS calories,
+                           COUNT(DISTINCT day) AS active_days
+                    FROM ({inner}) {outer} GROUP BY period ORDER BY period""",
+                params,
+            ).fetchall()
+            groups = c.execute(
+                f"""SELECT category, COUNT(*) AS count, SUM(distance_m) AS distance_m,
+                           SUM(moving_s) AS moving_s
+                    FROM ({inner}) {outer} GROUP BY category ORDER BY moving_s DESC""",
+                params,
+            ).fetchall()
+            years = [
+                r[0]
+                for r in c.execute(
+                    f"""SELECT DISTINCT substr({day}, 1, 4) AS y FROM activities
+                        WHERE person_id = ? ORDER BY y DESC""",
+                    (pid,),
+                )
+            ]
+        return JSONResponse(
+            {"rows": [dict(r) for r in rows], "groups": [dict(r) for r in groups], "years": years}
+        )
+
+    async def stats_records(request: Request):
+        q = request.query_params
+        kind = q.get("kind", "pace")
+        if kind not in ("pace", "power", "hr"):
+            raise HTTPException(400, "kind must be pace, power or hr")
+        rng = q.get("range", "all")
+        with closing(conn()) as c:
+            pid = _single_person(c, request)
+            where, params = ["a.person_id = ?", "b.kind = ?"], [pid, kind]
+            t = q.get("type", "")
+            if t.startswith("g:"):
+                where.append("a.category = ?")
+                params.append(t[2:])
+            elif t:
+                where.append("a.activity_type = ?")
+                params.append(t)
+            if rng == "90d":
+                since = datetime.now(UTC) - timedelta(days=90)
+                where.append("a.start_time_utc >= ?")
+                params.append(since.strftime("%Y-%m-%dT%H:%M:%SZ"))
+            elif re.fullmatch(r"\d{4}", rng):
+                where.append("substr(a.start_time_utc, 1, 4) = ?")
+                params.append(rng)
+            elif rng != "all":
+                raise HTTPException(400, "range must be all, 90d or a year")
+            order = "ASC" if kind == "pace" else "DESC"  # pace: lowest time wins
+            rows = c.execute(
+                f"""WITH e AS (
+                        SELECT b.key, b.value, a.id, a.name, a.activity_type, a.start_time_utc,
+                               a.utc_offset_s,
+                               ROW_NUMBER() OVER (PARTITION BY b.key
+                                   ORDER BY b.value {order}, a.start_time_utc) AS rk
+                        FROM best_efforts b JOIN activities a ON a.id = b.activity_id
+                        WHERE {" AND ".join(where)})
+                    SELECT key, value, id, name, activity_type, start_time_utc, utc_offset_s
+                    FROM e WHERE rk = 1 ORDER BY key""",
+                params,
+            ).fetchall()
+            years = [
+                r[0]
+                for r in c.execute(
+                    """SELECT DISTINCT substr(a.start_time_utc, 1, 4) AS y
+                       FROM best_efforts b JOIN activities a ON a.id = b.activity_id
+                       WHERE a.person_id = ? AND b.kind = ? ORDER BY y DESC""",
+                    (pid, kind),
+                )
+            ]
+        return JSONResponse({"kind": kind, "records": [dict(r) for r in rows], "years": years})
+
     # ---- Garmin Connect ----------------------------------------------------------------
 
     def _person_or_400(c: sqlite3.Connection, pid: str) -> None:
@@ -867,6 +1102,13 @@ def create_app(db_path: str | Path) -> Starlette:
         Route("/api/heatmap/tiles", heatmap_tiles),
         Route("/api/basemaps", basemaps),
         Route("/api/basemap/{source}/{z:int}/{x:int}/{y:int}.png", basemap_tile),
+        Route("/api/thresholds/{id}", thresholds_get),
+        Route("/api/thresholds/{id}", thresholds_put, methods=["PUT"]),
+        Route("/api/thresholds/{id}/{valid_from}", thresholds_delete, methods=["DELETE"]),
+        Route("/api/fitness", fitness),
+        Route("/api/calendar", calendar),
+        Route("/api/stats/totals", stats_totals),
+        Route("/api/stats/records", stats_records),
         Route("/api/garmin", garmin_accounts),
         Route("/api/garmin/{id}", garmin_account_set, methods=["PUT"]),
         Route("/api/garmin/{id}", garmin_account_delete, methods=["DELETE"]),

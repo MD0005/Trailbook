@@ -561,6 +561,7 @@ def _store_activity(
         "name": p.name,
         "device": p.device,
         "importer_version": IMPORTER_VERSION,
+        "analysis_version": 0,  # load and best efforts are computed after import
         **{c: p.summary.get(c) for c in _ACTIVITY_COLUMNS},
     }
 
@@ -712,7 +713,8 @@ def set_activity_type(conn: sqlite3.Connection, activity_id: int, type_key: str)
     """User override of the activity type; the group follows the type."""
     t = sports.TYPES[type_key]
     conn.execute(
-        """UPDATE activities SET activity_type = ?, category = ?, type_overridden = 1
+        """UPDATE activities SET activity_type = ?, category = ?, type_overridden = 1,
+                  analysis_version = 0
            WHERE id = ?""",
         (t.key, t.group, activity_id),
     )
