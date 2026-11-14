@@ -27,6 +27,12 @@ ACTIVITY_LIST_FIELDS = (
     "has_gps"
 ).split()
 
+FILE_SORTS = {
+    "path": "f.rel_path, f.zip_member",
+    "processed": "f.imported_at DESC, f.id DESC",
+    "recorded": "COALESCE(a.start_time_utc, f.fit_created) DESC, f.id DESC",
+}
+
 STREAM_CHANNELS = (
     "time",
     "distance",
@@ -278,21 +284,32 @@ def create_app(db_path: str | Path) -> Starlette:
         if q.get("person"):
             where.append("f.person_id = ?")
             params.append(q["person"])
+        if q.get("q"):
+            where.append("(f.rel_path LIKE ? OR f.zip_member LIKE ? OR f.fit_uid LIKE ?)")
+            params += [f"%{q['q']}%"] * 3
         clause = f"WHERE {' AND '.join(where)}" if where else ""
         limit = _int(request, "limit", 100, 1, 1000)
         offset = _int(request, "offset", 0, 0, 10**9)
+        order = FILE_SORTS.get(q.get("sort", "path"), FILE_SORTS["path"])
         with closing(conn()) as c:
             total = c.execute(f"SELECT COUNT(*) FROM files f {clause}", params).fetchone()[0]
             rows = c.execute(
                 f"""SELECT f.id, f.person_id, f.rel_path, f.zip_member, f.size, f.status,
-                           f.skip_reason, f.error, f.activity_id, f.first_seen,
+                           f.prev_status, f.skip_reason, f.error, f.activity_id, f.first_seen,
                            f.missing_since, f.dismissed, f.imported_at,
-                           a.start_time_utc, a.activity_type
+                           f.fit_uid, f.fit_type, f.fit_created,
+                           a.start_time_utc, a.utc_offset_s, a.activity_type, a.name
                     FROM files f LEFT JOIN activities a ON a.id = f.activity_id
-                    {clause} ORDER BY f.rel_path, f.zip_member LIMIT ? OFFSET ?""",
+                    {clause} ORDER BY {order} LIMIT ? OFFSET ?""",
                 [*params, limit, offset],
             ).fetchall()
         return JSONResponse({"total": total, "items": [dict(r) for r in rows]})
+
+    async def import_file_forget(request: Request):
+        with closing(conn()) as c:
+            if not importer.forget_file(c, request.path_params["id"]):
+                raise HTTPException(404, "file not found")
+        return Response(status_code=204)
 
     async def import_file_dismiss(request: Request):
         with closing(conn()) as c:
@@ -327,6 +344,7 @@ def create_app(db_path: str | Path) -> Starlette:
         Route("/api/import/status", import_status),
         Route("/api/import/scan", import_scan, methods=["POST"]),
         Route("/api/import/files", import_files),
+        Route("/api/import/files/{id:int}", import_file_forget, methods=["DELETE"]),
         Route("/api/import/files/{id:int}/dismiss", import_file_dismiss, methods=["POST"]),
         Route("/api/import/files/{id:int}/retry", import_file_retry, methods=["POST"]),
         Mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static"),

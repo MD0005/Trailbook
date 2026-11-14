@@ -15,6 +15,8 @@ from . import IMPORTER_VERSION, fitfile, geo, sports, streams
 
 TRACK_TOLERANCE_M = 5.0
 
+STATUSES = ("new", "imported", "skipped", "duplicate", "error", "missing", "removed")
+
 # Statuses that describe a finished outcome for a file.
 DONE_STATUSES = ("imported", "skipped", "duplicate")
 
@@ -146,7 +148,8 @@ def scan(conn: sqlite3.Connection, root: str | Path) -> ScanResult:
                     (status, e.size, e.mtime, stamp, status, row["id"]),
                 )
             elif unchanged:
-                conn.execute("UPDATE files SET last_seen = ? WHERE id = ?", (stamp, row["id"]))
+                # Nothing to write: keeps repeated scans cheap and spares the eMMC/SD card.
+                continue
             else:
                 result.changed += 1
                 conn.execute(
@@ -236,6 +239,7 @@ def import_file(conn: sqlite3.Connection, root: Path, row: sqlite3.Row) -> str:
         return _set_status(conn, file_id, "error", error=f"cannot read file: {exc}")
 
     sha = hashlib.sha256(data).hexdigest()
+    fid = fitfile.peek_file_id(data)
 
     # Same bytes already handled under another name: reuse that outcome.
     twin = conn.execute(
@@ -246,34 +250,51 @@ def import_file(conn: sqlite3.Connection, root: Path, row: sqlite3.Row) -> str:
     ).fetchone()
     if twin is not None:
         if twin["status"] == "skipped":
-            return _set_status(conn, file_id, "skipped", sha=sha, skip_reason=twin["skip_reason"])
-        return _set_status(conn, file_id, "duplicate", sha=sha, activity_id=twin["activity_id"])
+            return _set_status(
+                conn, file_id, "skipped", sha=sha, fid=fid, skip_reason=twin["skip_reason"]
+            )
+        return _set_status(
+            conn, file_id, "duplicate", sha=sha, fid=fid, activity_id=twin["activity_id"]
+        )
 
-    file_type = fitfile.peek_file_type(data)
+    file_type = fid.type if fid else None
     if file_type is not None and file_type != fitfile.FILE_TYPE_ACTIVITY:
         return _set_status(
-            conn, file_id, "skipped", sha=sha, skip_reason=fitfile.file_type_name(file_type)
+            conn,
+            file_id,
+            "skipped",
+            sha=sha,
+            fid=fid,
+            skip_reason=fitfile.file_type_name(file_type),
         )
 
     try:
         parsed = fitfile.parse_activity(data)
     except Exception as exc:  # the SDK raises a variety of exception types
-        if file_type is None:
+        if fid is None:
             return _set_status(conn, file_id, "skipped", sha=sha, skip_reason="not a FIT file")
-        return _set_status(conn, file_id, "error", sha=sha, error=f"{type(exc).__name__}: {exc}")
+        return _set_status(
+            conn, file_id, "error", sha=sha, fid=fid, error=f"{type(exc).__name__}: {exc}"
+        )
 
     existing = conn.execute(
         "SELECT id FROM activities WHERE fit_uid = ?", (parsed.fit_uid,)
     ).fetchone()
     if existing is not None and existing["id"] != row["activity_id"]:
-        return _set_status(conn, file_id, "duplicate", sha=sha, activity_id=existing["id"])
+        return _set_status(
+            conn, file_id, "duplicate", sha=sha, fid=fid, fit_uid=parsed.fit_uid,
+            activity_id=existing["id"],
+        )  # fmt: skip
 
     conn.execute("BEGIN")
     try:
         activity_id = _store_activity(
             conn, row["person_id"], parsed, existing["id"] if existing else None
         )
-        _set_status(conn, file_id, "imported", sha=sha, activity_id=activity_id)
+        _set_status(
+            conn, file_id, "imported", sha=sha, fid=fid, fit_uid=parsed.fit_uid,
+            activity_id=activity_id,
+        )  # fmt: skip
         conn.execute("COMMIT")
     except Exception:
         conn.execute("ROLLBACK")
@@ -287,16 +308,26 @@ def _set_status(
     status: str,
     *,
     sha: str | None = None,
+    fid: fitfile.FileId | None = None,
+    fit_uid: str | None = None,
     skip_reason: str | None = None,
     error: str | None = None,
     activity_id: int | None = None,
 ) -> str:
+    fit_type = fitfile.file_type_name(fid.type) if fid and fid.type is not None else None
+    fit_created = (
+        fid.time_created.strftime("%Y-%m-%dT%H:%M:%SZ") if fid and fid.time_created else None
+    )
     conn.execute(
         """UPDATE files SET status = ?, sha256 = COALESCE(?, sha256), skip_reason = ?,
-                  error = ?, activity_id = ?, imported_at = ?
+                  error = ?, activity_id = ?, imported_at = ?,
+                  fit_uid = ?, fit_type = ?, fit_created = ?
            WHERE id = ?""",
-        (status, sha, skip_reason, error, activity_id, now_iso(), file_id),
-    )
+        (
+            status, sha, skip_reason, error, activity_id, now_iso(),
+            fit_uid or (fid.fit_uid if fid else None), fit_type, fit_created, file_id,
+        ),
+    )  # fmt: skip
     return status
 
 
@@ -400,11 +431,19 @@ def _store_activity(
 
 
 def delete_activity(conn: sqlite3.Connection, activity_id: int) -> bool:
-    """Delete an activity and its data. Linked file rows keep their status history."""
+    """Delete an activity and its data (user decision).
+
+    Its files get status `removed`, so later scans do not import them again. To import such
+    a file again, remove it from the history with `forget_file`.
+    """
     conn.execute("BEGIN")
     try:
         conn.execute(
-            "UPDATE files SET activity_id = NULL, dismissed = 1 WHERE activity_id = ?",
+            """UPDATE files
+               SET status = CASE WHEN status = 'missing' THEN status ELSE 'removed' END,
+                   prev_status = CASE WHEN status = 'missing' THEN 'removed' ELSE prev_status END,
+                   dismissed = 1
+               WHERE activity_id = ?""",
             (activity_id,),
         )
         cur = conn.execute("DELETE FROM activities WHERE id = ?", (activity_id,))
@@ -413,6 +452,35 @@ def delete_activity(conn: sqlite3.Connection, activity_id: int) -> bool:
         conn.execute("ROLLBACK")
         raise
     return cur.rowcount > 0
+
+
+def forget_file(conn: sqlite3.Connection, file_id: int) -> bool:
+    """Remove a file from the import history, so the next scan treats it as new.
+
+    If the file created an activity, that activity is deleted too (it will be rebuilt when
+    the file is imported again). Other files that were duplicates of it are queued again.
+    """
+    row = conn.execute("SELECT * FROM files WHERE id = ?", (file_id,)).fetchone()
+    if row is None:
+        return False
+    owner = row["status"] == "imported" or (
+        row["status"] == "missing" and row["prev_status"] == "imported"
+    )
+    conn.execute("BEGIN")
+    try:
+        if owner and row["activity_id"] is not None:
+            conn.execute(
+                """UPDATE files SET status = 'new', activity_id = NULL
+                   WHERE activity_id = ? AND id != ? AND status != 'missing'""",
+                (row["activity_id"], file_id),
+            )
+            conn.execute("DELETE FROM activities WHERE id = ?", (row["activity_id"],))
+        conn.execute("DELETE FROM files WHERE id = ?", (file_id,))
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    return True
 
 
 def requeue_outdated(conn: sqlite3.Connection, everything: bool = False) -> int:

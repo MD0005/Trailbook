@@ -189,6 +189,12 @@ def cmd_activity(conn, args) -> int:
     return 0
 
 
+def cmd_forget(conn, args) -> int:
+    ok = importer.forget_file(conn, args.id)
+    print("Removed from history; the next scan imports it again." if ok else f"No file {args.id}")
+    return 0 if ok else 1
+
+
 def cmd_delete_activity(conn, args) -> int:
     ok = importer.delete_activity(conn, args.id)
     print("Deleted." if ok else f"No activity {args.id}")
@@ -268,9 +274,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("status", help="summary of files and activities").set_defaults(func=cmd_status)
 
     p = sub.add_parser("files", help="list tracked files")
-    p.add_argument(
-        "--status", choices=["new", "imported", "skipped", "duplicate", "error", "missing"]
-    )
+    p.add_argument("--status", choices=list(importer.STATUSES))
     p.set_defaults(func=cmd_files)
 
     p = sub.add_parser("activities", help="list activities")
@@ -298,6 +302,10 @@ def main(argv: list[str] | None = None) -> int:
     p.set_defaults(func=cmd_set_type)
 
     sub.add_parser("types", help="list activity groups and types").set_defaults(func=cmd_types)
+
+    p = sub.add_parser("forget", help="remove a file from the import history (re-import on scan)")
+    p.add_argument("id", type=int, help="file id from `trailbook files`")
+    p.set_defaults(func=cmd_forget)
 
     p = sub.add_parser("serve", help="run the web server (API + preview UI)")
     p.add_argument("--host", default="127.0.0.1")

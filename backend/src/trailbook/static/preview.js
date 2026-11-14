@@ -166,7 +166,7 @@ async function renderActivity(id) {
     renderActivity(id);
   };
   document.getElementById("del").onclick = async () => {
-    if (!confirm("Delete this activity from the database? The FIT file is not touched.")) return;
+    if (!confirm("Delete this activity from the database? The FIT file is not touched and will not be imported again unless you remove it from the import history.")) return;
     await api("activities/" + id, { method: "DELETE" });
     location.hash = "#/activities";
   };
@@ -175,47 +175,91 @@ async function renderActivity(id) {
 // ---- Import manager ----------------------------------------------------------------
 
 let importTimer = null;
+const PAGE = 100;
+
+// UTC timestamp -> "YYYY-MM-DD HH:MM" in the browser's time zone.
+const fitDate = (iso) => {
+  if (!iso) return "";
+  const d = new Date(iso), p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+};
+
+function fileContent(f) {
+  if (f.activity_id && f.status !== "duplicate") {
+    const a = { start_time_utc: f.start_time_utc, utc_offset_s: f.utc_offset_s };
+    return `<a href="#/activity/${f.activity_id}">${esc(f.name || typeLabel(f.activity_type))}</a>
+      <span class="muted">${esc(typeLabel(f.activity_type))} · ${localTime(a)}</span>`;
+  }
+  if (f.status === "duplicate" && f.activity_id) {
+    return `duplicate of <a href="#/activity/${f.activity_id}">activity ${f.activity_id}</a>`;
+  }
+  const what = f.skip_reason || f.fit_type || "";
+  const err = f.error ? ` <span class="bad">${esc(f.error)}</span>` : "";
+  return `${esc(what)} <span class="muted">${fitDate(f.fit_created)}</span>${err}`;
+}
 
 async function renderImport(params) {
   clearTimeout(importTimer);
   const status = params.status || "";
+  const sort = params.sort || "processed";
+  const page = Math.max(0, parseInt(params.page || "0", 10));
+  const query = { limit: PAGE, offset: page * PAGE, sort };
+  if (status) query.status = status;
+  if (params.q) query.q = params.q;
   const [st, files] = await Promise.all([
-    api("import/status"),
-    api("import/files?" + new URLSearchParams({ limit: 300, ...(status ? { status } : {}) })),
+    api("import/status"), api("import/files?" + new URLSearchParams(query)),
   ]);
   const p = st.progress;
   const progress = st.running || p.state === "running"
     ? `<span class="warn">Running: ${esc(p.phase || "")} ${p.done ?? 0}/${p.total ?? "?"}</span>`
     : p.state === "failed" ? `<span class="bad">Last run failed: ${esc(p.error)}</span>`
-    : p.state === "finished" ? `Last run ${esc(p.finished_at)}: ${p.imported} imported, ${p.skipped} skipped, ${p.duplicates} duplicates, ${p.errors} errors, ${p.missing} missing`
+    : p.state === "finished" ? `Last run ${esc(p.finished_at)}: ${p.scanned} files checked, ${p.imported} imported, ${p.skipped} skipped, ${p.duplicates} duplicates, ${p.errors} errors, ${p.missing} missing`
     : "No import yet";
-  const statuses = ["", "new", "imported", "skipped", "duplicate", "error", "missing"];
+  const statuses = ["", "new", "imported", "skipped", "duplicate", "error", "missing", "removed"];
+  const pages = Math.max(1, Math.ceil(files.total / PAGE));
+  const link = (changes) => "#/import?" + new URLSearchParams(
+    Object.fromEntries(Object.entries({ ...params, ...changes }).filter(([, v]) => v !== "" && v != null)));
   view.innerHTML = `
     <h2>Import</h2>
     <p>Root folder: <code>${esc(st.root || "not set — start the server with --root")}</code></p>
     <p>${progress} <button id="scan" ${st.running ? "disabled" : ""}>Check folder for new files</button></p>
-    <p>${Object.entries(st.files).map(([k, v]) => `<a href="#/import?status=${k}">${k}: ${v}</a>`).join(" · ")}
+    <p>${Object.entries(st.files).map(([k, v]) => `<a href="${link({ status: k, page: 0 })}">${k}: ${v}</a>`).join(" · ")}
       ${st.missing_to_review ? ` · <span class="warn">${st.missing_to_review} missing file(s) to review</span>` : ""}</p>
-    <div class="filters"><select id="f-status">${statuses.map((s) =>
-      `<option value="${s}" ${s === status ? "selected" : ""}>${s || "All statuses"}</option>`).join("")}</select>
-      <span class="muted">${files.total} file(s)</span></div>
+    <div class="filters">
+      <select id="f-status">${statuses.map((s) =>
+        `<option value="${s}" ${s === status ? "selected" : ""}>${s || "All statuses"}</option>`).join("")}</select>
+      <select id="f-sort">
+        <option value="processed" ${sort === "processed" ? "selected" : ""}>Newest processed first</option>
+        <option value="recorded" ${sort === "recorded" ? "selected" : ""}>Newest recorded first</option>
+        <option value="path" ${sort === "path" ? "selected" : ""}>File name</option>
+      </select>
+      <input id="f-q" placeholder="Search file name or FIT id" value="${esc(params.q || "")}">
+      <span class="muted">${files.total} file(s) · page ${page + 1}/${pages}</span>
+      ${page > 0 ? `<a href="${link({ page: page - 1 })}">← prev</a>` : ""}
+      ${page + 1 < pages ? `<a href="${link({ page: page + 1 })}">next →</a>` : ""}
+    </div>
     <div class="scroll"><table>
-      <thead><tr><th>Status</th><th>File</th><th>Person</th><th>Detail</th><th></th></tr></thead>
+      <thead><tr><th>Status</th><th>File</th><th>Person</th><th>Activity / content</th>
+        <th>FIT id</th><th>Processed</th><th></th></tr></thead>
       <tbody>${files.items.map((f) => `<tr>
-        <td class="${f.status === "error" ? "bad" : f.status === "missing" ? "warn" : ""}">${f.status}</td>
-        <td>${esc(f.rel_path)}${f.zip_member ? " › " + esc(f.zip_member) : ""}</td>
+        <td class="${f.status === "error" ? "bad" : f.status === "missing" ? "warn" : ""}">${f.status}${
+          f.status === "missing" && f.prev_status ? ` <span class="muted">(was ${f.prev_status})</span>` : ""}</td>
+        <td class="wrap">${esc(f.rel_path)}${f.zip_member ? " › " + esc(f.zip_member) : ""}</td>
         <td>${esc(f.person_id)}</td>
-        <td>${f.activity_id ? `<a href="#/activity/${f.activity_id}">${esc(typeLabel(f.activity_type))} ${esc((f.start_time_utc || "").slice(0, 10))}</a>` : esc(f.skip_reason || f.error || "")}
-          ${f.status === "missing" ? ` <span class="muted">since ${esc(f.missing_since)}${f.dismissed ? ", reviewed" : ""}</span>` : ""}</td>
+        <td class="wrap">${fileContent(f)}${f.status === "missing" ? ` <span class="muted">missing since ${fitDate(f.missing_since)}${f.dismissed ? ", reviewed" : ""}</span>` : ""}</td>
+        <td><code>${esc(f.fit_uid || "–")}</code></td>
+        <td>${f.imported_at ? fitDate(f.imported_at) : "–"}</td>
         <td>${f.status === "error" ? `<button data-retry="${f.id}">Retry</button>` : ""}
           ${f.status === "missing" && !f.dismissed ? `<button data-keep="${f.id}">Keep data</button>` : ""}
-          ${f.status === "missing" && f.activity_id ? `<button data-del="${f.activity_id}" class="bad">Delete activity</button>` : ""}</td>
+          ${f.status === "missing" && f.activity_id ? `<button data-del="${f.activity_id}" class="bad">Delete activity</button>` : ""}
+          <button data-forget="${f.id}" data-owner="${f.status === "imported" || f.prev_status === "imported" ? 1 : 0}"
+            title="Remove from import history; the next scan imports the file again">Remove from history</button></td>
       </tr>`).join("")}</tbody></table></div>`;
   const reload = () => renderImport(params);
-  document.getElementById("scan").onclick = async () => { await api("import/scan", { method: "POST" }).catch(alert); reload(); };
-  document.getElementById("f-status").onchange = (e) => {
-    location.hash = "#/import" + (e.target.value ? "?status=" + e.target.value : "");
-  };
+  document.getElementById("scan").onclick = async () => { await api("import/scan", { method: "POST" }).catch((e) => alert(e.message)); reload(); };
+  document.getElementById("f-status").onchange = (e) => { location.hash = link({ status: e.target.value, page: 0 }); };
+  document.getElementById("f-sort").onchange = (e) => { location.hash = link({ sort: e.target.value, page: 0 }); };
+  document.getElementById("f-q").onchange = (e) => { location.hash = link({ q: e.target.value, page: 0 }); };
   view.querySelectorAll("[data-retry]").forEach((b) => b.onclick = async () => {
     await api(`import/files/${b.dataset.retry}/retry`, { method: "POST" }); reload();
   });
@@ -223,8 +267,15 @@ async function renderImport(params) {
     await api(`import/files/${b.dataset.keep}/dismiss`, { method: "POST" }); reload();
   });
   view.querySelectorAll("[data-del]").forEach((b) => b.onclick = async () => {
-    if (!confirm("Delete this activity from the database?")) return;
+    if (!confirm("Delete this activity from the database? The file stays in the history as 'removed' and will not be imported again.")) return;
     await api(`activities/${b.dataset.del}`, { method: "DELETE" }); reload();
+  });
+  view.querySelectorAll("[data-forget]").forEach((b) => b.onclick = async () => {
+    const msg = b.dataset.owner === "1"
+      ? "Remove this file from the import history?\n\nIts activity is deleted too and will be rebuilt from the file on the next folder scan (manual type changes are lost)."
+      : "Remove this file from the import history?\n\nThe next folder scan will process it again.";
+    if (!confirm(msg)) return;
+    await api(`import/files/${b.dataset.forget}`, { method: "DELETE" }); reload();
   });
   if (st.running) importTimer = setTimeout(reload, 2000);
 }

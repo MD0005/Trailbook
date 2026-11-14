@@ -14,13 +14,14 @@ header { display: flex; gap: 16px; align-items: baseline; flex-wrap: wrap;
 nav { display: flex; gap: 12px; margin-left: auto; }
 a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
-main { padding: 16px; max-width: 1200px; margin: 0 auto; }
+main { padding: 16px; max-width: 1600px; margin: 0 auto; }
 .muted { color: var(--muted); }
 .bad { color: var(--bad); }
 .warn { color: var(--warn); }
 table { border-collapse: collapse; width: 100%; margin: 8px 0 20px; }
 th, td { text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--line);
          white-space: nowrap; }
+td.wrap { white-space: normal; overflow-wrap: anywhere; min-width: 160px; }
 td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 tbody tr:nth-child(even) { background: var(--row); }
 .scroll { overflow-x: auto; }

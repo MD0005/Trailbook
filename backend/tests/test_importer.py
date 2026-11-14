@@ -190,3 +190,96 @@ def test_type_override_survives_reprocess(conn, tmp_path):
         "SELECT category, activity_type FROM activities WHERE id = ?", (a["id"],)
     ).fetchone()
     assert (row["category"], row["activity_type"]) == ("hike", "hike")
+
+
+def test_skipped_files_keep_fit_id(conn, tmp_path):
+    root = tmp_path / "root"
+    (root / "alice").mkdir(parents=True)
+    (root / "alice" / "s.fit").write_bytes(make_fit(49, serial=42, created=1_100_000_000))
+    importer.scan(conn, root)
+    importer.run_queue(conn, root)
+    row = conn.execute("SELECT fit_uid, fit_type, fit_created, imported_at FROM files").fetchone()
+    assert row["fit_uid"].startswith("sn42:")
+    assert row["fit_type"] == "sleep"
+    assert row["fit_created"] == "2024-11-08T11:33:20Z"
+    assert row["imported_at"]
+
+
+def test_forget_skipped_file_reprocesses_it(conn, tmp_path):
+    root = tmp_path / "root"
+    (root / "alice").mkdir(parents=True)
+    (root / "alice" / "s.fit").write_bytes(make_fit(49))
+    importer.scan(conn, root)
+    importer.run_queue(conn, root)
+    file_id = conn.execute("SELECT id FROM files").fetchone()["id"]
+
+    assert importer.forget_file(conn, file_id)
+    assert conn.execute("SELECT COUNT(*) FROM files").fetchone()[0] == 0
+    assert importer.scan(conn, root).new == 1
+    assert importer.run_queue(conn, root).skipped == 1
+    assert not importer.forget_file(conn, 9999)
+
+
+def test_repeat_scan_writes_nothing(conn, tmp_path):
+    root = tmp_path / "root"
+    (root / "alice").mkdir(parents=True)
+    (root / "alice" / "s.fit").write_bytes(make_fit(49))
+    importer.scan(conn, root)
+    importer.run_queue(conn, root)
+    before = conn.total_changes
+    importer.scan(conn, root)
+    assert conn.total_changes == before
+
+
+@needs_samples
+def test_delete_activity_marks_removed_and_forget_reimports(conn, tmp_path):
+    root = tmp_path / "root"
+    shutil.copytree(SAMPLE_DATA, root)
+    importer.scan(conn, root)
+    importer.run_queue(conn, root)
+    f = conn.execute(
+        "SELECT id, activity_id, fit_uid FROM files WHERE status = 'imported' LIMIT 1"
+    ).fetchone()
+    assert f["fit_uid"]
+    count = conn.execute("SELECT COUNT(*) FROM activities").fetchone()[0]
+
+    # Deleting the activity: the file is 'removed' and is not imported again by a scan.
+    importer.delete_activity(conn, f["activity_id"])
+    assert conn.execute("SELECT status FROM files WHERE id = ?", (f["id"],)).fetchone()[0] == (
+        "removed"
+    )
+    importer.scan(conn, root)
+    assert importer.run_queue(conn, root).imported == 0
+
+    # Removing the file from the history: the next scan imports it again.
+    importer.forget_file(conn, f["id"])
+    importer.scan(conn, root)
+    assert importer.run_queue(conn, root).imported == 1
+    assert conn.execute("SELECT COUNT(*) FROM activities").fetchone()[0] == count
+
+
+@needs_samples
+def test_forget_imported_file_rebuilds_activity(conn, tmp_path):
+    root = tmp_path / "root"
+    shutil.copytree(SAMPLE_DATA, root)
+    importer.scan(conn, root)
+    importer.run_queue(conn, root)
+    f = conn.execute(
+        "SELECT id, activity_id, fit_uid FROM files WHERE status = 'imported' LIMIT 1"
+    ).fetchone()
+
+    importer.forget_file(conn, f["id"])
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) FROM activities WHERE id = ?", (f["activity_id"],)
+        ).fetchone()[0]
+        == 0
+    )
+    importer.scan(conn, root)
+    assert importer.run_queue(conn, root).imported == 1
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) FROM activities WHERE fit_uid = ?", (f["fit_uid"],)
+        ).fetchone()[0]
+        == 1
+    )

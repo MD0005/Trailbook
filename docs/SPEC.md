@@ -130,6 +130,8 @@ The very first import is started by the user from the Import page after choosing
   - path in DB but not on disk → `missing` (data kept).
   - missing path that appears again → back to its previous status.
 - A scan of several thousand files must take well under a few seconds on a CM4.
+  Measured on a PC: 5 000 files 0.25 s, 20 000 files 1 s (first and repeated scan).
+- Unchanged files cause no database writes, so frequent scans do not wear the eMMC/SD card.
 
 ### 5.3 Identity and duplicates
 Three keys, from cheap to strong:
@@ -147,10 +149,19 @@ Three keys, from cheap to strong:
 | `duplicate` | Activity already exists from another file. |
 | `error` | Could not be parsed. Error message stored; can be retried. |
 | `missing` | File gone from disk. **Activity data stays** until the user deletes it. |
+| `removed` | The user deleted the activity. The file is not imported again by later scans. |
 
-### 5.5 Missing files
+For every processed file the manager stores the FIT `file_id` (`fit_uid` = device serial +
+creation time, file type, creation time) and the processing time, also for skipped files.
+
+### 5.5 Missing files and user actions
 Missing files are only flagged. The Import page lists them with two actions:
 "keep data" (dismiss) and "delete activity". Nothing is removed automatically.
+
+**Remove from history** (any file): deletes the file's row from the import history, so the
+next scan treats the file as new and processes it again. If the file created an activity,
+that activity is deleted too and rebuilt on re-import (manual type changes are lost); files
+that were duplicates of it are queued again.
 
 ### 5.6 Processing order and load
 - Queue ordered oldest-first by mtime; one file at a time.

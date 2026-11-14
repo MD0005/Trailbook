@@ -44,6 +44,16 @@ def test_peek_file_type():
     assert fitfile.peek_file_type(make_fit(49)) == 49
     assert fitfile.file_type_name(49) == "sleep"
     assert fitfile.peek_file_type(b"not a fit file at all") is None
+    assert fitfile.peek_file_type(make_fit(4)[:15]) is None  # truncated
+
+
+def test_peek_file_id_fields():
+    fid = fitfile.peek_file_id(make_fit(49, serial=123456, created=1_100_000_000))
+    assert fid.type == 49
+    assert fid.serial_number == 123456
+    assert fid.time_created.isoformat() == "2024-11-08T11:33:20+00:00"
+    assert fid.fit_uid == f"sn123456:{1_100_000_000 + fitfile.FIT_EPOCH_S}"
+    assert fitfile.peek_file_id(make_fit(49)).fit_uid is None
 
 
 def test_classify():

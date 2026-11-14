@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import struct
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 
 from garmin_fit_sdk import Decoder, Stream
 
@@ -48,12 +48,47 @@ class FitError(Exception):
     pass
 
 
-def peek_file_type(data: bytes) -> int | None:
-    """Return the FIT `file_id.type` without decoding the whole file.
+@dataclass
+class FileId:
+    """Fields of the FIT `file_id` message (the first message of every FIT file)."""
+
+    type: int | None = None
+    manufacturer: int | None = None
+    product: int | None = None
+    serial_number: int | None = None
+    time_created: datetime | None = None
+
+    @property
+    def fit_uid(self) -> str | None:
+        """Stable id of the recording; same format as `ParsedActivity.fit_uid`."""
+        if self.serial_number is None or self.time_created is None:
+            return None
+        return f"sn{self.serial_number}:{int(self.time_created.timestamp())}"
+
+
+# file_id field number -> (struct code, invalid value)
+_FILE_ID_FIELDS = {
+    0: ("type", "B", 0xFF),
+    1: ("manufacturer", "H", 0xFFFF),
+    2: ("product", "H", 0xFFFF),
+    3: ("serial_number", "I", 0),  # uint32z: 0 is invalid
+    4: ("time_created", "I", 0xFFFFFFFF),
+}
+
+
+def peek_file_id(data: bytes) -> FileId | None:
+    """Read the FIT `file_id` message without decoding the whole file.
 
     `file_id` is required to be the first message, so only the first definition and
-    data messages are read. Returns None if it cannot be determined.
+    data messages are read. Returns None if the data is not a readable FIT file.
     """
+    try:
+        return _peek_file_id(data)
+    except (IndexError, struct.error):
+        return None
+
+
+def _peek_file_id(data: bytes) -> FileId | None:
     if len(data) < 12:
         return None
     header_size = data[0]
@@ -75,8 +110,6 @@ def peek_file_type(data: bytes) -> int | None:
             is_definition = bool(h & 0x40)
 
         if is_definition:
-            if pos + 5 > end:
-                return None
             arch = data[pos + 1]
             order = ">" if arch == 1 else "<"
             global_num = struct.unpack_from(order + "H", data, pos + 2)[0]
@@ -94,21 +127,36 @@ def peek_file_type(data: bytes) -> int | None:
                     dev_size += data[pos + 1]
                     pos += 3
             definitions[local] = (global_num, order, fields, dev_size)
-        else:
-            definition = definitions.get(local)
-            if definition is None:
-                return None
-            global_num, _order, fields, dev_size = definition
-            if global_num == 0:  # file_id
-                offset = pos
-                for num, size in fields:
-                    if num == 0:
-                        value = data[offset]
-                        return None if value == 0xFF else value
-                    offset += size
-                return None
+            continue
+
+        definition = definitions.get(local)
+        if definition is None:
+            return None
+        global_num, order, fields, dev_size = definition
+        if global_num != 0:  # not file_id
             pos += sum(size for _, size in fields) + dev_size
+            continue
+
+        result = FileId()
+        offset = pos
+        for num, size in fields:
+            spec = _FILE_ID_FIELDS.get(num)
+            if spec is not None and struct.calcsize(spec[1]) == size:
+                name, code, invalid = spec
+                value = struct.unpack_from(order + code, data, offset)[0]
+                if value != invalid:
+                    if name == "time_created":
+                        value = datetime.fromtimestamp(value + FIT_EPOCH_S, UTC)
+                    setattr(result, name, value)
+            offset += size
+        return result
     return None
+
+
+def peek_file_type(data: bytes) -> int | None:
+    """Return the FIT `file_id.type`, or None if it cannot be determined."""
+    fid = peek_file_id(data)
+    return fid.type if fid else None
 
 
 def file_type_name(file_type: int | None) -> str:

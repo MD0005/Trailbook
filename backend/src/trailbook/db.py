@@ -86,7 +86,7 @@ MIGRATIONS: list[str] = [
         size            INTEGER NOT NULL,
         mtime           REAL NOT NULL,
         sha256          TEXT,
-        status          TEXT NOT NULL,          -- new|imported|skipped|duplicate|error|missing
+        status          TEXT NOT NULL,          -- see importer.STATUSES
         prev_status     TEXT,                   -- status before going missing
         skip_reason     TEXT,
         error           TEXT,
@@ -172,6 +172,14 @@ MIGRATIONS: list[str] = [
         key     TEXT PRIMARY KEY,
         value   TEXT
     );
+    """,
+    # v2 — FIT file_id of every file (also skipped ones), shown in the import manager.
+    # Status 'removed' (activity deleted by the user) needs no schema change.
+    """
+    ALTER TABLE files ADD COLUMN fit_uid TEXT;
+    ALTER TABLE files ADD COLUMN fit_type TEXT;
+    ALTER TABLE files ADD COLUMN fit_created TEXT;
+    CREATE INDEX ix_files_fit_uid ON files(fit_uid);
     """,
 ]
 

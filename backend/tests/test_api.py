@@ -109,3 +109,12 @@ def test_activity_endpoints_on_sample_data(tmp_path):
 
     assert client.delete(f"/api/activities/{a['id']}").status_code == 204
     assert client.get(f"/api/activities/{a['id']}").status_code == 404
+
+
+def test_files_listing_has_fit_fields_and_forget(setup):
+    client, _, _ = setup
+    item = client.get("/api/import/files").json()["items"][0]
+    assert item["fit_type"] == "sleep" and item["imported_at"]
+    assert client.delete(f"/api/import/files/{item['id']}").status_code == 204
+    assert client.get("/api/import/files").json()["total"] == 0
+    assert client.delete(f"/api/import/files/{item['id']}").status_code == 404
