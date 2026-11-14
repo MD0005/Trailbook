@@ -32,7 +32,8 @@ def interval_min(conn) -> int:
 def next_scan_at(conn) -> datetime | None:
     """When the next automatic scan is due, or None if disabled / no folder configured."""
     minutes = interval_min(conn)
-    if minutes == 0 or not db.get_setting(conn, "root"):
+    source = db.get_setting(conn, "data_source") or "folder"
+    if minutes == 0 or source != "folder" or not db.get_setting(conn, "root"):
         return None
     row = conn.execute(
         "SELECT finished_at FROM import_runs WHERE finished_at IS NOT NULL ORDER BY id DESC LIMIT 1"

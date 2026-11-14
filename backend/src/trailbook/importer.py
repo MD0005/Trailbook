@@ -25,6 +25,12 @@ STATUSES = ("new", "imported", "skipped", "duplicate", "error", "missing", "remo
 # - "devices": one shared folder; the watch serial number decides, unknown watches go to
 #   the "Unassigned" person until the user assigns the watch.
 PERSON_MODES = ("folders", "devices")
+
+# Where new data comes from (setting `data_source`): a watched folder, one-time ZIP/FIT
+# uploads, or (planned) the Garmin Connect personal API. Uploads are kept next to the
+# database and tracked in `files` with this path prefix.
+DATA_SOURCES = ("folder", "upload", "garmin")
+UPLOADS_PREFIX = "@uploads/"
 UNASSIGNED = "_unassigned"
 
 # Statuses that describe a finished outcome for a file.
@@ -205,6 +211,8 @@ def scan(conn: sqlite3.Connection, root: str | Path, mode: str | None = None) ->
                 )
 
         for key, row in known.items():
+            if key[0].startswith(UPLOADS_PREFIX):
+                continue  # uploads are not part of the watched folder
             if key not in seen and row["status"] != "missing":
                 result.missing += 1
                 conn.execute(
@@ -236,8 +244,17 @@ class ImportResult:
 ProgressFn = Callable[[int, int, sqlite3.Row, str], None]
 
 
-def read_file_bytes(root: Path, rel_path: str, zip_member: str) -> bytes:
-    path = root / rel_path
+def read_file_bytes(
+    root: Path | None, rel_path: str, zip_member: str, uploads_dir: Path | None = None
+) -> bytes:
+    if rel_path.startswith(UPLOADS_PREFIX):
+        if uploads_dir is None:
+            raise OSError("uploads folder unknown")
+        path = uploads_dir / rel_path[len(UPLOADS_PREFIX) :]
+    elif root is None:
+        raise OSError("no watched folder configured")
+    else:
+        path = root / rel_path
     if zip_member:
         with zipfile.ZipFile(path) as zf:
             return zf.read(zip_member)
@@ -289,14 +306,37 @@ def backfill_tiles(conn: sqlite3.Connection, progress=None) -> int:
     return len(ids)
 
 
+def register_upload(conn: sqlite3.Connection, uploads_dir: Path, person_id: str, path: Path) -> int:
+    """Queue an uploaded .fit or .zip (already saved under `uploads_dir`) for `person_id`."""
+    rel = UPLOADS_PREFIX + path.relative_to(uploads_dir).as_posix()
+    st = path.stat()
+    if path.suffix.lower() == ".zip":
+        with zipfile.ZipFile(path) as zf:
+            members = sorted(
+                i.filename for i in zf.infolist()
+                if not i.is_dir() and i.filename.lower().endswith(".fit")
+            )  # fmt: skip
+    else:
+        members = [""]
+    stamp = now_iso()
+    conn.executemany(
+        """INSERT OR IGNORE INTO files (person_id, rel_path, zip_member, size, mtime, status,
+                                         first_seen, last_seen)
+           VALUES (?, ?, ?, ?, ?, 'new', ?, ?)""",
+        [(person_id, rel, m, st.st_size, st.st_mtime, stamp, stamp) for m in members],
+    )
+    return len(members)
+
+
 def run_queue(
     conn: sqlite3.Connection,
-    root: str | Path,
+    root: str | Path | None,
     progress: ProgressFn | None = None,
     limit: int | None = None,
+    uploads_dir: Path | None = None,
 ) -> ImportResult:
     """Process all files with status `new`, oldest first, committing after each file."""
-    root = Path(root)
+    root = Path(root) if root else None
     rows = conn.execute(
         "SELECT * FROM files WHERE status = 'new' ORDER BY mtime, rel_path, zip_member"
     ).fetchall()
@@ -305,7 +345,7 @@ def run_queue(
 
     result = ImportResult()
     for i, row in enumerate(rows, start=1):
-        outcome = import_file(conn, root, row)
+        outcome = import_file(conn, root, row, uploads_dir)
         setattr(result, _RESULT_FIELD[outcome], getattr(result, _RESULT_FIELD[outcome]) + 1)
         if progress:
             progress(i, len(rows), row, outcome)
@@ -320,11 +360,13 @@ _RESULT_FIELD = {
 }
 
 
-def import_file(conn: sqlite3.Connection, root: Path, row: sqlite3.Row) -> str:
+def import_file(
+    conn: sqlite3.Connection, root: Path | None, row: sqlite3.Row, uploads_dir: Path | None = None
+) -> str:
     """Import one file row. Returns the resulting status."""
     file_id = row["id"]
     try:
-        data = read_file_bytes(root, row["rel_path"], row["zip_member"])
+        data = read_file_bytes(root, row["rel_path"], row["zip_member"], uploads_dir)
     except (OSError, KeyError, zipfile.BadZipFile) as exc:
         return _set_status(conn, file_id, "error", error=f"cannot read file: {exc}")
 

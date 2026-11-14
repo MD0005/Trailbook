@@ -417,3 +417,16 @@ header .brand .logo { width: 24px; height: 24px; color: var(--accent); }
 .badge-panel input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=color]) {
   height: 28px; padding: 0 8px; font-size: 12px; }
 .opt-row { grid-template-columns: 92px 1fr; }
+
+/* Main switch: the selected option in the accent colour, no grey well */
+.switch { background: transparent; border: 1px solid var(--line); }
+.switch button.on { background: var(--accent); color: var(--accent-fg); box-shadow: none; }
+.switch button.on svg { color: var(--accent-fg); }
+
+/* Data connection choices side by side */
+.source-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px; margin-top: 8px; }
+.source-grid .choice { max-width: none; margin: 0; }
+.upload-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 10px 0 4px; }
+.upload-row input[type=file] { border: 1px dashed var(--line); padding: 4px 8px; border-radius: 8px; }
+.watches[hidden] { display: none; }
+.panel-actions { display: flex; justify-content: flex-end; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }

@@ -31,13 +31,17 @@ def _fmt_km(metres: float | None) -> str:
 
 
 def cmd_scan(conn, args) -> int:
-    root = args.root or db.get_setting(conn, "root")
-    if not root:
-        print("No root folder given and none stored yet. Usage: trailbook scan <folder>")
-        return 2
-    root = str(Path(root).resolve())
-    db.set_setting(conn, "root", root)
     out = (lambda *a, **k: None) if args.quiet else print
+    uploads_dir = Path(args.db).resolve().parent / "uploads"
+    # The folder is scanned only when it is the data source (or given explicitly); queued
+    # uploads are processed in any case.
+    source = db.get_setting(conn, "data_source") or "folder"
+    root = args.root or (db.get_setting(conn, "root") if source == "folder" else None)
+    if root:
+        root = str(Path(root).resolve())
+        db.set_setting(conn, "root", root)
+    elif args.root is None and source == "folder" and not args.quiet:
+        print("No folder configured: only queued uploads are processed.")
 
     if args.low_priority:
         _set_low_priority()
@@ -46,7 +50,7 @@ def cmd_scan(conn, args) -> int:
     jobs.write_progress(conn, state="running", phase="scan", started_at=started)
     try:
         t0 = time.monotonic()
-        scan = importer.scan(conn, root)
+        scan = importer.scan(conn, root) if root else importer.ScanResult()
         out(
             f"Scanned {scan.scanned} files in {time.monotonic() - t0:.2f} s: "
             f"{scan.new} new, {scan.changed} changed, {scan.missing} missing, "
@@ -75,7 +79,9 @@ def cmd_scan(conn, args) -> int:
                         done=i, total=total, current=row["rel_path"],
                     )  # fmt: skip
 
-            result = importer.run_queue(conn, root, progress=progress, limit=args.limit)
+            result = importer.run_queue(
+                conn, root, progress=progress, limit=args.limit, uploads_dir=uploads_dir
+            )
 
             def tile_progress(i, total):
                 jobs.write_progress(
@@ -218,7 +224,9 @@ def cmd_reprocess(conn, args) -> int:
         if not root:
             print("No root folder stored; run `trailbook scan <folder>` first.")
             return 2
-        result = importer.run_queue(conn, root)
+        result = importer.run_queue(
+            conn, root, uploads_dir=Path(args.db).resolve().parent / "uploads"
+        )
         print(f"Reprocessed {result.imported}, errors {result.errors}.")
     return 0
 

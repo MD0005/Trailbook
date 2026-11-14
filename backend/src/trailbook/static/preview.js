@@ -121,6 +121,7 @@ const NAV = [
   { key: "calendar", label: "Calendar" },
   { key: "heatmap", label: "Heatmap" },
   { key: "fitness", label: "Fitness", single: true },
+  { key: "wellbeing", label: "Wellbeing", single: true },
   { key: "stats", label: "Statistics", single: true },
   { key: "compare", label: "Compare", all: true },
 ];
@@ -191,7 +192,7 @@ function rowHtml(columns, r) {
 
 function listBar(columns, params, shown, total) {
   const filtered = columns.some((c) => c.filter && params[c.key]);
-  return filtered ? `<div class="tablebar"><button class="small" data-clear>Clear filters</button></div>` : "";
+  return "";
 }
 
 function tableHtml(columns, rows, params, total) {
@@ -243,6 +244,23 @@ function filterControl(c, params) {
     return `<select data-filter="${c.key}" title="${esc(c.label)}"><option value="">${esc(f.all || "All")}</option>${opts}</select>`;
   }
   return `<input data-filter="${c.key}" value="${esc(value)}" placeholder="${esc(f.placeholder || "filter…")}" title="${esc(c.label)}">`;
+}
+
+// Filters inside a badge panel are only applied with "Apply" (or Enter), so several can be
+// changed first.
+function bindStagedFilter(root, route, params) {
+  const apply = () => {
+    const changes = { page: 0 };
+    root.querySelectorAll("[data-pfilter]").forEach((el) => { changes[el.dataset.pfilter] = el.value.trim(); });
+    root.querySelectorAll(".chip.on[data-pchip]").forEach((b) => { changes[b.dataset.pchip] = b.dataset.value; });
+    const clean = Object.fromEntries(Object.entries({ ...params, ...changes }).filter(([, v]) => v !== "" && v != null));
+    location.hash = route + "?" + new URLSearchParams(clean);
+  };
+  root.querySelectorAll("[data-apply]").forEach((b) => b.onclick = apply);
+  root.querySelectorAll("input[data-pfilter]").forEach((i) => i.onkeydown = (e) => { if (e.key === "Enter") apply(); });
+  root.querySelectorAll("[data-pchip]").forEach((b) => b.onclick = () => {
+    root.querySelectorAll(`[data-pchip="${b.dataset.pchip}"]`).forEach((x) => x.classList.toggle("on", x === b));
+  });
 }
 
 function bindTable(route, params) {
@@ -425,12 +443,13 @@ async function renderActivities(params) {
     if (c.key === "person") return personLabel(v);
     return v;
   });
-  const filterPanelHtml = `<div class="panel-grid">${filterCols.map((c) => section(c.label, filterControl(c, params))).join("")}</div>`
-    + (active.length ? `<button class="small" data-clear>Clear filters</button>` : "");
+  const filterPanelHtml = `<div class="panel-grid">${filterCols.map((c) => section(c.label, filterControl(c, params).replace("data-filter=", "data-pfilter="))).join("")}</div>
+    <div class="panel-actions"><button class="primary small" data-apply>Apply</button></div>`;
   view.innerHTML = `
     ${pageHead("Activities", `
       ${badgeHtml("filter", "Filter", active.join(" · ") || "All", { panel: filterPanelHtml, on: active.length > 0 })}
-      ${badgeHtml("options", "Options", "", { panel: `<div class="opt-panel">${row("Large tiles", segCtl("tile-content", [["route", "Route map"], ["pace", "Pace chart"]], tileContent))}
+      ${active.length ? `<button class="badge" data-clear title="Clear filters">✕ Clear</button>` : ""}
+      ${badgeHtml("options", "Options", "", { panel: `<div class="opt-panel">${row("Large tiles", selectCtl("tile-content", [["route", "Route map"], ["pace", "Pace chart"]], tileContent))}
         <div class="hint" style="margin-top:6px">More chart types (intervals) will follow.</div></div>` })}
       <button class="badge ${showSummary ? "on" : ""}" data-kpis>Summary</button>`,
       switchHtml("view", VIEWS.map(([k, label, icon]) => [k, `${icon}<span>${label}</span>`]), mode))}
@@ -438,6 +457,7 @@ async function renderActivities(params) {
     <div class="card">${body}</div>`;
   bindBadges(view.querySelector(".page-head"));
   bindTable("#/activities", params);
+  bindStagedFilter(view.querySelector(".page-head"), "#/activities", params);
   infinite(view, data.items.length, data.total, async (offset) => (await fetchPage(offset)).items, (items) => {
     view.querySelector("[data-rows]").insertAdjacentHTML("beforeend", items.map((a) => (mode === "list" ? rowHtml(columns, a) : tile(a))).join(""));
   });
@@ -448,10 +468,9 @@ async function renderActivities(params) {
     view.querySelector("[data-summary]").hidden = !on;
   };
   view.querySelectorAll("[data-switch=view]").forEach((b) => b.onclick = () => { store.set("view", b.dataset.value); renderActivities(params); });
-  view.querySelectorAll("[data-chip=tile-content]").forEach((b) => b.onclick = () => {
-    store.set("tile-content", b.dataset.value);
+  view.querySelectorAll("select[name=tile-content]").forEach((sel) => sel.onchange = () => {
+    store.set("tile-content", sel.value);
     if (mode === "large") renderActivities(params);
-    else view.querySelectorAll("[data-chip=tile-content]").forEach((x) => x.classList.toggle("on", x === b));
   });
   view.addEventListener("click", async (e) => {
     const b = e.target.closest("[data-delete]");
@@ -632,9 +651,11 @@ async function createMap(container, mapSettings, opts = {}) {
   disposeMap();
   // Start directly at the data (no jump from a world view = no flicker).
   const start = opts.bounds ? { bounds: opts.bounds, fitBoundsOptions: opts.fitBoundsOptions || { padding: 40, maxZoom: 15 } } : { center: [10, 50], zoom: 3 };
-  delete opts.bounds; delete opts.fitBoundsOptions;
+  const zoomOffset = opts.zoomOffset || 0;
+  delete opts.bounds; delete opts.fitBoundsOptions; delete opts.zoomOffset;
   activeMap = new ml.Map({ container, style: baseStyle(mapSettings), attributionControl: { compact: true },
                            fadeDuration: 0, ...start, ...opts });
+  if (zoomOffset) activeMap.jumpTo({ zoom: Math.max(1, activeMap.getZoom() + zoomOffset) });
   activeMap.addControl(new ml.NavigationControl({ showCompass: false }), "bottom-right");
   await new Promise((resolve) => activeMap.on("load", resolve));
   activeMap.resize();
@@ -880,6 +901,7 @@ async function renderHeatmap(params) {
       <div class="heat-overlay"><div class="heat-column">
         <div class="float-bar">${pageHead("Heatmap", `
           ${badgeHtml("filter", "Filter", filterSummary(), { panel: filterPanel(), on: activeFilter })}
+          ${activeFilter ? `<button class="badge" data-clear-map title="Clear filters">✕ Clear</button>` : ""}
           ${badgeHtml("settings", "Options", "", { panel: "<div data-settings></div>" })}
           <button class="badge ${s.kpis ? "on" : ""}" data-kpis>Summary</button>`,
           switchHtml("layer", [["heatmap", `${ICON_HEAT}<span>Heatmap</span>`], ["tiles", `${ICON_GRID}<span>Explorer tiles</span>`]], s.layer))}</div>
@@ -900,17 +922,11 @@ async function renderHeatmap(params) {
     e.currentTarget.classList.toggle("on", s.kpis);
     document.getElementById("heat-kpis").hidden = !s.kpis;
   };
-  head.querySelectorAll("[data-filter-set]").forEach((el) => el.onchange = () => {
-    const p = Object.fromEntries(Object.entries({ ...heat.params, [el.dataset.filterSet]: el.value }).filter(([, v]) => v));
-    location.hash = "#/heatmap?" + new URLSearchParams(p);
-  });
-  head.querySelectorAll("[data-chip=year]").forEach((b) => b.onclick = () => {
-    const p = Object.fromEntries(Object.entries({ ...heat.params, year: b.dataset.value }).filter(([, v]) => v));
-    location.hash = "#/heatmap?" + new URLSearchParams(p);
-  });
+  bindStagedFilter(head, "#/heatmap", heat.params);
+  head.querySelector("[data-clear-map]")?.addEventListener("click", () => { location.hash = "#/heatmap"; });
 
   const bounds = boundsOf(tracks.map((t) => t.coords));
-  const map = await createMap("map", s.map, bounds ? { bounds, fitBoundsOptions: { padding: { top: 150, left: 40, right: 40, bottom: 40 }, maxZoom: 15 } } : {});
+  const map = await createMap("map", s.map, bounds ? { bounds, fitBoundsOptions: { padding: { top: 150, left: 40, right: 40, bottom: 40 }, maxZoom: 15 }, zoomOffset: -4 } : {});
   heat.map = map;
   drawHeatLayers();
   map.on("click", "routes", (e) => {
@@ -932,9 +948,11 @@ function filterSummary() {
   return [pt.startsWith("g:") ? groupLabel(pt.slice(2)) : pt ? typeLabel(pt) : "", heat.params.year || ""].filter(Boolean).join(" · ") || "All";
 }
 function filterPanel() {
-  return `<div class="panel-grid">${section("Activity type", `<select data-filter-set="type"><option value="">All types</option>${typeOptions().map((g) =>
+  return `<div class="panel-grid">${section("Activity type", `<select data-pfilter="type"><option value="">All types</option>${typeOptions().map((g) =>
       `<optgroup label="${esc(g.group)}">${g.options.map(([v, l]) => `<option value="${esc(v)}" ${v === heat.params.type ? "selected" : ""}>${esc(l)}</option>`).join("")}</optgroup>`).join("")}</select>`)}
-    ${section("Year", chips("year", [["", "All"], ...heat.years.map((y) => [y, y])], heat.params.year || ""))}</div>`;
+    ${section("Year", `<div class="chips">${[["", "All"], ...heat.years.map((y) => [y, y])].map(([v, l]) =>
+      `<button class="chip ${v === (heat.params.year || "") ? "on" : ""}" data-pchip="year" data-value="${v}">${l}</button>`).join("")}</div>`)}</div>
+    <div class="panel-actions"><button class="primary small" data-apply>Apply</button></div>`;
 }
 
 function renderSettingsPanel() {
@@ -1170,6 +1188,11 @@ async function showRouteMap(container, polyline) {
 // ---- Coming-soon pages --------------------------------------------------------------
 
 const PLANNED = {
+  wellbeing: ["Wellbeing", "after Fitness", [
+    "Sleep, stress and heart rate — mostly charts over days, weeks and months.",
+    "Data from the Garmin Connect personal API (sleep, HRV, stress, resting heart rate, steps, weight).",
+    "Some daily values (resting heart rate, steps) will also appear in the Calendar.",
+  ]],
   calendar: ["Calendar", "Stage 4", [
     "Month and year view with every activity on its day, coloured by type.",
     "Weekly totals (distance, time, load) at the end of each week.",
@@ -1225,7 +1248,7 @@ async function renderCompare(params) {
 const SETTINGS_TABS = [
   ["general", "General", svg(`<path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/>`)],
   ["people", "People", svg(`<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.8-3.6 3.4-5.5 6.5-5.5s5.7 1.9 6.5 5.5"/><path d="M16 4.5a3.5 3.5 0 0 1 0 7M18 14.8c2 .7 3.2 2.5 3.6 5.2"/>`)],
-  ["import", "Import", svg(`<path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 17v3h16v-3"/>`)],
+  ["import", "Imported", svg(`<path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 17v3h16v-3"/>`)],
   ["types", "Activity types", svg(`<path d="M3 12V4h8l9 9-8 8z"/><circle cx="7.5" cy="8.5" r="1.5"/>`)],
 ];
 
@@ -1241,9 +1264,84 @@ async function renderSettings(tab, params) {
 }
 
 async function settingsGeneral(el) {
-  const s = await api("settings");
-  const interval = (m) => (m === 0 ? "Off" : m < 60 ? `${m} min` : m === 60 ? "1 hour" : `${m / 60} hours`);
+  const [s, devices] = await Promise.all([api("settings"), api("devices")]);
+  PERSONS = await api("persons");
+  const people = realPeople();
   const accent = store.get("accent") || "sky";
+  const interval = (m) => (m === 0 ? "Off" : m < 60 ? `${m} min` : m === 60 ? "1 hour" : `${m / 60} hours`);
+  const source = s.data_source || "folder";
+  const choice = (name, value, current, title, text, extra = "") =>
+    `<label class="choice"><input type="radio" name="${name}" value="${value}" ${value === current ? "checked" : ""}>
+      <span><b>${title}${extra}</b><span class="hint">${text}</span></span></label>`;
+
+  const watchesHtml = `<div class="watches" ${s.person_mode === "devices" ? "" : "hidden"}>
+      <div class="panel-title" style="margin-top:14px">Watches</div>
+      <div class="note"><b>A watch's person applies to files imported from now on.</b> Activities that already have a person stay where they are; only activities still <i>Unassigned</i> move to the person you choose.</div>
+      <div class="scroll"><table class="data"><thead><tr><th>Watch</th><th>Serial</th><th>Person</th><th class="num">Activities</th><th>Last seen</th></tr></thead>
+      <tbody>${devices.map((d) => `<tr><td>${esc(d.product_name || "–")}</td><td><code>${d.serial}</code></td>
+        <td><select data-serial="${d.serial}"><option value="">Unassigned</option>${people.map((p) =>
+          `<option value="${esc(p.id)}" ${p.id === d.person_id ? "selected" : ""}>${esc(p.label)}</option>`).join("")}</select></td>
+        <td class="num">${num(d.activities)}</td><td>${browserTime(d.last_seen)}</td></tr>`).join("")
+        || `<tr><td colspan="5" class="hint">No watches seen yet — they appear after the first scan.</td></tr>`}</tbody></table></div>
+      <span data-watch-msg></span>
+    </div>`;
+
+  const folderCards = `
+    <div class="card">
+      <h3>Watched folder</h3>
+      ${hint(`Absolute path to the folder with FIT files.${s.allowed_roots ? ` It must be inside: ${esc(s.allowed_roots)}.` : ""}`)}
+      <input class="field-input" name="root" value="${esc(s.root || "")}" placeholder="/share/trailbook">
+      ${hint("Changing the folder marks files of the old folder as missing; their activities stay.")}
+      <div class="card-row" style="margin-top:12px"><button class="primary" data-save="root">Save</button><span data-msg></span></div>
+    </div>
+    <div class="card">
+      <h3>Assigning files to people</h3>
+      ${choice("person_mode", "folders", s.person_mode, "One subfolder per person", "folder/alice/…, folder/bob/… — the folder decides. Works when two people share a watch.")}
+      ${choice("person_mode", "devices", s.person_mode, "One shared folder, assign by watch", "Any folder layout. Choose below which person each watch belongs to.")}
+      <div class="note">
+        <b>Applies only to files imported from now on.</b> Activities that are already imported keep their person.
+        Nothing is imported twice: every activity is recognised by its FIT id (watch serial number + creation time),
+        so changing this setting never re-imports or duplicates anything.
+      </div>
+      <div class="card-row" style="margin-top:12px"><button class="primary" data-save="person_mode">Save</button><span data-msg></span></div>
+      ${watchesHtml}
+    </div>
+    <div class="card">
+      <h3>Automatic folder scan</h3>
+      ${hint("A scan only compares file sizes and dates; new files are then imported at the lowest priority.")}
+      <select class="field-input" name="scan_interval_min" style="max-width:200px">${s.scan_interval_choices.map((m) =>
+        `<option value="${m}" ${m === s.scan_interval_min ? "selected" : ""}>${interval(m)}</option>`).join("")}</select>
+      <div>${s.next_scan_at ? state(`Next scan at ${browserTime(s.next_scan_at)}`) : state("No automatic scan scheduled", "warn")}</div>
+      <div class="card-row" style="margin-top:12px"><button class="primary" data-save="scan_interval_min">Save</button><span data-msg></span></div>
+    </div>`;
+
+  const uploadCard = `
+    <div class="card">
+      <h3>Upload a Garmin export or FIT file</h3>
+      ${hint("A one-time import for one person: the ZIP from Garmin's “Export your data”, a ZIP of FIT files, or a single .fit file. Sleep and monitoring files inside are skipped.")}
+      <div class="upload-row">
+        <select name="upload-person"><option value="">Choose a person…</option>${people.map((p) => `<option value="${esc(p.id)}">${esc(p.label)}</option>`).join("")}</select>
+        <input type="file" name="upload-file" accept=".zip,.fit">
+        <button class="primary" data-upload>Upload and import</button>
+      </div>
+      <div class="note"><b>Nothing is imported twice.</b> Activities already in Trailbook (same FIT id) are recognised and skipped, so uploading an export again is safe.</div>
+      <div data-upload-msg style="margin-top:8px"></div>
+    </div>`;
+
+  const garminCard = `
+    <div class="card">
+      <h3>Garmin Connect ${state("planned", "warn")}</h3>
+      ${hint("Each person connects their own Garmin account with a personal API key (Garmin Connect → Personal API key). Keys expire after 30 days to 1 year; Garmin e-mails a reminder a week before.")}
+      <ul class="plain">
+        <li>Activities are downloaded in their original FIT format — the same FIT id as files from a folder, so nothing is duplicated.</li>
+        <li>Later: sleep, HRV, stress, resting heart rate, steps and weight for the Wellbeing tab.</li>
+        <li>Data is pulled slowly in the background and paused when Garmin refuses requests.</li>
+      </ul>
+      <div class="scroll"><table class="data"><thead><tr><th>Person</th><th>Personal API key</th><th>Status</th></tr></thead>
+        <tbody>${people.map((p) => `<tr><td>${avatar(p, 18)} ${esc(p.label)}</td><td><input disabled placeholder="Available in a later stage"></td><td>${state("not connected", "muted")}</td></tr>`).join("")
+          || `<tr><td colspan="3" class="hint">Add people first (Settings › People).</td></tr>`}</tbody></table></div>
+    </div>`;
+
   el.innerHTML = `
     <div class="card appearance">
       <h3>Appearance</h3>
@@ -1261,33 +1359,18 @@ async function settingsGeneral(el) {
       ${hint("Saved in this browser.")}
     </div>
     <div class="card">
-      <h3>Watched folder</h3>
-      ${hint(`Absolute path to the folder with FIT files.${s.allowed_roots ? ` It must be inside: ${esc(s.allowed_roots)}.` : ""}`)}
-      <input class="field-input" name="root" value="${esc(s.root || "")}" placeholder="/share/trailbook">
-      ${hint("Changing the folder marks files of the old folder as missing; their activities stay.")}
-      <div class="card-row" style="margin-top:12px"><button class="primary" data-save="root">Save</button><span data-msg></span></div>
-    </div>
-    <div class="card">
-      <h3>Assigning files to people</h3>
-      <label class="choice"><input type="radio" name="person_mode" value="folders" ${s.person_mode === "folders" ? "checked" : ""}>
-        <span><b>One subfolder per person</b><span class="hint">folder/alice/…, folder/bob/… — the folder decides. Works when two people share a watch.</span></span></label>
-      <label class="choice"><input type="radio" name="person_mode" value="devices" ${s.person_mode === "devices" ? "checked" : ""}>
-        <span><b>One shared folder, assign by watch</b><span class="hint">Any folder layout. Each watch is linked to a person in Settings › People.</span></span></label>
-      <div class="note">
-        <b>Applies only to files imported from now on.</b> Activities that are already imported keep their person.
-        Nothing is imported twice: every activity is recognised by its FIT id (watch serial number + creation time),
-        so changing this setting never re-imports or duplicates anything.
+      <h3>Data connection</h3>
+      ${hint("Where new activities come from.")}
+      <div class="source-grid">
+        ${choice("data_source", "garmin", source, "Garmin Connect", "Download automatically for every person with their personal API key.", " " + state("planned", "warn"))}
+        ${choice("data_source", "upload", source, "Upload a ZIP", "One-time import of a Garmin export or FIT files for a chosen person.")}
+        ${choice("data_source", "folder", source, "Watch a folder", "Import FIT files that appear in a folder, e.g. saved by a Home Assistant automation.")}
       </div>
-      <div class="card-row" style="margin-top:12px"><button class="primary" data-save="person_mode">Save</button><span data-msg></span></div>
+      <span data-source-msg></span>
     </div>
-    <div class="card">
-      <h3>Automatic folder scan</h3>
-      ${hint("A scan only compares file sizes and dates; new files are then imported at the lowest priority.")}
-      <select class="field-input" name="scan_interval_min" style="max-width:200px">${s.scan_interval_choices.map((m) =>
-        `<option value="${m}" ${m === s.scan_interval_min ? "selected" : ""}>${interval(m)}</option>`).join("")}</select>
-      <div>${s.next_scan_at ? state(`Next scan at ${browserTime(s.next_scan_at)}`) : state("No automatic scan scheduled", "warn")}</div>
-      <div class="card-row" style="margin-top:12px"><button class="primary" data-save="scan_interval_min">Save</button><span data-msg></span></div>
-    </div>`;
+    ${source === "folder" ? folderCards : source === "upload" ? uploadCard : garminCard}`;
+
+  const reload = () => settingsGeneral(el);
   el.querySelectorAll("[data-accent]").forEach((b) => b.onclick = () => {
     store.set("accent", b.dataset.accent);
     applyAccent();
@@ -1298,7 +1381,23 @@ async function settingsGeneral(el) {
     store.set("theme", b.dataset.value);
     applyAccent();
     setupTheme();
-    settingsGeneral(el);
+    reload();
+  });
+  el.querySelectorAll("input[name=data_source]").forEach((r) => r.onchange = async () => {
+    try { await api("settings", { method: "PUT", body: JSON.stringify({ data_source: r.value }) }); reload(); }
+    catch (e) { el.querySelector("[data-source-msg]").innerHTML = state(esc(e.message), "bad"); }
+  });
+  // Watches are shown as soon as "assign by watch" is chosen.
+  el.querySelectorAll("input[name=person_mode]").forEach((r) => r.onchange = () => {
+    const w = el.querySelector(".watches");
+    if (w) w.hidden = r.value !== "devices";
+  });
+  el.querySelectorAll("select[data-serial]").forEach((sel) => sel.onchange = async () => {
+    const out = el.querySelector("[data-watch-msg]");
+    try {
+      const r = await api("devices/" + sel.dataset.serial, { method: "PATCH", body: JSON.stringify({ person_id: sel.value || null }) });
+      out.innerHTML = state(r.moved_activities ? `Saved · ${r.moved_activities} unassigned activit${r.moved_activities === 1 ? "y" : "ies"} moved` : "Saved · applies to new imports", "ok");
+    } catch (e) { out.innerHTML = state(esc(e.message), "bad"); }
   });
   el.querySelectorAll("[data-save]").forEach((btn) => btn.onclick = async () => {
     const key = btn.dataset.save, card = btn.closest(".card"), out = card.querySelector("[data-msg]");
@@ -1307,9 +1406,22 @@ async function settingsGeneral(el) {
     try {
       await api("settings", { method: "PUT", body: JSON.stringify({ [key]: value }) });
       out.innerHTML = state("Saved", "ok");
-      setTimeout(() => settingsGeneral(el), 900);
     } catch (e) { out.innerHTML = state(esc(e.message), "bad"); }
   });
+  const up = el.querySelector("[data-upload]");
+  if (up) up.onclick = async () => {
+    const out = el.querySelector("[data-upload-msg]");
+    const pid = el.querySelector("[name=upload-person]").value;
+    const file = el.querySelector("[name=upload-file]").files[0];
+    if (!pid || !file) { out.innerHTML = state("Choose a person and a file", "warn"); return; }
+    up.disabled = true;
+    out.innerHTML = state(`Uploading ${esc(file.name)} (${num(file.size / 1048576, 1)} MB)…`);
+    try {
+      const r = await api(`uploads?${new URLSearchParams({ person: pid, name: file.name })}`, { method: "POST", body: file, headers: {} });
+      out.innerHTML = state(`Uploaded · ${num(r.queued)} FIT file(s) queued — progress in Settings › Imported`, "ok");
+    } catch (e) { out.innerHTML = state(esc(e.message), "bad"); }
+    up.disabled = false;
+  };
 }
 
 async function settingsPeople(el) {
@@ -1324,7 +1436,7 @@ async function settingsPeople(el) {
       <h3>People</h3>
       ${hint(byFolder
         ? "Each subfolder of the watched folder is one person; the folder name is the id. Drag rows to set the order used everywhere (person picker, compare, statistics). The first person is selected by default."
-        : "People are assigned by the watch that recorded each file. Drag rows to set the order used everywhere. The first person is selected by default.")}
+        : "Drag rows to set the order used everywhere. The first person is selected by default. Watches are linked to people in Settings › General.")}
       <div class="scroll"><table class="data people"><thead><tr><th></th><th>Icon</th><th>Color</th><th>Label</th><th>Id</th><th class="num">Activities</th></tr></thead>
       <tbody id="people-rows">${people.map((p, i) => `<tr draggable="true" data-row="${esc(p.id)}">
         <td class="grip" title="Drag to reorder">${ICON.grip}</td>
@@ -1337,10 +1449,10 @@ async function settingsPeople(el) {
         <td class="num">${num(p.activities)}</td></tr>`).join("") || `<tr><td colspan="6" class="hint">No people yet.</td></tr>`}
       ${unassigned && unassigned.activities ? `<tr><td></td><td></td><td></td><td>${state("Unassigned", "warn")}</td><td><code>—</code></td><td class="num">${num(unassigned.activities)}</td></tr>` : ""}
       </tbody></table></div>
-      ${byFolder ? "" : `<div class="card-row" style="margin-top:12px"><input id="new-label" placeholder="New person's name"><button id="add" class="primary">Add person</button></div>`}
+      <div class="card-row" style="margin-top:12px"><input id="new-label" placeholder="New person's name"><button id="add" class="primary">Add person</button></div>
       <div class="card-row" style="margin-top:8px"><span id="people-msg"></span></div>
     </div>
-    <div class="card">
+    <div class="card" hidden>
       <h3>Watches</h3>
       ${hint("FIT files contain no Garmin account id, but every file carries the serial number of the watch that recorded it.")}
       <div class="note"><b>Linking a watch applies to files imported from now on.</b> Activities that already have a person stay where they are; only activities still <i>Unassigned</i> move to the linked person.
@@ -1567,7 +1679,7 @@ async function route() {
     if (CURRENT === null || (CURRENT !== "all" && !person(CURRENT))) CURRENT = pickDefaultPerson();
     let section = parts[0] === "activity" ? "activities" : parts[0] || "activities";
     // Views that only make sense for one person / for everyone.
-    if (CURRENT === "all" && (section === "fitness" || section === "stats")) { location.hash = "#/compare"; return; }
+    if (CURRENT === "all" && (section === "fitness" || section === "stats" || section === "wellbeing")) { location.hash = "#/compare"; return; }
     if (CURRENT !== "all" && section === "compare") { location.hash = "#/activities"; return; }
     renderHeader(section);
     document.documentElement.style.setProperty("--header-h", document.querySelector("header").offsetHeight + "px");

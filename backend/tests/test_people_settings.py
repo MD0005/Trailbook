@@ -212,3 +212,52 @@ def test_first_scan_with_unlinked_watches(conn, tmp_path):
     importer.run_queue(conn, root)
     new = conn.execute("SELECT person_id FROM files WHERE rel_path = 'c.fit'").fetchone()
     assert new["person_id"] == "bob"
+
+
+def test_upload_zip_for_person(tmp_path):
+    import io
+    import zipfile as zf
+
+    db_path = tmp_path / "data" / "t.db"
+    c = db.connect(db_path)
+    c.execute("INSERT INTO persons (id, label) VALUES ('alice', 'Alice')")
+    db.set_setting(c, "data_source", "upload")
+    c.close()
+    client = TestClient(create_app(db_path))
+
+    buf = io.BytesIO()
+    with zf.ZipFile(buf, "w") as z:
+        z.writestr("DI/a.fit", make_fit(49, serial=111, created=T0))
+        z.writestr("DI/b.fit", make_fit(44, serial=111, created=T0 + 60))
+    assert (
+        client.post("/api/uploads?person=nobody&name=x.zip", content=buf.getvalue()).status_code
+        == 400
+    )
+    assert client.post("/api/uploads?person=alice&name=x.txt", content=b"x").status_code == 400
+    assert client.post("/api/uploads?person=alice&name=x.zip", content=b"notzip").status_code == 400
+    r = client.post("/api/uploads?person=alice&name=export.zip", content=buf.getvalue())
+    assert r.status_code == 202 and r.json()["queued"] == 2
+    assert client.app.state.import_job.wait(timeout=60) == 0
+
+    files = client.get("/api/import/files").json()["items"]
+    assert {f["status"] for f in files} == {"skipped"}
+    assert {f["person_id"] for f in files} == {"alice"}
+    assert all(f["rel_path"].startswith("@uploads/alice/") for f in files)
+    # Settings: data source validation; no scheduled scans unless the folder is the source.
+    assert client.put("/api/settings", json={"data_source": "nope"}).status_code == 400
+    assert client.get("/api/settings").json()["next_scan_at"] is None
+
+
+def test_folder_scan_ignores_uploads(conn, tmp_path):
+    root = tmp_path / "root"
+    write(root / "alice" / "a.fit", make_fit(49, serial=1, created=T0))
+    uploads = tmp_path / "uploads"
+    write(uploads / "alice" / "u.fit", make_fit(49, serial=2, created=T0))
+    conn.execute("INSERT INTO persons (id, label) VALUES ('alice', 'Alice')")
+    importer.register_upload(conn, uploads, "alice", uploads / "alice" / "u.fit")
+    importer.scan(conn, root)
+    statuses = dict(conn.execute("SELECT rel_path, status FROM files").fetchall())
+    assert statuses["@uploads/alice/u.fit"] == "new"  # not marked missing by the folder scan
+    importer.run_queue(conn, root, uploads_dir=uploads)
+    statuses = dict(conn.execute("SELECT rel_path, status FROM files").fetchall())
+    assert statuses == {"alice/a.fit": "skipped", "@uploads/alice/u.fit": "skipped"}

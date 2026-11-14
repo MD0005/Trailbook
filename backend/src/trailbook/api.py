@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import re
 import sqlite3
+import zipfile
 from contextlib import asynccontextmanager, closing
 from pathlib import Path
 
@@ -166,6 +167,7 @@ def create_app(db_path: str | Path) -> Starlette:
     job = jobs.ImportJob(db_path)
     sched = scheduler.Scheduler(db_path, job)
     tiles = basemap.TileCache(Path(db_path).parent / "tilecache")
+    uploads_dir = Path(db_path).resolve().parent / "uploads"
 
     def conn() -> sqlite3.Connection:
         return db.connect(db_path, apply_migrations=False)
@@ -300,6 +302,7 @@ def create_app(db_path: str | Path) -> Starlette:
         return {
             "root": db.get_setting(c, "root"),
             "person_mode": importer.person_mode(c),
+            "data_source": db.get_setting(c, "data_source") or "folder",
             "scan_interval_min": scheduler.interval_min(c),
             "scan_interval_choices": list(scheduler.INTERVAL_CHOICES_MIN),
             "next_scan_at": due.strftime("%Y-%m-%dT%H:%M:%SZ") if due else None,
@@ -322,6 +325,10 @@ def create_app(db_path: str | Path) -> Starlette:
                 if not _allowed_root(root.resolve()):
                     raise HTTPException(400, "folder is outside the folders shared with Trailbook")
                 db.set_setting(c, "root", str(root.resolve()))
+            if "data_source" in body:
+                if body["data_source"] not in importer.DATA_SOURCES:
+                    raise HTTPException(400, "unknown data source")
+                db.set_setting(c, "data_source", body["data_source"])
             if "person_mode" in body:
                 if body["person_mode"] not in importer.PERSON_MODES:
                     raise HTTPException(400, "unknown person mode")
@@ -660,6 +667,39 @@ def create_app(db_path: str | Path) -> Starlette:
             }
         )
 
+    async def upload(request: Request):
+        """Raw body upload of one .zip or .fit for a chosen person (one-time import)."""
+        pid = request.query_params.get("person", "")
+        name = Path(request.query_params.get("name", "")).name
+        if not name.lower().endswith((".zip", ".fit")):
+            raise HTTPException(400, "only .zip or .fit files can be uploaded")
+        with closing(conn()) as c:
+            if (
+                pid == importer.UNASSIGNED
+                or not c.execute("SELECT 1 FROM persons WHERE id = ?", (pid,)).fetchone()
+            ):
+                raise HTTPException(400, "choose a person")
+        safe = re.sub(r"[^A-Za-z0-9._-]+", "_", name)
+        stamp = importer.now_iso().replace(":", "").replace("-", "")
+        target = uploads_dir / re.sub(r"[^A-Za-z0-9._-]+", "_", pid) / f"{stamp}-{safe}"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        size = 0
+        with target.open("wb") as fh:
+            async for chunk in request.stream():
+                size += len(chunk)
+                fh.write(chunk)
+        if size == 0:
+            target.unlink(missing_ok=True)
+            raise HTTPException(400, "empty file")
+        try:
+            with closing(conn()) as c:
+                queued = importer.register_upload(c, uploads_dir, pid, target)
+        except zipfile.BadZipFile as exc:
+            target.unlink(missing_ok=True)
+            raise HTTPException(400, "not a valid ZIP file") from exc
+        started = job.start(trigger="upload")
+        return JSONResponse({"queued": queued, "started": started, "bytes": size}, status_code=202)
+
     async def import_scan(request: Request):
         with closing(conn()) as c:
             if not db.get_setting(c, "root"):
@@ -739,6 +779,7 @@ def create_app(db_path: str | Path) -> Starlette:
         Route("/api/devices/{serial:int}", device_update, methods=["PATCH"]),
         Route("/api/settings", settings_get),
         Route("/api/settings", settings_update, methods=["PUT"]),
+        Route("/api/uploads", upload, methods=["POST"]),
         Route("/api/persons/{id}", person_update, methods=["PATCH"]),
         Route("/api/activities", activities),
         Route("/api/activities/{id:int}", activity),

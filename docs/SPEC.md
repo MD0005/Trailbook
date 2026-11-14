@@ -91,6 +91,22 @@ Browser: static HTML/JS (MapLibre GL + ECharts) — all rendering client-side
 
 ---
 
+## 3a. Data connection
+
+Settings › General › *Data connection* chooses where new activities come from (setting
+`data_source`); only the options of the chosen source are shown below it:
+
+1. **Garmin Connect** *(planned)* — each person connects their own account with a Garmin
+   *personal API key* (self-service in Garmin Connect, expires after 30/90/180/365 days, token
+   valid 24 h, no documented rate limit → pull slowly, back off on refusals). Activities come
+   as original FIT files (same FIT id as folder files → no duplicates). Later: sleep, HRV,
+   stress, resting HR, steps, weight for the Wellbeing tab, stored per person + day.
+2. **Upload a ZIP** — one-time import of a Garmin export / ZIP of FIT files / single .fit for a
+   chosen person (`POST /api/uploads`). Uploads are kept in `uploads/` next to the database,
+   tracked as `@uploads/<person>/<file>` and never touched by folder scans.
+3. **Watch a folder** — watched folder, assigning files to people (with the watch table when
+   "assign by watch" is chosen), automatic folder scan. Scheduled scans run only in this mode.
+
 ## 4. Folders and people
 
 The watched folder is configurable in Settings (absolute path; in the add-on it must lie
@@ -365,6 +381,7 @@ The visual design is defined by the project owner; the technical preview follows
 | Calendar | Month/year view with activities per day and weekly totals. |
 | Heatmap | All routes as low-opacity lines; explorer tiles, max square, cluster. |
 | Fitness | Load, CTL / ATL / TSB. |
+| Wellbeing | Sleep, stress, heart rate (mostly charts), from the Garmin API; some daily values also in the Calendar. Later stage. |
 | Statistics | Totals by week/month/year and type; duration curves; records. |
 | Compare | Everyone side by side (only with “Everyone” selected). |
 
@@ -382,6 +399,10 @@ at the right end of the row.
 - Accent colour: sky by default; Settings › General offers sky, teal, indigo, violet, rose,
   amber, green, graphite (saved per browser, applied before first paint). Logo icon before
   “Trailbook” uses the accent.
+- Filters inside a badge panel are applied with **Apply** (or Enter), so several can be set
+  first; a **Clear** badge appears right after *Filter* while filters are active.
+- The main switch (e.g. Heatmap | Explorer tiles, List | Tiles | Large tiles, settings tabs)
+  shows the selected option in the accent colour.
 - Lists load **50 rows at a time** while scrolling (no page buttons) — the rule for every
   list (activities, tiles, import files, later calendar lists).
 - Summary instead of big KPI cards: one compact strip (label, value, small note), e.g.
