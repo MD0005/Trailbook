@@ -43,7 +43,7 @@ const ICON = {
 };
 
 const PERSON_ICONS = ["", "🏃", "🚴", "🏊", "🥾", "⛷️", "🧘", "🧗", "🐺", "🦊", "🐻", "🐼", "🦁", "🐸", "🐧", "🦄", "⭐", "🔥"];
-const PERSON_COLORS = ["#4c8dff", "#ff6b6b", "#3ecf8e", "#f0b429", "#a678ff", "#38bdf8", "#ff8fab", "#f97316"];
+const PERSON_COLORS = ["#0f766e", "#e8590c", "#7048e8", "#d6336c", "#2b8a3e", "#f59f00", "#1c7ed6", "#495057"];
 
 // ---- formatting (numbers always with a unit) ----------------------------------------
 
@@ -148,12 +148,12 @@ function renderHeader(section) {
 function setupTheme() {
   const btn = document.getElementById("theme");
   const paint = () => {
-    const dark = document.documentElement.dataset.theme !== "light";
+    const dark = document.documentElement.dataset.theme === "dark";
     btn.innerHTML = dark ? ICON.sun : ICON.moon;
     btn.title = dark ? "Switch to light theme" : "Switch to dark theme";
   };
   btn.onclick = () => {
-    const next = document.documentElement.dataset.theme === "light" ? "dark" : "light";
+    const next = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
     document.documentElement.dataset.theme = next;
     store.set("theme", next);
     paint();
@@ -342,18 +342,26 @@ async function renderActivities(params) {
   const filterCols = columns.filter((c) => c.filter);
   const body = mode === "list"
     ? tableHtml(columns, data.items, params, data.total, ACT_PAGE)
-    : `<div class="tile-filters">${filterCols.map((c) => filterControl(c, params)).join("")}</div>
-       ${pagerHtml(columns, params, data.total, ACT_PAGE)}
+    : `${pagerHtml(columns, params, data.total, ACT_PAGE)}
        <div class="tiles ${mode}">${data.items.map(tile).join("") || hint("Nothing matches the filters.")}</div>`;
 
+  const showKpis = store.get("activity-kpis") !== "0";
+  const active = filterCols.filter((c) => params[c.key]).map((c) => {
+    const v = params[c.key];
+    if (c.key === "type") return v.startsWith("g:") ? groupLabel(v.slice(2)) : typeLabel(v);
+    if (c.key === "person") return personLabel(v);
+    return v;
+  });
+  const filterPanelHtml = filterCols.map((c) => section(c.label, filterControl(c, params))).join("")
+    + (active.length ? `<button class="small" data-clear>Clear filters</button>` : "");
   view.innerHTML = `
-    <div class="page-head">
-      <h2>Activities</h2>
-      <div class="segmented" role="group" aria-label="View">
+    ${pageHead("Activities", `
+      ${badgeHtml("filter", "Filter", active.join(" · ") || "All", { panel: filterPanelHtml, on: active.length > 0 })}
+      <button class="badge ${showKpis ? "on" : ""}" data-kpis>KPIs</button>`,
+      `<div class="segmented" role="group" aria-label="View">
         ${VIEWS.map(([k, label, icon]) => `<button class="icon ${k === mode ? "active" : ""}" data-view="${k}" title="${label}" aria-label="${label}">${icon}</button>`).join("")}
-      </div>
-    </div>
-    <div class="kpis">
+      </div>`)}
+    <div class="kpis" ${showKpis ? "" : "hidden"}>
       ${kpi("Activities", num(t.count))}
       ${kpi("Distance", km(t.distance_m))}
       ${kpi("Moving time", hours(t.moving_s))}
@@ -361,7 +369,14 @@ async function renderActivities(params) {
       ${kpi("Calories", kcal(t.calories))}
     </div>
     <div class="card">${body}</div>`;
+  bindBadges(view.querySelector(".page-head"));
   bindTable("#/activities", params);
+  view.querySelector("[data-kpis]").onclick = (e) => {
+    const on = !e.currentTarget.classList.contains("on");
+    store.set("activity-kpis", on ? "1" : "0");
+    e.currentTarget.classList.toggle("on", on);
+    view.querySelector(".kpis").hidden = !on;
+  };
   view.querySelectorAll("[data-view]").forEach((b) => b.onclick = () => { store.set("view", b.dataset.view); renderActivities(params); });
   view.querySelectorAll("[data-delete]").forEach((b) => b.onclick = async () => {
     if (!confirm("Delete this activity from the database?\n\nThe FIT file is not touched. It will not be imported again unless you remove it from the import history.")) return;
@@ -465,75 +480,89 @@ function disposeMap() {
 
 // Base maps offered by the server (fetched once).
 let BASEMAPS = null;
+// Light tones first, then dark ones. The soft dark tones lift the blacks and lower the
+// contrast, so the map stays calm and routes on top stand out.
 const BASE_TONES = [
+  ["faded", "Faded light", { "raster-saturation": -0.8, "raster-brightness-min": 0.3, "raster-contrast": -0.2 }],
   ["original", "Original colours", {}],
   ["muted", "Muted", { "raster-saturation": -0.55 }],
   ["grayscale", "Grayscale", { "raster-saturation": -1 }],
-  ["dark", "Dark", { "raster-saturation": -1, "raster-brightness-max": 0.32, "raster-contrast": 0.15 }],
-  ["faded", "Faded light", { "raster-saturation": -0.8, "raster-brightness-min": 0.3, "raster-contrast": -0.2 }],
+  ["soft-dark", "Soft dark", { "raster-saturation": -0.85, "raster-brightness-min": 0.1, "raster-brightness-max": 0.42, "raster-contrast": -0.25 }],
+  ["slate", "Slate", { "raster-saturation": -0.6, "raster-hue-rotate": 200, "raster-brightness-min": 0.12, "raster-brightness-max": 0.45, "raster-contrast": -0.3 }],
+  ["dusk", "Dusk", { "raster-saturation": -0.45, "raster-brightness-min": 0.08, "raster-brightness-max": 0.5, "raster-contrast": -0.35 }],
+  ["dark", "Dark (high contrast)", { "raster-saturation": -1, "raster-brightness-max": 0.32, "raster-contrast": 0.15 }],
 ];
 
 // ---- saved map settings -------------------------------------------------------------
 
-const LINE_COLORS = [
-  ["blue", "#4c8dff"], ["orange", "#ff8a3d"], ["red", "#ff5d5d"], ["magenta", "#ff4fd8"],
-  ["purple", "#a678ff"], ["green", "#3ecf8e"], ["yellow", "#ffd23f"], ["white", "#f4f4f4"],
-];
+const COLOR_PRESETS = ["#e8590c", "#d6336c", "#7048e8", "#0f766e", "#2b8a3e", "#f59f00", "#1c7ed6", "#212529", "#f4f4f4"];
 const RAMPS = {
   fire: ["#3b0f70", "#a3195b", "#f0562a", "#ffc23f", "#fff7c2"],
   ice: ["#0b1e3f", "#1e5aa8", "#3fa9f5", "#9be7ff", "#ffffff"],
   viridis: ["#440154", "#3b528b", "#21918c", "#5ec962", "#fde725"],
   magma: ["#1c1044", "#6b1d81", "#c63d73", "#fb8761", "#fcfdbf"],
 };
-const TILE_SIZES = [
-  [14, "Explorer tiles", "zoom 14 — the standard explorer tiles"],
-  [16, "Medium squares", "zoom 16 — four times smaller, good for cities"],
-  [17, "Small squares", "zoom 17 — small squares"],
-];
+const TILE_SIZES = [[13, "Large squares"], [14, "Explorer tiles"], [16, "Medium squares"], [17, "Small squares"]];
 
 function defaultMapSettings() {
-  const dark = document.documentElement.dataset.theme !== "light";
+  const tone = "faded";
   return {
-    map: { source: "osm", tone: dark ? "dark" : "muted" },
     layer: "heatmap",
-    heatmap: { style: "density", color: "blue", ramp: "fire", width: 2, intensity: 0.45, perPerson: true },
-    tiles: { zoom: 14, style: "coverage", color: "green", ramp: "viridis", display: "grid",
-             square: true, cluster: true, routes: true },
     kpis: true,
+    heatmap: { map: { source: "osm", tone }, style: "density", color: "#e8590c", ramp: "fire",
+               width: 2, intensity: 0.45, perPerson: true },
+    tiles: { map: { source: "osm", tone }, zoom: 14, style: "coverage", color: "#3ecf8e", ramp: "viridis",
+             display: "grid", square: true, cluster: true, routes: true },
   };
 }
 
 function loadMapSettings() {
   const d = defaultMapSettings();
   let s = null;
-  try { s = JSON.parse(store.get("map-settings") || "null"); } catch (e) { s = null; }
+  try { s = JSON.parse(store.get("map-settings-v2") || "null"); } catch (e) { s = null; }
   if (!s) return d;
-  return { ...d, ...s, map: { ...d.map, ...s.map }, heatmap: { ...d.heatmap, ...s.heatmap },
-           tiles: { ...d.tiles, ...s.tiles } };
+  return {
+    ...d, ...s,
+    heatmap: { ...d.heatmap, ...s.heatmap, map: { ...d.heatmap.map, ...(s.heatmap || {}).map } },
+    tiles: { ...d.tiles, ...s.tiles, map: { ...d.tiles.map, ...(s.tiles || {}).map } },
+  };
 }
-const saveMapSettings = (s) => store.set("map-settings", JSON.stringify(s));
-const colorHex = (key) => (LINE_COLORS.find(([k]) => k === key) || LINE_COLORS[0])[1];
+const saveMapSettings = (s) => store.set("map-settings-v2", JSON.stringify(s));
+
+const DARK_TONES = new Set(["soft-dark", "slate", "dusk", "dark"]);
+const TONE_PROPS = ["raster-saturation", "raster-brightness-min", "raster-brightness-max", "raster-contrast", "raster-hue-rotate"];
+const TONE_DEFAULTS = { "raster-saturation": 0, "raster-brightness-min": 0, "raster-brightness-max": 1, "raster-contrast": 0, "raster-hue-rotate": 0 };
+const toneOf = (key) => (BASE_TONES.find(([k]) => k === key) || BASE_TONES[0])[2];
 
 function baseStyle(mapSettings) {
   const src = (BASEMAPS || []).find((b) => b.key === mapSettings.source);
-  const style = { version: 8, sources: {}, layers: [
-    { id: "background", type: "background", paint: { "background-color": getComputedStyle(document.documentElement).getPropertyValue("--surface-2").trim() || "#1e222b" } },
-  ] };
+  const bg = getComputedStyle(document.documentElement).getPropertyValue("--surface-2").trim() || "#1e222b";
+  const style = { version: 8, sources: {}, layers: [{ id: "background", type: "background", paint: { "background-color": bg } }] };
   if (src) {
     const tiles = new URL(`api/basemap/${src.key}/`, document.baseURI).href + "{z}/{x}/{y}.png";
     style.sources.base = { type: "raster", tiles: [tiles], tileSize: 256, maxzoom: src.max_zoom, attribution: src.attribution };
-    const tone = (BASE_TONES.find(([k]) => k === mapSettings.tone) || BASE_TONES[0])[2];
-    style.layers.push({ id: "base", type: "raster", source: "base", paint: tone });
+    style.layers.push({ id: "base", type: "raster", source: "base", paint: toneOf(mapSettings.tone) });
   }
   return style;
+}
+
+function boundsOf(coordsList) {
+  let w = 180, s = 90, e = -180, n = -90;
+  for (const coords of coordsList) for (const [lon, lat] of coords) {
+    w = Math.min(w, lon); e = Math.max(e, lon); s = Math.min(s, lat); n = Math.max(n, lat);
+  }
+  return w <= e ? [[w, s], [e, n]] : null;
 }
 
 async function createMap(container, mapSettings, opts = {}) {
   const ml = await loadMapLibre();
   BASEMAPS ??= await api("basemaps");
   disposeMap();
-  activeMap = new ml.Map({ container, style: baseStyle(mapSettings), center: [10, 50], zoom: 3,
-                           attributionControl: { compact: true }, ...opts });
+  // Start directly at the data (no jump from a world view = no flicker).
+  const start = opts.bounds ? { bounds: opts.bounds, fitBoundsOptions: { padding: 40, maxZoom: 15 } } : { center: [10, 50], zoom: 3 };
+  delete opts.bounds;
+  activeMap = new ml.Map({ container, style: baseStyle(mapSettings), attributionControl: { compact: true },
+                           fadeDuration: 0, ...start, ...opts });
   activeMap.addControl(new ml.NavigationControl({ showCompass: false }), "top-right");
   await new Promise((resolve) => activeMap.on("load", resolve));
   activeMap.resize();
@@ -541,11 +570,8 @@ async function createMap(container, mapSettings, opts = {}) {
 }
 
 function fitTo(map, coordsList, padding = 40) {
-  let w = 180, s = 90, e = -180, n = -90;
-  for (const coords of coordsList) for (const [lon, lat] of coords) {
-    w = Math.min(w, lon); e = Math.max(e, lon); s = Math.min(s, lat); n = Math.max(n, lat);
-  }
-  if (w <= e) map.fitBounds([[w, s], [e, n]], { padding, duration: 0, maxZoom: 15 });
+  const b = boundsOf(coordsList);
+  if (b) map.fitBounds(b, { padding, duration: 0, maxZoom: 15 });
 }
 
 const lonLat = (polyline) => decodePolyline(polyline).map(([lat, lon]) => [lon, lat]);
@@ -576,16 +602,16 @@ function computeTiles(tracks, z) {
   for (const t of tracks) {
     const seen = new Set();
     let prev = null;
+    const add = (tx, ty) => {
+      const k = tileKey(tx, ty);
+      if (seen.has(k)) return;
+      seen.add(k);
+      const cur = tiles.get(k);
+      if (cur) { cur.visits += 1; if (t.day < cur.first) cur.first = t.day; }
+      else tiles.set(k, { x: tx, y: ty, visits: 1, first: t.day });
+    };
     for (const [lon, lat] of t.coords) {
       const [x, y] = tileOf(lat, lon, z);
-      const add = (tx, ty) => {
-        const k = tileKey(tx, ty);
-        if (seen.has(k)) return;
-        seen.add(k);
-        const cur = tiles.get(k);
-        if (cur) { cur.visits += 1; if (t.day < cur.first) cur.first = t.day; }
-        else tiles.set(k, { x: tx, y: ty, visits: 1, first: t.day });
-      };
       add(x, y);
       if (prev) {
         const steps = Math.max(Math.abs(x - prev[2]), Math.abs(y - prev[3]));
@@ -645,207 +671,6 @@ const tileFeature = (t, z, props = {}) => {
 };
 const tileWidthKm = (z, lat) => (40075 * Math.cos((lat * Math.PI) / 180)) / 2 ** z;
 
-// ---- Heatmap page -------------------------------------------------------------------
-
-let heat = null; // page state: { settings, tracks, tiles cache, map, params }
-
-async function renderHeatmap(params) {
-  const isAll = CURRENT === "all";
-  const q = {};
-  if (!isAll) q.person = CURRENT;
-  if (params.type) q.type = params.type;
-  if (params.year) q.year = params.year;
-  const [data] = await Promise.all([api("heatmap/tracks?" + new URLSearchParams(q)), (async () => { BASEMAPS ??= await api("basemaps"); })()]);
-  const tracks = data.items.map((t) => ({ ...t, coords: lonLat(t.polyline) }));
-  heat = { settings: loadMapSettings(), tracks, years: data.years, tileCache: new Map(), params, isAll, map: null };
-
-  document.body.classList.add("fullmap");
-  document.documentElement.style.setProperty("--header-h", document.querySelector("header").offsetHeight + "px");
-  view.innerHTML = `<div class="heat-wrap">
-      <div id="heat-bar" class="badge-bar"></div>
-      <div class="heat-map-wrap"><div id="map" class="heat-map"></div><div id="heat-kpis" class="map-kpis"></div></div>
-    </div>`;
-  renderHeatBar();
-  const map = await createMap("map", heat.settings.map);
-  heat.map = map;
-  drawHeatLayers();
-  if (tracks.length) fitTo(map, tracks.map((t) => t.coords));
-  map.on("click", "routes", (e) => {
-    const items = [...new Map(e.features.map((f) => [f.properties.id, f.properties])).values()].slice(0, 6);
-    new maplibregl.Popup({ closeButton: false, maxWidth: "260px" }).setLngLat(e.lngLat)
-      .setHTML(items.map((p) => `<a href="#/activity/${p.id}">${esc(p.type)} · ${esc(p.day)}</a>${isAll ? ` <span class="hint">${esc(p.person)}</span>` : ""}`).join("<br>"))
-      .addTo(map);
-  });
-  map.on("mouseenter", "routes", () => { map.getCanvas().style.cursor = "pointer"; });
-  map.on("mouseleave", "routes", () => { map.getCanvas().style.cursor = ""; });
-  // Tile sizes in km depend on latitude: refresh the bar after moving, unless a panel is open.
-  map.on("moveend", () => { if (!document.getElementById("heat-bar")?.dataset.open) renderHeatBar(); });
-}
-
-function heatTiles() {
-  const z = heat.settings.tiles.zoom;
-  if (!heat.tileCache.has(z)) {
-    const tiles = computeTiles(heat.tracks, z);
-    heat.tileCache.set(z, { tiles, square: maxSquare(tiles), cluster: clusterOf(tiles) });
-  }
-  return heat.tileCache.get(z);
-}
-
-// A badge: button with a label and current value; clicking opens its panel.
-function badge(id, label, value, panel, { primary = false, active = false } = {}) {
-  return `<div class="badge-wrap">
-    <button class="badge ${primary ? "primary-badge" : ""} ${active ? "on" : ""}" data-badge="${id}">
-      <span class="badge-label">${label}</span>${value ? `<span class="badge-value">${value}</span>` : ""}${panel ? ICON.chevron : ""}
-    </button>
-    ${panel ? `<div class="badge-panel" data-panel="${id}" hidden>${panel}</div>` : ""}
-  </div>`;
-}
-const radio = (group, value, current, label, sub = "") =>
-  `<label class="opt"><input type="radio" name="${group}" value="${value}" ${String(value) === String(current) ? "checked" : ""}>
-     <span>${label}${sub ? `<span class="hint">${sub}</span>` : ""}</span></label>`;
-const swatches = (group, current) => `<div class="swatch-row">${LINE_COLORS.map(([k, c]) =>
-  `<button class="swatch ${k === current ? "active" : ""}" style="background:${c}" data-set="${group}" data-value="${k}" title="${k}"></button>`).join("")}</div>`;
-const ramps = (group, current) => `<div class="ramp-list">${Object.entries(RAMPS).map(([k, cols]) =>
-  `<button class="ramp ${k === current ? "active" : ""}" data-set="${group}" data-value="${k}" title="${k}" style="background:linear-gradient(90deg,${cols.join(",")})"></button>`).join("")}</div>`;
-const check = (group, on, label, sub = "") =>
-  `<label class="opt"><input type="checkbox" data-check="${group}" ${on ? "checked" : ""}><span>${label}${sub ? `<span class="hint">${sub}</span>` : ""}</span></label>`;
-
-function renderHeatBar() {
-  const s = heat.settings, H = s.heatmap, T = s.tiles;
-  const src = (BASEMAPS || []).find((b) => b.key === s.map.source);
-  const toneLabel = (BASE_TONES.find(([k]) => k === s.map.tone) || BASE_TONES[0])[1];
-  const lat = heat.map ? heat.map.getCenter().lat : 52;
-
-  const mapPanel = `<div class="panel-title">Base map</div>
-      ${(BASEMAPS || []).map((b) => radio("map.source", b.key, s.map.source, b.label)).join("")}
-      ${radio("map.source", "none", s.map.source, "No base map", "only your data on a plain background")}
-      <div class="panel-title">Colours of the base map</div>
-      ${BASE_TONES.map(([k, l]) => radio("map.tone", k, s.map.tone, l)).join("")}
-      <div class="hint">Labels are part of these map images and cannot be switched off separately.</div>`;
-
-  const layerSwitch = `<div class="seg-badge">
-      <button class="badge primary-badge ${s.layer === "heatmap" ? "on" : ""}" data-layer-set="heatmap">Heatmap</button>
-      <button class="badge primary-badge ${s.layer === "tiles" ? "on" : ""}" data-layer-set="tiles">Explorer tiles</button>
-    </div>`;
-
-  let sub = "";
-  if (s.layer === "heatmap") {
-    const styleLabel = { density: "Density", coverage: "Coverage", glow: "Heat glow" }[H.style];
-    sub += badge("h-style", "Style", styleLabel, `<div class="panel-title">How routes are drawn</div>
-        ${radio("heatmap.style", "density", H.style, "Density", "semi-transparent lines — where routes overlap the colour gets stronger")}
-        ${radio("heatmap.style", "coverage", H.style, "Coverage", "solid lines — shows only where you have been")}
-        ${radio("heatmap.style", "glow", H.style, "Heat glow", "classic heat map: a colour gradient from rarely to often visited")}`);
-    sub += badge("h-colors", "Colours", "", H.style === "glow"
-      ? `<div class="panel-title">Colour gradient</div>${ramps("heatmap.ramp", H.ramp)}`
-      : `<div class="panel-title">Line colour</div>${swatches("heatmap.color", H.color)}
-         ${heat.isAll ? check("heatmap.perPerson", H.perPerson, "A colour per person", "uses each person's colour from Settings › People; people are drawn in their configured order") : ""}`);
-    sub += badge("h-weight", "Weight", "", `<div class="panel-title">Line width</div>
-        <input type="range" min="1" max="6" step="0.5" value="${H.width}" data-range="heatmap.width">
-        ${H.style !== "coverage" ? `<div class="panel-title">Overlap strength</div><input type="range" min="0.1" max="0.9" step="0.05" value="${H.intensity}" data-range="heatmap.intensity"><div class="hint">Lower = more contrast between rarely and often used routes.</div>` : ""}`);
-  } else {
-    const size = TILE_SIZES.find(([z]) => z === T.zoom) || TILE_SIZES[0];
-    sub += badge("t-size", "Tile size", size[1], `<div class="panel-title">Tile size</div>
-        ${TILE_SIZES.map(([z, l, d]) => radio("tiles.zoom", z, T.zoom, `${l} · ~${num(tileWidthKm(z, lat), z >= 16 ? 2 : 1)} km`, d)).join("")}
-        <div class="hint">Size shown for the centre of the map; tiles get smaller towards the poles.</div>`);
-    sub += badge("t-style", "Style", T.style === "heat" ? "By visits" : "Coverage", `<div class="panel-title">Tile colouring</div>
-        ${radio("tiles.style", "coverage", T.style, "Coverage", "every visited tile looks the same")}
-        ${radio("tiles.style", "heat", T.style, "By number of visits", "tiles you visit often are stronger")}`);
-    sub += badge("t-colors", "Colours", "", T.style === "heat"
-      ? `<div class="panel-title">Colour gradient</div>${ramps("tiles.ramp", T.ramp)}`
-      : `<div class="panel-title">Tile colour</div>${swatches("tiles.color", T.color)}`);
-    sub += badge("t-display", "Display", T.display === "area" ? "Area" : "Grid", `<div class="panel-title">Show tiles as</div>
-        ${radio("tiles.display", "grid", T.display, "Single tiles", "every tile with its own outline")}
-        ${radio("tiles.display", "area", T.display, "One area", "no inner lines — visited land as one shape")}`);
-    sub += badge("t-extras", "Highlights", "", `<div class="panel-title">Highlight</div>
-        ${check("tiles.square", T.square, "Max square", "the largest square made only of visited tiles")}
-        ${check("tiles.cluster", T.cluster, "Cluster", "the largest connected group of tiles that have visited tiles on all four sides — i.e. fully explored area")}
-        ${check("tiles.routes", T.routes, "Routes under tiles", "thin lines of your routes")}`);
-  }
-
-  const typeSel = `<select data-filter-set="type"><option value="">All types</option>${typeOptions().map((g) =>
-      `<optgroup label="${esc(g.group)}">${g.options.map(([v, l]) => `<option value="${esc(v)}" ${v === heat.params.type ? "selected" : ""}>${esc(l)}</option>`).join("")}</optgroup>`).join("")}</select>`;
-  const yearSel = `<select data-filter-set="year"><option value="">All years</option>${heat.years.map((y) =>
-      `<option ${y === heat.params.year ? "selected" : ""}>${y}</option>`).join("")}</select>`;
-  const pt = heat.params.type || "";
-  const filterValue = [pt.startsWith("g:") ? groupLabel(pt.slice(2)) : pt ? typeLabel(pt) : "", heat.params.year || ""]
-    .filter(Boolean).join(" · ");
-
-  const bar = document.getElementById("heat-bar");
-  bar.innerHTML = `
-    ${badge("map", "Map", `${src ? src.label.split(" (")[0] : "None"} · ${toneLabel}`, mapPanel, { primary: true })}
-    ${layerSwitch}
-    <span class="badge-sep"></span>
-    ${sub}
-    <span class="badge-sep"></span>
-    ${badge("filter", "Filter", filterValue || "All activities", `<div class="panel-title">Activity type</div>${typeSel}<div class="panel-title">Year</div>${yearSel}`)}
-    <span class="spacer"></span>
-    <button class="badge ${s.kpis ? "on" : ""}" data-toggle-kpis>KPIs</button>`;
-  bindHeatBar(bar);
-  renderHeatKpis();
-}
-
-function bindHeatBar(bar) {
-  const s = heat.settings;
-  const setPath = (path, value) => {
-    const [a, b] = path.split(".");
-    s[a][b] = value;
-    saveMapSettings(s);
-    if (a === "map") {
-      heat.map.setStyle(baseStyle(s.map));
-      heat.map.once("styledata", () => drawHeatLayers());
-    } else drawHeatLayers();
-    renderHeatBar();
-    const panelId = bar.dataset.open;
-    if (panelId) openPanel(panelId);
-  };
-  const openPanel = (id) => {
-    document.querySelectorAll(".badge-panel").forEach((p) => { p.hidden = p.dataset.panel !== id; });
-    document.getElementById("heat-bar").dataset.open = id;
-  };
-  bar.querySelectorAll("[data-badge]").forEach((b) => b.onclick = (e) => {
-    e.stopPropagation();
-    const panel = bar.querySelector(`[data-panel="${b.dataset.badge}"]`);
-    if (!panel) return;
-    const willOpen = panel.hidden;
-    document.querySelectorAll(".badge-panel").forEach((p) => { p.hidden = true; });
-    panel.hidden = !willOpen;
-    bar.dataset.open = willOpen ? b.dataset.badge : "";
-  });
-  bar.querySelectorAll(".badge-panel").forEach((p) => p.onclick = (e) => e.stopPropagation());
-  document.onclick = () => { document.querySelectorAll(".badge-panel").forEach((p) => { p.hidden = true; }); bar.dataset.open = ""; };
-  bar.querySelectorAll("input[type=radio]").forEach((r) => r.onchange = () => {
-    const v = r.name === "tiles.zoom" ? Number(r.value) : r.value;
-    setPath(r.name, v);
-  });
-  bar.querySelectorAll("[data-set]").forEach((b) => b.onclick = (e) => { e.stopPropagation(); setPath(b.dataset.set, b.dataset.value); });
-  bar.querySelectorAll("[data-check]").forEach((c) => c.onchange = () => setPath(c.dataset.check, c.checked));
-  bar.querySelectorAll("[data-range]").forEach((r) => r.oninput = () => setPath(r.dataset.range, Number(r.value)));
-  bar.querySelectorAll("[data-layer-set]").forEach((b) => b.onclick = () => {
-    s.layer = b.dataset.layerSet; saveMapSettings(s); drawHeatLayers(); renderHeatBar();
-  });
-  bar.querySelector("[data-toggle-kpis]").onclick = () => { s.kpis = !s.kpis; saveMapSettings(s); renderHeatBar(); };
-  bar.querySelectorAll("[data-filter-set]").forEach((sel) => sel.onchange = () => {
-    const p = Object.fromEntries(Object.entries({ ...heat.params, [sel.dataset.filterSet]: sel.value }).filter(([, v]) => v));
-    location.hash = "#/heatmap?" + new URLSearchParams(p);
-  });
-}
-
-function renderHeatKpis() {
-  const el = document.getElementById("heat-kpis");
-  if (!heat.settings.kpis) { el.hidden = true; return; }
-  el.hidden = false;
-  const t = heat.tracks;
-  const sum = (k) => t.reduce((a, x) => a + (x[k] || 0), 0);
-  let html = `${kpi("Activities", num(t.length))}${kpi("Distance", km(sum("distance_m")))}${kpi("Moving time", hours(sum("moving_s")))}`;
-  if (heat.settings.layer === "tiles") {
-    const { tiles, square, cluster } = heatTiles();
-    html += `${kpi("Tiles", num(tiles.size))}${kpi("Max square", square.size ? `${square.size} × ${square.size}` : "–")}${kpi("Cluster", `${num(cluster.length)} tiles`)}`;
-  } else {
-    html += kpi("Ascent", meters(sum("ascent_m")));
-  }
-  el.innerHTML = html;
-}
-
 // Evenly spaced points along all routes (for the heat-glow layer). Spacing ~30 m, larger
 // when there is a lot of data, so the browser never gets more than ~1.5 million points.
 function densify(tracks) {
@@ -873,23 +698,283 @@ function densify(tracks) {
   return out;
 }
 
-const HEAT_LAYERS = ["routes", "routes-glow", "tiles-fill", "tiles-line", "cluster", "square"];
+// ---- badges (shared by every tab's header) ------------------------------------------
+// A page header is: title, then badges; badges open panels. Panels stay open while their
+// settings change; only what changed is updated.
 
+function pageHead(title, badges = "", right = "") {
+  return `<div class="page-head"><h2>${title}</h2><div class="badges">${badges}</div><span class="spacer"></span>${right}</div>`;
+}
+function badgeHtml(id, label, value = "", { panel = "", on = false, wide = false } = {}) {
+  return `<div class="badge-wrap">
+    <button class="badge ${on ? "on" : ""}" data-badge="${id}" ${panel ? 'aria-haspopup="true"' : ""}>
+      <span class="badge-label">${label}</span>${value ? `<span class="badge-value" data-badge-value="${id}">${value}</span>` : ""}${panel ? ICON.chevron : ""}
+    </button>
+    ${panel ? `<div class="badge-panel ${wide ? "wide" : ""}" data-panel="${id}" hidden>${panel}</div>` : ""}
+  </div>`;
+}
+function switchHtml(name, options, current) {
+  return `<div class="switch" role="group">${options.map(([v, l]) =>
+    `<button class="${v === current ? "on" : ""}" data-switch="${name}" data-value="${v}">${l}</button>`).join("")}</div>`;
+}
+function bindBadges(root) {
+  root.querySelectorAll("[data-badge]").forEach((b) => b.addEventListener("click", (e) => {
+    const panel = root.querySelector(`[data-panel="${b.dataset.badge}"]`);
+    if (!panel) return;
+    e.stopPropagation();
+    const open = panel.hidden;
+    root.querySelectorAll(".badge-panel").forEach((p) => { p.hidden = true; });
+    root.querySelectorAll(".badge.open").forEach((x) => x.classList.remove("open"));
+    panel.hidden = !open;
+    b.classList.toggle("open", open);
+  }));
+  root.querySelectorAll(".badge-panel").forEach((p) => p.addEventListener("click", (e) => e.stopPropagation()));
+  document.onclick = () => {
+    root.querySelectorAll(".badge-panel").forEach((p) => { p.hidden = true; });
+    root.querySelectorAll(".badge.open").forEach((x) => x.classList.remove("open"));
+  };
+}
+const optRadio = (name, value, current, label, title = "") =>
+  `<label class="opt" ${title ? `title="${esc(title)}"` : ""}><input type="radio" name="${name}" value="${value}" ${String(value) === String(current) ? "checked" : ""}><span>${label}</span></label>`;
+const optCheck = (name, on, label, title = "") =>
+  `<label class="opt" ${title ? `title="${esc(title)}"` : ""}><input type="checkbox" name="${name}" ${on ? "checked" : ""}><span>${label}</span></label>`;
+const colorPicker = (name, current) => `<div class="swatch-row">${COLOR_PRESETS.map((c) =>
+    `<button class="swatch ${c.toLowerCase() === String(current).toLowerCase() ? "active" : ""}" style="background:${c}" data-color="${name}" data-value="${c}" aria-label="${c}"></button>`).join("")}
+    <label class="swatch custom" title="Any colour"><input type="color" name="${name}" value="${esc(current)}"></label></div>`;
+const rampPicker = (name, current) => `<div class="ramp-list">${Object.entries(RAMPS).map(([k, cols]) =>
+    `<button class="ramp ${k === current ? "active" : ""}" data-ramp="${name}" data-value="${k}" title="${k}" style="background:linear-gradient(90deg,${cols.join(",")})"></button>`).join("")}</div>`;
+const section = (title, body) => `<div class="panel-section"><div class="panel-title">${title}</div>${body}</div>`;
+
+// ---- Heatmap page -------------------------------------------------------------------
+
+let heat = null; // { settings, tracks, years, tileCache, params, isAll, map }
+
+async function renderHeatmap(params) {
+  const isAll = CURRENT === "all";
+  const q = {};
+  if (!isAll) q.person = CURRENT;
+  if (params.type) q.type = params.type;
+  if (params.year) q.year = params.year;
+  document.body.classList.add("fullmap");
+  const [data] = await Promise.all([api("heatmap/tracks?" + new URLSearchParams(q)), (async () => { BASEMAPS ??= await api("basemaps"); })()]);
+  const tracks = data.items.map((t) => ({ ...t, coords: lonLat(t.polyline) }));
+  heat = { settings: loadMapSettings(), tracks, years: data.years, tileCache: new Map(), params, isAll, map: null };
+  const s = heat.settings;
+
+  view.innerHTML = `<div class="heat-wrap">
+      <div class="heat-head">${pageHead("Heatmap", `
+        ${switchHtml("layer", [["heatmap", "Heatmap"], ["tiles", "Explorer tiles"]], s.layer)}
+        ${badgeHtml("settings", "Settings", "", { panel: "<div data-settings></div>", wide: true })}
+        ${badgeHtml("filter", "Filter", filterSummary(), { panel: filterPanel() })}
+        <button class="badge ${s.kpis ? "on" : ""}" data-kpis>KPIs</button>`)}</div>
+      <div class="heat-map-wrap"><div id="map" class="heat-map"></div><div id="heat-kpis" class="map-kpis" ${s.kpis ? "" : "hidden"}></div></div>
+    </div>`;
+  const head = view.querySelector(".heat-head");
+  bindBadges(head);
+  renderSettingsPanel();
+  head.querySelectorAll("[data-switch=layer]").forEach((b) => b.onclick = () => {
+    if (s.layer === b.dataset.value) return;
+    const prevSource = s[s.layer].map.source;
+    s.layer = b.dataset.value; saveMapSettings(s);
+    head.querySelectorAll("[data-switch=layer]").forEach((x) => x.classList.toggle("on", x === b));
+    renderSettingsPanel();
+    applyBase(prevSource !== s[s.layer].map.source);
+  });
+  head.querySelector("[data-kpis]").onclick = (e) => {
+    s.kpis = !s.kpis; saveMapSettings(s);
+    e.currentTarget.classList.toggle("on", s.kpis);
+    document.getElementById("heat-kpis").hidden = !s.kpis;
+  };
+  head.querySelectorAll("[data-filter-set]").forEach((sel) => sel.onchange = () => {
+    const p = Object.fromEntries(Object.entries({ ...heat.params, [sel.dataset.filterSet]: sel.value }).filter(([, v]) => v));
+    location.hash = "#/heatmap?" + new URLSearchParams(p);
+  });
+
+  const bounds = boundsOf(tracks.map((t) => t.coords));
+  const map = await createMap("map", s[s.layer].map, bounds ? { bounds } : {});
+  heat.map = map;
+  drawHeatLayers();
+  map.on("click", "routes", (e) => {
+    const items = [...new Map(e.features.map((f) => [f.properties.id, f.properties])).values()].slice(0, 6);
+    new maplibregl.Popup({ closeButton: false, maxWidth: "260px" }).setLngLat(e.lngLat)
+      .setHTML(items.map((p) => `<a href="#/activity/${p.id}">${esc(p.type)} · ${esc(p.day)}</a>${isAll ? ` <span class="hint">${esc(p.person)}</span>` : ""}`).join("<br>"))
+      .addTo(map);
+  });
+  map.on("mouseenter", "routes", () => { map.getCanvas().style.cursor = "pointer"; });
+  map.on("mouseleave", "routes", () => { map.getCanvas().style.cursor = ""; });
+  map.on("moveend", () => {
+    // Tile sizes in km depend on latitude.
+    view.querySelectorAll("[data-km]").forEach((el) => { el.textContent = `~${num(tileWidthKm(Number(el.dataset.km), map.getCenter().lat), el.dataset.km >= 16 ? 2 : 1)} km`; });
+  });
+}
+
+function filterSummary() {
+  const pt = heat.params.type || "";
+  return [pt.startsWith("g:") ? groupLabel(pt.slice(2)) : pt ? typeLabel(pt) : "", heat.params.year || ""].filter(Boolean).join(" · ") || "All";
+}
+function filterPanel() {
+  return section("Activity type", `<select data-filter-set="type"><option value="">All types</option>${typeOptions().map((g) =>
+      `<optgroup label="${esc(g.group)}">${g.options.map(([v, l]) => `<option value="${esc(v)}" ${v === heat.params.type ? "selected" : ""}>${esc(l)}</option>`).join("")}</optgroup>`).join("")}</select>`)
+    + section("Year", `<select data-filter-set="year"><option value="">All years</option>${heat.years.map((y) =>
+      `<option ${y === heat.params.year ? "selected" : ""}>${y}</option>`).join("")}</select>`);
+}
+
+function renderSettingsPanel() {
+  const s = heat.settings, mode = s.layer, M = s[mode].map, H = s.heatmap, T = s.tiles;
+  const lat = heat.map ? heat.map.getCenter().lat : 52;
+  const mapSection = section("Base map", [...(BASEMAPS || []).map((b) => optRadio("map.source", b.key, M.source, b.label)),
+      optRadio("map.source", "none", M.source, "No base map")].join(""))
+    + section("Map colours", BASE_TONES.map(([k, l]) => optRadio("map.tone", k, M.tone, l)).join(""));
+  let modeSections;
+  if (mode === "heatmap") {
+    modeSections = section("Style", [optRadio("heatmap.style", "density", H.style, "Density"),
+        optRadio("heatmap.style", "coverage", H.style, "Coverage"),
+        optRadio("heatmap.style", "glow", H.style, "Heat glow")].join(""))
+      + section("Colours", (H.style === "glow" ? rampPicker("heatmap.ramp", H.ramp) : colorPicker("heatmap.color", H.color))
+        + (heat.isAll && H.style !== "glow" ? optCheck("heatmap.perPerson", H.perPerson, "A colour per person") : ""))
+      + section("Line width", `<input type="range" min="1" max="6" step="0.5" value="${H.width}" name="heatmap.width">`)
+      + (H.style !== "coverage" ? section("Overlap strength", `<input type="range" min="0.1" max="0.9" step="0.05" value="${H.intensity}" name="heatmap.intensity">`) : "");
+  } else {
+    modeSections = section("Tile size", TILE_SIZES.map(([z, l]) =>
+        optRadio("tiles.zoom", z, T.zoom, `${l} <span class="hint" data-km="${z}">~${num(tileWidthKm(z, lat), z >= 16 ? 2 : 1)} km</span>`)).join(""))
+      + section("Style", [optRadio("tiles.style", "coverage", T.style, "Coverage"), optRadio("tiles.style", "heat", T.style, "By number of visits")].join(""))
+      + section("Colours", T.style === "heat" ? rampPicker("tiles.ramp", T.ramp) : colorPicker("tiles.color", T.color))
+      + section("Display", [optRadio("tiles.display", "grid", T.display, "Single tiles"), optRadio("tiles.display", "area", T.display, "One area")].join(""))
+      + section("Highlights", [optCheck("tiles.square", T.square, "Max square", "Largest square made only of visited tiles"),
+          optCheck("tiles.cluster", T.cluster, "Cluster", "Largest connected group of tiles with visited tiles on all four sides"),
+          optCheck("tiles.routes", T.routes, "Routes")].join(""));
+  }
+  const el = view.querySelector("[data-settings]");
+  el.innerHTML = `<div class="panel-cols"><div>${modeSections}</div><div>${mapSection}</div></div>`;
+  bindSettingsPanel(el);
+}
+
+// Apply one setting with the cheapest possible map update.
+function bindSettingsPanel(el) {
+  const s = heat.settings;
+  const set = (path, value) => {
+    const [a, b, c] = path.split(".");
+    if (c) s[a][b][c] = value; else s[a][b] = value;
+    saveMapSettings(s);
+  };
+  const resolve = (name) => (name.startsWith("map.") ? `${s.layer}.${name}` : name);
+  el.querySelectorAll("input[type=radio]").forEach((r) => r.onchange = () => {
+    const name = resolve(r.name), value = r.name === "tiles.zoom" ? Number(r.value) : r.value;
+    set(name, value);
+    if (r.name === "map.source") applyBase(true);
+    else if (r.name === "map.tone") applyBase(false);
+    else { drawHeatLayers(); if (/style$/.test(r.name)) renderSettingsPanel(); }
+  });
+  el.querySelectorAll("input[type=checkbox]").forEach((c) => c.onchange = () => {
+    set(c.name, c.checked);
+    drawHeatLayers();
+  });
+  el.querySelectorAll("input[type=range]").forEach((r) => {
+    r.oninput = () => { set(r.name, Number(r.value)); updatePaint(); };
+  });
+  el.querySelectorAll("[data-color]").forEach((b) => b.onclick = () => {
+    set(b.dataset.color, b.dataset.value);
+    el.querySelectorAll(`[data-color="${b.dataset.color}"]`).forEach((x) => x.classList.toggle("active", x === b));
+    el.querySelector(`input[type=color][name="${b.dataset.color}"]`).value = b.dataset.value;
+    updatePaint();
+  });
+  el.querySelectorAll("input[type=color]").forEach((inp) => inp.oninput = () => {
+    set(inp.name, inp.value);
+    el.querySelectorAll(`[data-color="${inp.name}"]`).forEach((x) => x.classList.remove("active"));
+    updatePaint();
+  });
+  el.querySelectorAll("[data-ramp]").forEach((b) => b.onclick = () => {
+    set(b.dataset.ramp, b.dataset.value);
+    el.querySelectorAll(`[data-ramp="${b.dataset.ramp}"]`).forEach((x) => x.classList.toggle("active", x === b));
+    updatePaint();
+  });
+}
+
+// Base map: change only the raster paint for colours, swap the style only for a new source.
+function applyBase(newSource) {
+  const map = heat.map;
+  if (!map) return;
+  const M = heat.settings[heat.settings.layer].map;
+  if (newSource) {
+    map.setStyle(baseStyle(M));
+    map.once("style.load", () => drawHeatLayers());
+    return;
+  }
+  if (!map.getLayer("base")) return;
+  const tone = toneOf(M.tone);
+  for (const p of TONE_PROPS) map.setPaintProperty("base", p, tone[p] ?? TONE_DEFAULTS[p]);
+  drawHeatLayers();
+}
+
+const heatRadius = (w) => ["interpolate", ["linear"], ["zoom"], 6, 2 * w, 12, 6 * w, 16, 14 * w];
+const lineWidth = (w) => ["interpolate", ["linear"], ["zoom"], 8, w * 0.5, 13, w, 16, w * 2];
+const rampExpr = (r, input) => ["interpolate", ["linear"], input, 0, r[0], 0.25, r[1], 0.5, r[2], 0.75, r[3], 1, r[4]];
+
+// Colour / width / strength: update paint properties only (instant, no data rebuild).
+function updatePaint() {
+  const map = heat.map, s = heat.settings;
+  if (!map) return;
+  if (s.layer === "heatmap") {
+    const H = s.heatmap;
+    if (map.getLayer("routes-glow")) {
+      const r = RAMPS[H.ramp] || RAMPS.fire;
+      map.setPaintProperty("routes-glow", "heatmap-radius", heatRadius(H.width));
+      map.setPaintProperty("routes-glow", "heatmap-weight", 0.15 * H.intensity);
+      map.setPaintProperty("routes-glow", "heatmap-color", ["interpolate", ["linear"], ["heatmap-density"], 0, "rgba(0,0,0,0)", 0.08, r[0], 0.3, r[1], 0.55, r[2], 0.8, r[3], 1, r[4]]);
+    } else if (map.getLayer("routes")) {
+      map.setPaintProperty("routes", "line-width", lineWidth(H.width));
+      map.setPaintProperty("routes", "line-opacity", H.style === "coverage" ? 1 : H.intensity);
+      map.setPaintProperty("routes", "line-color", heat.isAll && H.perPerson ? ["get", "pcolor"] : H.color);
+    }
+  } else {
+    const T = s.tiles;
+    if (map.getLayer("tiles-fill")) {
+      map.setPaintProperty("tiles-fill", "fill-color", T.style === "heat" ? rampExpr(RAMPS[T.ramp] || RAMPS.viridis, ["get", "f"]) : T.color);
+    }
+    if (map.getLayer("tiles-line")) map.setPaintProperty("tiles-line", "line-color", T.style === "heat" ? "#ffffff" : T.color);
+  }
+}
+
+function heatTiles() {
+  const z = heat.settings.tiles.zoom;
+  if (!heat.tileCache.has(z)) {
+    const tiles = computeTiles(heat.tracks, z);
+    heat.tileCache.set(z, { tiles, square: maxSquare(tiles), cluster: clusterOf(tiles) });
+  }
+  return heat.tileCache.get(z);
+}
+
+function renderHeatKpis() {
+  const el = document.getElementById("heat-kpis");
+  if (!el) return;
+  const t = heat.tracks;
+  const sum = (k) => t.reduce((a, x) => a + (x[k] || 0), 0);
+  let html = `${kpi("Activities", num(t.length))}${kpi("Distance", km(sum("distance_m")))}${kpi("Moving time", hours(sum("moving_s")))}`;
+  if (heat.settings.layer === "tiles") {
+    const { tiles, square, cluster } = heatTiles();
+    html += `${kpi("Tiles", num(tiles.size))}${kpi("Max square", square.size ? `${square.size} × ${square.size}` : "–")}${kpi("Cluster", `${num(cluster.length)} tiles`)}`;
+  } else {
+    html += kpi("Ascent", meters(sum("ascent_m")));
+  }
+  el.innerHTML = html;
+}
+
+const HEAT_LAYERS = ["routes-glow", "tiles-fill", "tiles-line", "cluster", "square", "routes"];
+const HEAT_SOURCES = ["routes", "route-points", "tiles", "cluster", "square"];
+
+// Rebuild the data layers (mode, style, tile size, display or highlights changed).
 function drawHeatLayers() {
   const map = heat.map, s = heat.settings;
   if (!map) return;
   for (const id of HEAT_LAYERS) if (map.getLayer(id)) map.removeLayer(id);
-  for (const id of ["routes", "route-points", "tiles", "cluster", "square"]) if (map.getSource(id)) map.removeSource(id);
+  for (const id of HEAT_SOURCES) if (map.getSource(id)) map.removeSource(id);
   const people = realPeople();
-  const colorFor = (pid) => personColor(person(pid), Math.max(0, people.findIndex((p) => p.id === pid)));
-
-  // Routes (used by heatmap and as an optional layer under tiles). People later in the
-  // order are drawn first, so the first person ends up on top.
   const order = (pid) => people.findIndex((p) => p.id === pid);
+  const colorFor = (pid) => personColor(person(pid), Math.max(0, order(pid)));
+  // People later in the order are drawn first, so the first person ends up on top.
   const routes = [...heat.tracks].sort((a, b) => order(b.person_id) - order(a.person_id)).map((t) => ({
     type: "Feature",
-    properties: { id: t.id, day: t.day, type: typeLabel(t.activity_type), person: personLabel(t.person_id),
-                  color: heat.isAll && s.heatmap.perPerson ? colorFor(t.person_id) : colorHex(s.heatmap.color) },
+    properties: { id: t.id, day: t.day, type: typeLabel(t.activity_type), person: personLabel(t.person_id), pcolor: colorFor(t.person_id) },
     geometry: { type: "LineString", coordinates: t.coords },
   }));
   map.addSource("routes", { type: "geojson", data: { type: "FeatureCollection", features: routes } });
@@ -897,45 +982,23 @@ function drawHeatLayers() {
   if (s.layer === "heatmap") {
     const H = s.heatmap;
     if (H.style === "glow") {
-      const pts = densify(heat.tracks).map((c) => ({ type: "Feature", properties: {}, geometry: { type: "Point", coordinates: c } }));
-      map.addSource("route-points", { type: "geojson", data: { type: "FeatureCollection", features: pts } });
-      const r = RAMPS[H.ramp] || RAMPS.fire;
+      heat.glowPoints ??= densify(heat.tracks).map((c) => ({ type: "Feature", properties: {}, geometry: { type: "Point", coordinates: c } }));
+      map.addSource("route-points", { type: "geojson", data: { type: "FeatureCollection", features: heat.glowPoints } });
       map.addLayer({ id: "routes-glow", type: "heatmap", source: "route-points", paint: {
-        "heatmap-radius": ["interpolate", ["linear"], ["zoom"], 6, 2 * H.width, 12, 6 * H.width, 16, 14 * H.width],
-        "heatmap-weight": 0.15 * H.intensity,
-        "heatmap-intensity": ["interpolate", ["linear"], ["zoom"], 6, 0.5, 14, 1],
-        "heatmap-opacity": 0.9,
-        "heatmap-color": ["interpolate", ["linear"], ["heatmap-density"], 0, "rgba(0,0,0,0)", 0.08, r[0], 0.3, r[1], 0.55, r[2], 0.8, r[3], 1, r[4]],
-      } });
-      // Invisible lines keep routes clickable.
+        "heatmap-intensity": ["interpolate", ["linear"], ["zoom"], 6, 0.5, 14, 1], "heatmap-opacity": 0.9 } });
       map.addLayer({ id: "routes", type: "line", source: "routes", paint: { "line-opacity": 0, "line-width": 8 } });
     } else {
-      map.addLayer({ id: "routes", type: "line", source: "routes", layout: { "line-join": "round", "line-cap": "round" }, paint: {
-        "line-color": ["get", "color"],
-        "line-opacity": H.style === "coverage" ? 1 : H.intensity,
-        "line-width": ["interpolate", ["linear"], ["zoom"], 8, H.width * 0.5, 13, H.width, 16, H.width * 2],
-      } });
+      map.addLayer({ id: "routes", type: "line", source: "routes", layout: { "line-join": "round", "line-cap": "round" }, paint: {} });
     }
   } else {
     const T = s.tiles, z = T.zoom;
     const { tiles, square, cluster } = heatTiles();
-    if (T.routes) {
-      map.addLayer({ id: "routes", type: "line", source: "routes", paint: {
-        "line-color": "#ffffff", "line-opacity": 0.35, "line-width": ["interpolate", ["linear"], ["zoom"], 8, 0.5, 14, 1.2] } });
-    }
     const max = Math.max(1, ...[...tiles.values()].map((t) => t.visits));
     map.addSource("tiles", { type: "geojson", data: { type: "FeatureCollection",
       features: [...tiles.values()].map((t) => tileFeature(t, z, { v: t.visits, f: Math.log(t.visits) / Math.log(max + 1) })) } });
-    const ramp = RAMPS[T.ramp] || RAMPS.viridis;
-    const fillColor = T.style === "heat"
-      ? ["interpolate", ["linear"], ["get", "f"], 0, ramp[0], 0.25, ramp[1], 0.5, ramp[2], 0.75, ramp[3], 1, ramp[4]]
-      : colorHex(T.color);
     map.addLayer({ id: "tiles-fill", type: "fill", source: "tiles", paint: {
-      "fill-color": fillColor, "fill-opacity": T.style === "heat" ? 0.55 : 0.32, "fill-antialias": T.display === "grid" } });
-    if (T.display === "grid") {
-      map.addLayer({ id: "tiles-line", type: "line", source: "tiles", paint: {
-        "line-color": T.style === "heat" ? "#ffffff" : colorHex(T.color), "line-opacity": 0.35, "line-width": 0.6 } });
-    }
+      "fill-opacity": T.style === "heat" ? 0.55 : 0.32, "fill-antialias": T.display === "grid" } });
+    if (T.display === "grid") map.addLayer({ id: "tiles-line", type: "line", source: "tiles", paint: { "line-opacity": 0.35, "line-width": 0.6 } });
     if (T.cluster && cluster.length) {
       map.addSource("cluster", { type: "geojson", data: { type: "FeatureCollection", features: cluster.map((t) => tileFeature(t, z)) } });
       map.addLayer({ id: "cluster", type: "fill", source: "cluster", paint: { "fill-color": "#a678ff", "fill-opacity": 0.35 } });
@@ -946,13 +1009,18 @@ function drawHeatLayers() {
       map.addSource("square", { type: "geojson", data: { type: "Feature", properties: {}, geometry: { type: "Polygon", coordinates: [[[w, sth], [e, sth], [e, n], [w, n], [w, sth]]] } } });
       map.addLayer({ id: "square", type: "line", source: "square", paint: { "line-color": "#ffd23f", "line-width": 3 } });
     }
+    // Routes on top of the tiles, so they stay visible.
+    map.addLayer({ id: "routes", type: "line", source: "routes", layout: { "line-join": "round", "line-cap": "round", visibility: T.routes ? "visible" : "none" },
+      paint: { "line-color": DARK_TONES.has(T.map.tone) || T.map.source === "none" && document.documentElement.dataset.theme === "dark" ? "#ffffff" : "#1b1e25",
+               "line-opacity": 0.7, "line-width": ["interpolate", ["linear"], ["zoom"], 8, 0.6, 14, 1.6] } });
   }
+  updatePaint();
   renderHeatKpis();
 }
 
 async function showRouteMap(container, polyline) {
-  const map = await createMap(container, loadMapSettings().map, { interactive: true });
   const coords = lonLat(polyline);
+  const map = await createMap(container, loadMapSettings().heatmap.map, { bounds: boundsOf([coords]) });
   const accent = getComputedStyle(document.documentElement).getPropertyValue("--accent").trim();
   map.addSource("route", { type: "geojson", data: { type: "Feature", properties: {}, geometry: { type: "LineString", coordinates: coords } } });
   map.addLayer({ id: "route", type: "line", source: "route", layout: { "line-join": "round", "line-cap": "round" },
@@ -961,7 +1029,6 @@ async function showRouteMap(container, polyline) {
     { type: "Feature", properties: { c: "#3ecf8e" }, geometry: { type: "Point", coordinates: coords[0] } },
     { type: "Feature", properties: { c: "#ff6b6b" }, geometry: { type: "Point", coordinates: coords[coords.length - 1] } }] } });
   map.addLayer({ id: "ends", type: "circle", source: "ends", paint: { "circle-radius": 5, "circle-color": ["get", "c"], "circle-stroke-width": 2, "circle-stroke-color": "#fff" } });
-  fitTo(map, [coords]);
 }
 
 // ---- Coming-soon pages --------------------------------------------------------------
@@ -998,9 +1065,7 @@ async function renderCompare(params) {
       <span class="bar"><span style="width:${((p[k] || 0) / max(k)) * 100}%;background:${personColor(p, i)}"></span></span>
       <span class="bar-value">${fmt(p[k])}</span></div>`;
   view.innerHTML = `
-    <div class="page-head"><h2>Compare</h2>
-      <select id="year"><option value="">All time</option>${data.years.map((y) => `<option ${y === params.year ? "selected" : ""}>${y}</option>`).join("")}</select>
-    </div>
+    ${pageHead("Compare", badgeHtml("year", "Period", params.year || "All time", { panel: section("Year", `<select id="year"><option value="">All time</option>${data.years.map((y) => `<option ${y === params.year ? "selected" : ""}>${y}</option>`).join("")}</select>`) }))}
     ${hint("Everyone side by side, in the order set in Settings › People.")}<br>
     <div class="cards">
       ${[["Activities", "activities", (v) => num(v || 0)], ["Distance", "distance_m", km], ["Moving time", "moving_s", hours], ["Ascent", "ascent_m", meters]]
@@ -1013,6 +1078,7 @@ async function renderCompare(params) {
       <tbody>${p.groups.map((g) => `<tr><td>${esc(groupLabel(g.category))}</td><td class="num">${num(g.activities)}</td>
         <td class="num">${g.distance_m ? km(g.distance_m) : "–"}</td><td class="num">${hours(g.moving_s)}</td></tr>`).join("")
         || `<tr><td colspan="4" class="hint">No activities</td></tr>`}</tbody></table></div>`).join("")}</div>`;
+  bindBadges(view.querySelector(".page-head"));
   document.getElementById("year").onchange = (e) => {
     location.hash = "#/compare" + (e.target.value ? "?year=" + e.target.value : "");
   };
@@ -1024,9 +1090,8 @@ const SETTINGS_TABS = [["general", "General"], ["people", "People"], ["import", 
 
 async function renderSettings(tab, params) {
   tab = SETTINGS_TABS.some(([k]) => k === tab) ? tab : "general";
-  view.innerHTML = `<div class="page-head"><h2>Settings</h2></div>
-    <div class="tabs">${SETTINGS_TABS.map(([k, l]) => `<a href="#/settings/${k}" class="${k === tab ? "active" : ""}">${l}</a>`).join("")}</div>
-    <div id="tab"></div>`;
+  view.innerHTML = `${pageHead("Settings", switchHtml("tab", SETTINGS_TABS, tab))}<div id="tab"></div>`;
+  view.querySelectorAll("[data-switch=tab]").forEach((b) => b.onclick = () => { location.hash = "#/settings/" + b.dataset.value; });
   const el = document.getElementById("tab");
   if (tab === "people") await settingsPeople(el);
   else if (tab === "import") await settingsImport(el, params);
@@ -1312,6 +1377,7 @@ async function route() {
     if (CURRENT === "all" && (section === "fitness" || section === "stats")) { location.hash = "#/compare"; return; }
     if (CURRENT !== "all" && section === "compare") { location.hash = "#/activities"; return; }
     renderHeader(section);
+    document.documentElement.style.setProperty("--header-h", document.querySelector("header").offsetHeight + "px");
     if (parts[0] === "activity") await renderActivity(parts[1]);
     else if (section === "settings") await renderSettings(parts[1], params);
     else if (section === "compare") await renderCompare(params);

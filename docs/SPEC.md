@@ -363,8 +363,16 @@ The visual design is defined by the project owner; the technical preview follows
 | Statistics | Totals by week/month/year and type; duration curves; records. |
 | Compare | Everyone side by side (only with “Everyone” selected). |
 
+### Page structure
+Every tab has the same header: the **title**, then **badges** in one row (rectangular, slightly
+rounded, clearly interactive). A badge either toggles something (e.g. KPIs) or opens a panel
+with settings; panels stay open while settings change. A main switch (e.g. Heatmap | Explorer
+tiles) is slightly larger than the other badges. Tab-specific tools (e.g. list/tile view) sit
+at the right end of the row.
+
 ### Style rules
-- Dark theme by default, light theme via a toggle (remembered per browser).
+- Light theme by default, dark theme via a toggle (remembered per browser).
+- Accent colour: deep teal (no default "link blue").
 - Every section is a card with a background (no borders).
 - Descriptions always use the same small muted style; states (next scan, saved, running,
   errors, file statuses) always the same small size in a state colour.
@@ -382,21 +390,20 @@ The visual design is defined by the project owner; the technical preview follows
   policy requires; each tile is downloaded once. Source configurable (setting `basemap_url`).
   Dark theme: desaturated and darkened tiles. Vector tiles (as in HA 2026.10) are a later
   option.
-- The Heatmap page is full screen: a bar of badges under the header, the map below.
-  Badges, in order of importance (the first two are larger):
-  1. **Map** — base map (OpenStreetMap, OpenTopoMap, CyclOSM or none; only these sources are
-     proxied) and its colours (original, muted, grayscale, dark, faded light). Labels are part
-     of raster tiles and cannot be toggled.
-  2. **Heatmap | Explorer tiles** — what is drawn.
-  3. Heatmap options: *Style* (density — semi-transparent lines, overlaps stronger; coverage —
-     solid lines; heat glow — colour gradient from points spaced ~30 m along the routes),
-     *Colours* (line colour or gradient; with Everyone: a colour per person, drawn in the
-     configured order), *Weight* (width, overlap strength).
-  4. Tile options: *Tile size* (zoom 14 explorer tiles, zoom 16, zoom 17 small squares),
-     *Style* (coverage or by number of visits), *Colours*, *Display* (single tiles with grid
-     or one area), *Highlights* (max square, cluster, routes under tiles).
-  5. *Filter* (type or group, year) and a *KPIs* switch (overlay with activities, distance,
-     time, and tiles / max square / cluster).
+- The Heatmap page is full screen: header row (title + badges), then the map.
+  Badges: **Heatmap | Explorer tiles** (main switch) · **Settings** · **Filter** · **KPIs**.
+  Settings (per mode, including the base map — so each mode keeps its own map):
+  - Base map: OpenStreetMap (default), OpenTopoMap, CyclOSM or none; colours: faded light
+    (default), original, muted, grayscale, soft dark, slate, dusk, dark (high contrast). The
+    soft dark tones lift blacks and lower contrast so routes stand out without a harsh map.
+  - Heatmap: style (density, coverage, heat glow), colour (presets or any colour from a
+    colour wheel; gradient for heat glow; a colour per person for Everyone), line width,
+    overlap strength.
+  - Explorer tiles: size (zoom 13 large squares, 14 explorer tiles, 16 medium, 17
+    small squares), style (coverage / by visits), colours, display (single tiles / one area),
+    highlights (max square, cluster, routes on top of tiles).
+  Colour, width and strength changes only update paint properties (instant); the map starts
+  directly at the data bounds (no world-view jump).
 - All choices are saved per browser and separately per mode, so switching between heatmap
   and tiles restores each mode's colours.
 - Tiles, max square and cluster on this page are computed **in the browser** from the route
