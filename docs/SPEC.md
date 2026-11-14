@@ -54,7 +54,7 @@ HA automation / user ──► /share/trailbook/<person>/*.fit
          trigger (stdin / API / button / optional interval)
                                    ▼
 ┌──────────────────────── add-on container ────────────────────────┐
-│  API server (FastAPI + uvicorn, 1 worker)                         │
+│  API server (Starlette + uvicorn, 1 worker)                         │
 │   • serves the static frontend                                    │
 │   • JSON API                                                      │
 │   • map tile proxy + disk cache                                   │
@@ -81,7 +81,7 @@ Browser: static HTML/JS (MapLibre GL + ECharts) — all rendering client-side
 ### Stack
 | Layer | Choice | Reason |
 |---|---|---|
-| Backend | Python 3.12, FastAPI, uvicorn | Small, async, well known. |
+| Backend | Python 3.12, Starlette, uvicorn (h11) | Pure Python, small: ~45 MB idle RSS measured for the API process (FastAPI/pydantic dropped to save memory). |
 | Database | SQLite via stdlib `sqlite3`, WAL mode, hand-written migrations | No server process, single file, part of HA backups. |
 | FIT parsing | Garmin FIT SDK for Python (`garmin-fit-sdk`) | Official, pure Python, knows all sports and fields. |
 | Frontend | TypeScript + Vite, static build | Architecture-independent; served by the add-on. UI framework decided when UI design starts (Svelte is the default candidate). |
@@ -390,10 +390,10 @@ API: `POST /api/export`, `GET /api/export/status`, `GET /api/export/{name}` (dow
 
 ## 14. Milestones
 
-1. **Importer core** — FIT parsing, skip non-activities, sport mapping, summary, SQLite,
+1. **Importer core** *(done)* — FIT parsing, skip non-activities, sport mapping, summary, SQLite,
    import manager (scan, statuses, duplicates, missing), CLI to run it on a PC. Tested on a
    real Garmin export.
-2. **API + minimal UI** — activity list and detail with streams.
+2. **API + minimal UI** — activity list and detail with streams. *(done: `trailbook serve`, technical preview UI)*
 3. **Map** — all routes, heatmap effect, tile proxy.
 4. **Statistics** — totals, load, CTL/ATL/TSB, best efforts and curves.
 5. **Add-on** — packaging, Ingress, stdin trigger, multi-arch CI, install on HA Yellow.

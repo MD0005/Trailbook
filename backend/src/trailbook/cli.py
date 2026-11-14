@@ -8,7 +8,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import __version__, db, importer, sports
+from . import __version__, db, importer, jobs, sports
 
 
 def _set_low_priority() -> None:
@@ -31,60 +31,79 @@ def _fmt_km(metres: float | None) -> str:
 
 
 def cmd_scan(conn, args) -> int:
-    root = args.root or _setting(conn, "root")
+    root = args.root or db.get_setting(conn, "root")
     if not root:
         print("No root folder given and none stored yet. Usage: trailbook scan <folder>")
         return 2
     root = str(Path(root).resolve())
-    conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('root', ?)", (root,))
+    db.set_setting(conn, "root", root)
+    out = (lambda *a, **k: None) if args.quiet else print
 
     if args.low_priority:
         _set_low_priority()
 
     started = importer.now_iso()
-    t0 = time.monotonic()
-    scan = importer.scan(conn, root)
-    print(
-        f"Scanned {scan.scanned} files in {time.monotonic() - t0:.2f} s: "
-        f"{scan.new} new, {scan.changed} changed, {scan.missing} missing, "
-        f"{scan.returned} returned."
-    )
-    for person in scan.new_persons:
-        print(f"  new person: {person}")
-    for name in scan.ignored:
-        print(f"  ignored (not in a person folder or unreadable): {name}")
-
-    result = importer.ImportResult()
-    if not args.no_import:
-        t1 = time.monotonic()
-
-        def progress(i, total, row, outcome):
-            if args.verbose or outcome in ("imported", "error"):
-                name = row["rel_path"] + (f"!{row['zip_member']}" if row["zip_member"] else "")
-                print(f"  [{i}/{total}] {outcome:9} {name}")
-
-        result = importer.run_queue(conn, root, progress=progress, limit=args.limit)
-        print(
-            f"Import finished in {time.monotonic() - t1:.1f} s: {result.imported} imported, "
-            f"{result.skipped} skipped, {result.duplicates} duplicates, {result.errors} errors."
+    jobs.write_progress(conn, state="running", phase="scan", started_at=started)
+    try:
+        t0 = time.monotonic()
+        scan = importer.scan(conn, root)
+        out(
+            f"Scanned {scan.scanned} files in {time.monotonic() - t0:.2f} s: "
+            f"{scan.new} new, {scan.changed} changed, {scan.missing} missing, "
+            f"{scan.returned} returned."
         )
+        for person in scan.new_persons:
+            out(f"  new person: {person}")
+        for name in scan.ignored:
+            out(f"  ignored (not in a person folder or unreadable): {name}")
 
+        result = importer.ImportResult()
+        if not args.no_import:
+            t1 = time.monotonic()
+            last_write = 0.0
+
+            def progress(i, total, row, outcome):
+                nonlocal last_write
+                if args.verbose or outcome in ("imported", "error"):
+                    name = row["rel_path"] + (f"!{row['zip_member']}" if row["zip_member"] else "")
+                    out(f"  [{i}/{total}] {outcome:9} {name}")
+                now = time.monotonic()
+                if now - last_write >= 1.0 or i == total:
+                    last_write = now
+                    jobs.write_progress(
+                        conn, state="running", phase="import", started_at=started,
+                        done=i, total=total, current=row["rel_path"],
+                    )  # fmt: skip
+
+            result = importer.run_queue(conn, root, progress=progress, limit=args.limit)
+            out(
+                f"Import finished in {time.monotonic() - t1:.1f} s: {result.imported} imported, "
+                f"{result.skipped} skipped, {result.duplicates} duplicates, "
+                f"{result.errors} errors."
+            )
+    except Exception as exc:
+        jobs.write_progress(
+            conn, state="failed", error=f"{type(exc).__name__}: {exc}",
+            started_at=started, finished_at=importer.now_iso(),
+        )  # fmt: skip
+        raise
+
+    finished = importer.now_iso()
+    counts = {
+        "scanned": scan.scanned, "new": scan.new, "missing": scan.missing,
+        "imported": result.imported, "skipped": result.skipped,
+        "duplicates": result.duplicates, "errors": result.errors,
+    }  # fmt: skip
     conn.execute(
         """INSERT INTO import_runs (started_at, finished_at, trigger, scanned, new, imported,
                                     skipped, duplicates, errors, missing)
-           VALUES (?, ?, 'cli', ?, ?, ?, ?, ?, ?, ?)""",
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
-            started,
-            importer.now_iso(),
-            scan.scanned,
-            scan.new,
-            result.imported,
-            result.skipped,
-            result.duplicates,
-            result.errors,
-            scan.missing,
+            started, finished, args.trigger, scan.scanned, scan.new, result.imported,
+            result.skipped, result.duplicates, result.errors, scan.missing,
         ),
-    )
+    )  # fmt: skip
+    jobs.write_progress(conn, state="finished", started_at=started, finished_at=finished, **counts)
     return 0
 
 
@@ -208,8 +227,22 @@ def cmd_types(conn, args) -> int:
 
 
 def _setting(conn, key: str) -> str | None:
-    row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
-    return row["value"] if row else None
+    return db.get_setting(conn, key)
+
+
+def cmd_serve(conn, args) -> int:
+    import uvicorn
+
+    from .api import create_app
+
+    if args.root:
+        db.set_setting(conn, "root", str(Path(args.root).resolve()))
+    conn.close()
+    app = create_app(args.db)
+    uvicorn.run(
+        app, host=args.host, port=args.port, workers=1, log_level="warning", access_log=False
+    )
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -228,6 +261,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--low-priority", action="store_true", help="run with the lowest CPU priority")
     p.add_argument("--limit", type=int, help="import at most N files")
     p.add_argument("-v", "--verbose", action="store_true", help="print every file")
+    p.add_argument("-q", "--quiet", action="store_true", help="print nothing")
+    p.add_argument("--trigger", default="cli", help=argparse.SUPPRESS)
     p.set_defaults(func=cmd_scan)
 
     sub.add_parser("status", help="summary of files and activities").set_defaults(func=cmd_status)
@@ -263,6 +298,12 @@ def main(argv: list[str] | None = None) -> int:
     p.set_defaults(func=cmd_set_type)
 
     sub.add_parser("types", help="list activity groups and types").set_defaults(func=cmd_types)
+
+    p = sub.add_parser("serve", help="run the web server (API + preview UI)")
+    p.add_argument("--host", default="127.0.0.1")
+    p.add_argument("--port", type=int, default=8099)
+    p.add_argument("--root", help="root folder with one subfolder per person")
+    p.set_defaults(func=cmd_serve)
 
     args = parser.parse_args(argv)
     if hasattr(sys.stdout, "reconfigure"):

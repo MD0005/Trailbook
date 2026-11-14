@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "trailbook",
+      "runtimeExecutable": ".venv/Scripts/trailbook",
+      "runtimeArgs": ["--db", "data/trailbook.db", "serve", "--root", "sample-data", "--port", "8099"],
+      "port": 8099
+    }
+  ]
+}

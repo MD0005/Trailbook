@@ -47,3 +47,9 @@ python -m venv .venv
 
 Tests: `cd backend && ../.venv/Scripts/python -m pytest`. Put your own FIT files in
 `sample-data/<person>/` (ignored by git) to also run the end-to-end test.
+
+Web preview (API + technical UI) on http://127.0.0.1:8099:
+
+```bash
+.venv/Scripts/trailbook serve --root sample-data
+```

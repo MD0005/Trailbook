@@ -1,0 +1,5 @@
+* text=auto eol=lf
+*.fit binary
+*.zip binary
+*.png binary
+*.db binary

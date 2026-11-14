@@ -178,18 +178,34 @@ MIGRATIONS: list[str] = [
 SCHEMA_VERSION = len(MIGRATIONS)
 
 
-def connect(path: str | Path) -> sqlite3.Connection:
-    """Open the database, apply pending migrations and return the connection."""
+def connect(path: str | Path, *, apply_migrations: bool = True) -> sqlite3.Connection:
+    """Open the database (applying pending migrations by default) and return the connection.
+
+    The API server migrates once at start-up and then opens short-lived connections per
+    request with `apply_migrations=False`.
+    """
     path = Path(path)
     if str(path) != ":memory:":
         path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(path, isolation_level=None)  # explicit transactions
+    # Explicit transactions; the API may use a connection from a worker thread.
+    conn = sqlite3.connect(path, isolation_level=None, check_same_thread=False)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout = 10000")  # importer and API write concurrently
     conn.execute("PRAGMA journal_mode = WAL")
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA synchronous = NORMAL")
-    migrate(conn)
+    if apply_migrations:
+        migrate(conn)
     return conn
+
+
+def get_setting(conn: sqlite3.Connection, key: str) -> str | None:
+    row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+    return row["value"] if row else None
+
+
+def set_setting(conn: sqlite3.Connection, key: str, value: str | None) -> None:
+    conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, value))
 
 
 def schema_version(conn: sqlite3.Connection) -> int:
