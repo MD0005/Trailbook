@@ -42,6 +42,22 @@ const ICON = {
   chevron: svg(`<path d="M6 9l6 6 6-6"/>`),
 };
 
+// Accent colours (light theme, dark theme). Chosen in Settings › General.
+const ACCENTS = [
+  ["sky", "Sky", "#0284c7", "#38bdf8"], ["teal", "Teal", "#0f766e", "#3fb5a0"],
+  ["indigo", "Indigo", "#4f46e5", "#8b93ff"], ["violet", "Violet", "#7c3aed", "#a78bfa"],
+  ["rose", "Rose", "#e11d48", "#fb7185"], ["amber", "Amber", "#b45309", "#fbbf24"],
+  ["green", "Green", "#15803d", "#4ade80"], ["graphite", "Graphite", "#334155", "#cbd5e1"],
+];
+function applyAccent() {
+  const a = ACCENTS.find(([k]) => k === store.get("accent")) || ACCENTS[0];
+  const dark = document.documentElement.dataset.theme === "dark";
+  const st = document.documentElement.style;
+  st.setProperty("--accent", dark ? a[3] : a[2]);
+  st.setProperty("--state", dark ? a[3] : a[2]);
+  st.setProperty("--accent-fg", dark ? "#0f1115" : "#ffffff");
+}
+
 const PERSON_ICONS = ["", "🏃", "🚴", "🏊", "🥾", "⛷️", "🧘", "🧗", "🐺", "🦊", "🐻", "🐼", "🦁", "🐸", "🐧", "🦄", "⭐", "🔥"];
 const PERSON_COLORS = ["#0f766e", "#e8590c", "#7048e8", "#d6336c", "#2b8a3e", "#f59f00", "#1c7ed6", "#495057"];
 
@@ -156,6 +172,7 @@ function setupTheme() {
     const next = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
     document.documentElement.dataset.theme = next;
     store.set("theme", next);
+    applyAccent();
     paint();
   };
   paint();
@@ -163,7 +180,22 @@ function setupTheme() {
 
 // ---- generic table: sortable header + filter row ------------------------------------
 
-function tableHtml(columns, rows, params, total, pageSize) {
+const PAGE_SIZE = 50;
+let observers = [];
+function stopObservers() { observers.forEach((o) => o.disconnect()); observers = []; }
+const countText = (shown, total) => (shown < total ? `${num(shown)} of ${num(total)}` : `${num(total)} row(s)`);
+
+function rowHtml(columns, r) {
+  return `<tr>${columns.map((c) => `<td class="${c.num ? "num" : ""} ${c.wrap ? "wrap" : ""} ${c.cls || ""}">${c.render(r)}</td>`).join("")}</tr>`;
+}
+
+function listBar(columns, params, shown, total) {
+  const filtered = columns.some((c) => c.filter && params[c.key]);
+  return `<div class="tablebar"><span class="hint" data-count>${countText(shown, total)}</span>
+    ${filtered ? `<button class="small" data-clear>Clear filters</button>` : ""}</div>`;
+}
+
+function tableHtml(columns, rows, params, total) {
   const sort = params.sort, dir = params.dir || "desc";
   const head = columns.map((c) => {
     if (!c.sort) return `<th class="${c.num ? "num" : ""}">${esc(c.label)}</th>`;
@@ -172,14 +204,35 @@ function tableHtml(columns, rows, params, total, pageSize) {
     return `<th class="${c.num ? "num" : ""}"><a href="#" class="sort ${active ? "active" : ""}" data-sort="${c.key}">${esc(c.label)} <span class="arrow">${arrow}</span></a></th>`;
   }).join("");
   const filters = columns.map((c) => (c.filter ? `<th>${filterControl(c, params)}</th>` : "<th></th>")).join("");
-  const body = rows.length
-    ? rows.map((r) => `<tr>${columns.map((c) =>
-        `<td class="${c.num ? "num" : ""} ${c.wrap ? "wrap" : ""} ${c.cls || ""}">${c.render(r)}</td>`).join("")}</tr>`).join("")
+  const body = rows.length ? rows.map((r) => rowHtml(columns, r)).join("")
     : `<tr><td colspan="${columns.length}" class="hint">Nothing matches the filters.</td></tr>`;
-  return pagerHtml(columns, params, total, pageSize) + `
+  return listBar(columns, params, rows.length, total) + `
     <div class="scroll"><table class="data">
       <thead><tr>${head}</tr><tr class="filters-row">${filters}</tr></thead>
-      <tbody>${body}</tbody></table></div>`;
+      <tbody data-rows>${body}</tbody></table></div>
+    ${rows.length < total ? `<div class="sentinel" data-sentinel><span class="hint">Loading…</span></div>` : ""}`;
+}
+
+// Rows are loaded 50 at a time when the end of the list scrolls into view.
+function infinite(root, loaded, total, fetchPage, append) {
+  const sentinel = root.querySelector("[data-sentinel]");
+  if (!sentinel) return;
+  const counter = root.querySelector("[data-count]");
+  let count = loaded, busy = false;
+  const obs = new IntersectionObserver(async (entries) => {
+    if (busy || !entries.some((e) => e.isIntersecting)) return;
+    busy = true;
+    try {
+      const items = await fetchPage(count);
+      append(items);
+      count = items.length ? count + items.length : total;
+      if (counter) counter.textContent = countText(Math.min(count, total), total);
+    } finally { busy = false; }
+    if (count >= total) { obs.disconnect(); sentinel.remove(); return; }
+    obs.unobserve(sentinel); obs.observe(sentinel); // still visible? load the next page too
+  }, { rootMargin: "600px" });
+  obs.observe(sentinel);
+  observers.push(obs);
 }
 
 function filterControl(c, params) {
@@ -191,21 +244,6 @@ function filterControl(c, params) {
     return `<select data-filter="${c.key}" title="${esc(c.label)}"><option value="">${esc(f.all || "All")}</option>${opts}</select>`;
   }
   return `<input data-filter="${c.key}" value="${esc(value)}" placeholder="${esc(f.placeholder || "filter…")}" title="${esc(c.label)}">`;
-}
-
-function pagerHtml(columns, params, total, pageSize) {
-  const page = Number(params.page || 0), pages = Math.max(1, Math.ceil(total / pageSize));
-  const filtered = columns.some((c) => c.filter && params[c.key]);
-  return `<div class="tablebar">
-      <span class="hint">${num(total)} row(s)</span>
-      ${filtered ? `<button class="small" data-clear>Clear filters</button>` : ""}
-      <span class="spacer"></span>
-      <span class="pager">
-        <button class="small" data-page="${page - 1}" ${page > 0 ? "" : "disabled"}>‹ Prev</button>
-        <span class="hint">Page ${page + 1} / ${pages}</span>
-        <button class="small" data-page="${page + 1}" ${page + 1 < pages ? "" : "disabled"}>Next ›</button>
-      </span>
-    </div>`;
 }
 
 function bindTable(route, params) {
@@ -288,23 +326,41 @@ function lineChart(values, times, label, u, color) {
 
 const kpi = (label, value) => `<div class="kpi"><span class="hint">${label}</span><b>${value}</b></div>`;
 
+// Compact summary strip: label, value, optional small note under it.
+function statStrip(items, cls = "") {
+  return `<div class="stat-strip ${cls}">${items.map(([label, value, note]) => `<div class="stat-item">
+      <span class="stat-label">${label}</span><span class="stat-value">${value}</span>${note ? `<span class="stat-note">${note}</span>` : ""}
+    </div>`).join("")}</div>`;
+}
+
 // ---- Activities ---------------------------------------------------------------------
 
-const ACT_PAGE = 60;
 const VIEWS = [["list", "List", ICON.list], ["small", "Small tiles", ICON.tilesSmall], ["large", "Large tiles", ICON.tilesLarge]];
+
+function activitySummary(t) {
+  const weeks = t.first && t.last ? Math.max(1, (Date.parse(t.last) - Date.parse(t.first)) / (7 * 864e5)) : 1;
+  return statStrip([
+    ["Activities", num(t.count), `${num(t.active_days || 0)} active days`],
+    ["Distance", km(t.distance_m), t.count ? `${km((t.distance_m || 0) / t.count)} avg` : ""],
+    ["Moving time", hours(t.moving_s), t.count ? `${hours((t.moving_s || 0) / weeks)} per week` : ""],
+    ["Elevation gain", meters(t.ascent_m), ""],
+    ["Longest", km(t.longest_m), t.longest_s ? `${dur(t.longest_s)} max time` : ""],
+    ["Calories", kcal(t.calories), ""],
+  ]);
+}
 
 async function renderActivities(params) {
   params = { sort: "date", dir: "desc", ...params };
   const mode = VIEWS.some(([k]) => k === store.get("view")) ? store.get("view") : "list";
   const isAll = CURRENT === "all";
-  const q = { limit: ACT_PAGE, offset: Number(params.page || 0) * ACT_PAGE, sort: params.sort, dir: params.dir };
+  const q = { limit: PAGE_SIZE, sort: params.sort, dir: params.dir };
   for (const k of ["type", "date"]) if (params[k]) q[k] = params[k];
   if (params.name) q.q = params.name;
   if (!isAll) q.person = CURRENT;
   else if (params.person) q.person = params.person;
   if (mode === "large") q.track = "1";
-  const data = await api("activities?" + new URLSearchParams(q));
-  const t = data.totals;
+  const fetchPage = (offset) => api("activities?" + new URLSearchParams({ ...q, offset }));
+  const data = await fetchPage(0);
 
   const columns = [
     { key: "date", label: "Date", sort: true, filter: { type: "text", placeholder: "2026-02" },
@@ -341,47 +397,47 @@ async function renderActivities(params) {
 
   const filterCols = columns.filter((c) => c.filter);
   const body = mode === "list"
-    ? tableHtml(columns, data.items, params, data.total, ACT_PAGE)
-    : `${pagerHtml(columns, params, data.total, ACT_PAGE)}
-       <div class="tiles ${mode}">${data.items.map(tile).join("") || hint("Nothing matches the filters.")}</div>`;
+    ? tableHtml(columns, data.items, params, data.total)
+    : `${listBar(columns, params, data.items.length, data.total)}
+       <div class="tiles ${mode}" data-rows>${data.items.map(tile).join("") || hint("Nothing matches the filters.")}</div>
+       ${data.items.length < data.total ? `<div class="sentinel" data-sentinel><span class="hint">Loading…</span></div>` : ""}`;
 
-  const showKpis = store.get("activity-kpis") !== "0";
+  const showSummary = store.get("activity-kpis") !== "0";
   const active = filterCols.filter((c) => params[c.key]).map((c) => {
     const v = params[c.key];
     if (c.key === "type") return v.startsWith("g:") ? groupLabel(v.slice(2)) : typeLabel(v);
     if (c.key === "person") return personLabel(v);
     return v;
   });
-  const filterPanelHtml = filterCols.map((c) => section(c.label, filterControl(c, params))).join("")
+  const filterPanelHtml = `<div class="panel-grid">${filterCols.map((c) => section(c.label, filterControl(c, params))).join("")}</div>`
     + (active.length ? `<button class="small" data-clear>Clear filters</button>` : "");
   view.innerHTML = `
     ${pageHead("Activities", `
       ${badgeHtml("filter", "Filter", active.join(" · ") || "All", { panel: filterPanelHtml, on: active.length > 0 })}
-      <button class="badge ${showKpis ? "on" : ""}" data-kpis>KPIs</button>`,
+      <button class="badge ${showSummary ? "on" : ""}" data-kpis>Summary</button>`,
       `<div class="segmented" role="group" aria-label="View">
         ${VIEWS.map(([k, label, icon]) => `<button class="icon ${k === mode ? "active" : ""}" data-view="${k}" title="${label}" aria-label="${label}">${icon}</button>`).join("")}
       </div>`)}
-    <div class="kpis" ${showKpis ? "" : "hidden"}>
-      ${kpi("Activities", num(t.count))}
-      ${kpi("Distance", km(t.distance_m))}
-      ${kpi("Moving time", hours(t.moving_s))}
-      ${kpi("Ascent", meters(t.ascent_m))}
-      ${kpi("Calories", kcal(t.calories))}
-    </div>
+    <div data-summary ${showSummary ? "" : "hidden"}>${activitySummary(data.totals)}</div>
     <div class="card">${body}</div>`;
   bindBadges(view.querySelector(".page-head"));
   bindTable("#/activities", params);
+  infinite(view, data.items.length, data.total, async (offset) => (await fetchPage(offset)).items, (items) => {
+    view.querySelector("[data-rows]").insertAdjacentHTML("beforeend", items.map((a) => (mode === "list" ? rowHtml(columns, a) : tile(a))).join(""));
+  });
   view.querySelector("[data-kpis]").onclick = (e) => {
     const on = !e.currentTarget.classList.contains("on");
     store.set("activity-kpis", on ? "1" : "0");
     e.currentTarget.classList.toggle("on", on);
-    view.querySelector(".kpis").hidden = !on;
+    view.querySelector("[data-summary]").hidden = !on;
   };
   view.querySelectorAll("[data-view]").forEach((b) => b.onclick = () => { store.set("view", b.dataset.view); renderActivities(params); });
-  view.querySelectorAll("[data-delete]").forEach((b) => b.onclick = async () => {
+  view.addEventListener("click", async (e) => {
+    const b = e.target.closest("[data-delete]");
+    if (!b) return;
     if (!confirm("Delete this activity from the database?\n\nThe FIT file is not touched. It will not be imported again unless you remove it from the import history.")) return;
-    await api("activities/" + b.dataset.delete, { method: "DELETE" }).catch((e) => alert(e.message));
-    renderActivities(params);
+    await api("activities/" + b.dataset.delete, { method: "DELETE" }).catch((err) => alert(err.message));
+    b.closest("tr, .tile")?.remove();
   });
 }
 
@@ -455,7 +511,6 @@ async function renderActivity(id) {
   };
 }
 
-
 // ---- Maps (MapLibre GL, loaded on first use from the local vendor folder) -----------
 
 let maplibreReady = null;
@@ -505,29 +560,25 @@ const RAMPS = {
 const TILE_SIZES = [[13, "Large squares"], [14, "Explorer tiles"], [16, "Medium squares"], [17, "Small squares"]];
 
 function defaultMapSettings() {
-  const tone = "faded";
   return {
     layer: "heatmap",
     kpis: true,
-    heatmap: { map: { source: "osm", tone }, style: "density", color: "#e8590c", ramp: "fire",
-               width: 2, intensity: 0.45, perPerson: true },
-    tiles: { map: { source: "osm", tone }, zoom: 14, style: "coverage", color: "#3ecf8e", ramp: "viridis",
-             display: "grid", square: true, cluster: true, routes: true },
+    map: { source: "osm", tone: "faded" },
+    heatmap: { style: "density", color: "#e8590c", ramp: "fire", width: 2, intensity: 0.45, perPerson: true },
+    tiles: { zoom: 14, style: "coverage", color: "#0f766e", ramp: "viridis", display: "grid",
+             square: true, cluster: true, routes: true },
   };
 }
 
 function loadMapSettings() {
   const d = defaultMapSettings();
   let s = null;
-  try { s = JSON.parse(store.get("map-settings-v2") || "null"); } catch (e) { s = null; }
+  try { s = JSON.parse(store.get("map-settings-v3") || "null"); } catch (e) { s = null; }
   if (!s) return d;
-  return {
-    ...d, ...s,
-    heatmap: { ...d.heatmap, ...s.heatmap, map: { ...d.heatmap.map, ...(s.heatmap || {}).map } },
-    tiles: { ...d.tiles, ...s.tiles, map: { ...d.tiles.map, ...(s.tiles || {}).map } },
-  };
+  return { ...d, ...s, map: { ...d.map, ...s.map }, heatmap: { ...d.heatmap, ...s.heatmap }, tiles: { ...d.tiles, ...s.tiles } };
 }
-const saveMapSettings = (s) => store.set("map-settings-v2", JSON.stringify(s));
+
+const saveMapSettings = (s) => store.set("map-settings-v3", JSON.stringify(s));
 
 const DARK_TONES = new Set(["soft-dark", "slate", "dusk", "dark"]);
 const TONE_PROPS = ["raster-saturation", "raster-brightness-min", "raster-brightness-max", "raster-contrast", "raster-hue-rotate"];
@@ -559,11 +610,11 @@ async function createMap(container, mapSettings, opts = {}) {
   BASEMAPS ??= await api("basemaps");
   disposeMap();
   // Start directly at the data (no jump from a world view = no flicker).
-  const start = opts.bounds ? { bounds: opts.bounds, fitBoundsOptions: { padding: 40, maxZoom: 15 } } : { center: [10, 50], zoom: 3 };
-  delete opts.bounds;
+  const start = opts.bounds ? { bounds: opts.bounds, fitBoundsOptions: opts.fitBoundsOptions || { padding: 40, maxZoom: 15 } } : { center: [10, 50], zoom: 3 };
+  delete opts.bounds; delete opts.fitBoundsOptions;
   activeMap = new ml.Map({ container, style: baseStyle(mapSettings), attributionControl: { compact: true },
                            fadeDuration: 0, ...start, ...opts });
-  activeMap.addControl(new ml.NavigationControl({ showCompass: false }), "top-right");
+  activeMap.addControl(new ml.NavigationControl({ showCompass: false }), "bottom-right");
   await new Promise((resolve) => activeMap.on("load", resolve));
   activeMap.resize();
   return activeMap;
@@ -734,6 +785,11 @@ function bindBadges(root) {
     root.querySelectorAll(".badge.open").forEach((x) => x.classList.remove("open"));
   };
 }
+// Choice chips (one of many) and toggle chips (on/off) — used in all settings panels.
+const chips = (name, options, current) => `<div class="chips">${options.map(([v, l, title]) =>
+  `<button class="chip ${String(v) === String(current) ? "on" : ""}" data-chip="${name}" data-value="${v}" ${title ? `title="${esc(title)}"` : ""}>${l}</button>`).join("")}</div>`;
+const toggleChip = (name, on, label, title = "") =>
+  `<button class="chip toggle ${on ? "on" : ""}" data-toggle="${name}" ${title ? `title="${esc(title)}"` : ""}>${label}</button>`;
 const optRadio = (name, value, current, label, title = "") =>
   `<label class="opt" ${title ? `title="${esc(title)}"` : ""}><input type="radio" name="${name}" value="${value}" ${String(value) === String(current) ? "checked" : ""}><span>${label}</span></label>`;
 const optCheck = (name, on, label, title = "") =>
@@ -749,6 +805,9 @@ const section = (title, body) => `<div class="panel-section"><div class="panel-t
 
 let heat = null; // { settings, tracks, years, tileCache, params, isAll, map }
 
+const ICON_HEAT = svg(`<path d="M3 17c3-1 4-6 7-6s3 4 6 4 3-6 5-8"/><path d="M3 21c3-1 4-4 7-4s3 2 6 2 3-3 5-4" opacity=".5"/>`);
+const ICON_GRID = svg(`<rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7" opacity=".4"/>`);
+
 async function renderHeatmap(params) {
   const isAll = CURRENT === "all";
   const q = {};
@@ -760,38 +819,44 @@ async function renderHeatmap(params) {
   const tracks = data.items.map((t) => ({ ...t, coords: lonLat(t.polyline) }));
   heat = { settings: loadMapSettings(), tracks, years: data.years, tileCache: new Map(), params, isAll, map: null };
   const s = heat.settings;
+  const activeFilter = Boolean(params.type || params.year);
 
   view.innerHTML = `<div class="heat-wrap">
-      <div class="heat-head">${pageHead("Heatmap", `
-        ${switchHtml("layer", [["heatmap", "Heatmap"], ["tiles", "Explorer tiles"]], s.layer)}
-        ${badgeHtml("settings", "Settings", "", { panel: "<div data-settings></div>", wide: true })}
-        ${badgeHtml("filter", "Filter", filterSummary(), { panel: filterPanel() })}
-        <button class="badge ${s.kpis ? "on" : ""}" data-kpis>KPIs</button>`)}</div>
-      <div class="heat-map-wrap"><div id="map" class="heat-map"></div><div id="heat-kpis" class="map-kpis" ${s.kpis ? "" : "hidden"}></div></div>
+      <div id="map" class="heat-map"></div>
+      <div class="heat-overlay"><div class="heat-column">
+        <div class="float-bar">${pageHead("Heatmap", `
+          ${badgeHtml("settings", "Settings", "", { panel: "<div data-settings></div>", wide: true })}
+          ${badgeHtml("filter", "Filter", filterSummary(), { panel: filterPanel(), on: activeFilter })}
+          <button class="badge ${s.kpis ? "on" : ""}" data-kpis>Summary</button>`,
+          switchHtml("layer", [["heatmap", `${ICON_HEAT}<span>Heatmap</span>`], ["tiles", `${ICON_GRID}<span>Explorer tiles</span>`]], s.layer))}</div>
+        <div id="heat-kpis" ${s.kpis ? "" : "hidden"}></div>
+      </div></div>
     </div>`;
-  const head = view.querySelector(".heat-head");
+  const head = view.querySelector(".float-bar");
   bindBadges(head);
   renderSettingsPanel();
   head.querySelectorAll("[data-switch=layer]").forEach((b) => b.onclick = () => {
     if (s.layer === b.dataset.value) return;
-    const prevSource = s[s.layer].map.source;
     s.layer = b.dataset.value; saveMapSettings(s);
     head.querySelectorAll("[data-switch=layer]").forEach((x) => x.classList.toggle("on", x === b));
-    renderSettingsPanel();
-    applyBase(prevSource !== s[s.layer].map.source);
+    drawHeatLayers();
   });
   head.querySelector("[data-kpis]").onclick = (e) => {
     s.kpis = !s.kpis; saveMapSettings(s);
     e.currentTarget.classList.toggle("on", s.kpis);
     document.getElementById("heat-kpis").hidden = !s.kpis;
   };
-  head.querySelectorAll("[data-filter-set]").forEach((sel) => sel.onchange = () => {
-    const p = Object.fromEntries(Object.entries({ ...heat.params, [sel.dataset.filterSet]: sel.value }).filter(([, v]) => v));
+  head.querySelectorAll("[data-filter-set]").forEach((el) => el.onchange = () => {
+    const p = Object.fromEntries(Object.entries({ ...heat.params, [el.dataset.filterSet]: el.value }).filter(([, v]) => v));
+    location.hash = "#/heatmap?" + new URLSearchParams(p);
+  });
+  head.querySelectorAll("[data-chip=year]").forEach((b) => b.onclick = () => {
+    const p = Object.fromEntries(Object.entries({ ...heat.params, year: b.dataset.value }).filter(([, v]) => v));
     location.hash = "#/heatmap?" + new URLSearchParams(p);
   });
 
   const bounds = boundsOf(tracks.map((t) => t.coords));
-  const map = await createMap("map", s[s.layer].map, bounds ? { bounds } : {});
+  const map = await createMap("map", s.map, bounds ? { bounds, fitBoundsOptions: { padding: { top: 150, left: 40, right: 40, bottom: 40 }, maxZoom: 15 } } : {});
   heat.map = map;
   drawHeatLayers();
   map.on("click", "routes", (e) => {
@@ -803,8 +868,7 @@ async function renderHeatmap(params) {
   map.on("mouseenter", "routes", () => { map.getCanvas().style.cursor = "pointer"; });
   map.on("mouseleave", "routes", () => { map.getCanvas().style.cursor = ""; });
   map.on("moveend", () => {
-    // Tile sizes in km depend on latitude.
-    view.querySelectorAll("[data-km]").forEach((el) => { el.textContent = `~${num(tileWidthKm(Number(el.dataset.km), map.getCenter().lat), el.dataset.km >= 16 ? 2 : 1)} km`; });
+    view.querySelectorAll("[data-km]").forEach((el) => { el.textContent = `${num(tileWidthKm(Number(el.dataset.km), map.getCenter().lat), el.dataset.km >= 16 ? 2 : 1)} km`; });
   });
 }
 
@@ -813,88 +877,101 @@ function filterSummary() {
   return [pt.startsWith("g:") ? groupLabel(pt.slice(2)) : pt ? typeLabel(pt) : "", heat.params.year || ""].filter(Boolean).join(" · ") || "All";
 }
 function filterPanel() {
-  return section("Activity type", `<select data-filter-set="type"><option value="">All types</option>${typeOptions().map((g) =>
-      `<optgroup label="${esc(g.group)}">${g.options.map(([v, l]) => `<option value="${esc(v)}" ${v === heat.params.type ? "selected" : ""}>${esc(l)}</option>`).join("")}</optgroup>`).join("")}</select>`)
-    + section("Year", `<select data-filter-set="year"><option value="">All years</option>${heat.years.map((y) =>
-      `<option ${y === heat.params.year ? "selected" : ""}>${y}</option>`).join("")}</select>`);
+  return `<div class="panel-grid">${section("Activity type", `<select data-filter-set="type"><option value="">All types</option>${typeOptions().map((g) =>
+      `<optgroup label="${esc(g.group)}">${g.options.map(([v, l]) => `<option value="${esc(v)}" ${v === heat.params.type ? "selected" : ""}>${esc(l)}</option>`).join("")}</optgroup>`).join("")}</select>`)}
+    ${section("Year", chips("year", [["", "All"], ...heat.years.map((y) => [y, y])], heat.params.year || ""))}</div>`;
 }
 
 function renderSettingsPanel() {
-  const s = heat.settings, mode = s.layer, M = s[mode].map, H = s.heatmap, T = s.tiles;
+  const s = heat.settings, M = s.map, H = s.heatmap, T = s.tiles;
   const lat = heat.map ? heat.map.getCenter().lat : 52;
-  const mapSection = section("Base map", [...(BASEMAPS || []).map((b) => optRadio("map.source", b.key, M.source, b.label)),
-      optRadio("map.source", "none", M.source, "No base map")].join(""))
-    + section("Map colours", BASE_TONES.map(([k, l]) => optRadio("map.tone", k, M.tone, l)).join(""));
-  let modeSections;
-  if (mode === "heatmap") {
-    modeSections = section("Style", [optRadio("heatmap.style", "density", H.style, "Density"),
-        optRadio("heatmap.style", "coverage", H.style, "Coverage"),
-        optRadio("heatmap.style", "glow", H.style, "Heat glow")].join(""))
-      + section("Colours", (H.style === "glow" ? rampPicker("heatmap.ramp", H.ramp) : colorPicker("heatmap.color", H.color))
-        + (heat.isAll && H.style !== "glow" ? optCheck("heatmap.perPerson", H.perPerson, "A colour per person") : ""))
-      + section("Line width", `<input type="range" min="1" max="6" step="0.5" value="${H.width}" name="heatmap.width">`)
-      + (H.style !== "coverage" ? section("Overlap strength", `<input type="range" min="0.1" max="0.9" step="0.05" value="${H.intensity}" name="heatmap.intensity">`) : "");
-  } else {
-    modeSections = section("Tile size", TILE_SIZES.map(([z, l]) =>
-        optRadio("tiles.zoom", z, T.zoom, `${l} <span class="hint" data-km="${z}">~${num(tileWidthKm(z, lat), z >= 16 ? 2 : 1)} km</span>`)).join(""))
-      + section("Style", [optRadio("tiles.style", "coverage", T.style, "Coverage"), optRadio("tiles.style", "heat", T.style, "By number of visits")].join(""))
-      + section("Colours", T.style === "heat" ? rampPicker("tiles.ramp", T.ramp) : colorPicker("tiles.color", T.color))
-      + section("Display", [optRadio("tiles.display", "grid", T.display, "Single tiles"), optRadio("tiles.display", "area", T.display, "One area")].join(""))
-      + section("Highlights", [optCheck("tiles.square", T.square, "Max square", "Largest square made only of visited tiles"),
-          optCheck("tiles.cluster", T.cluster, "Cluster", "Largest connected group of tiles with visited tiles on all four sides"),
-          optCheck("tiles.routes", T.routes, "Routes")].join(""));
-  }
+  const colorRow = (name, current) => colorPicker(name, current);
+  const mapCol = `<div class="panel-col"><div class="col-title">Map</div>
+      ${section("Base map", chips("map.source", [...(BASEMAPS || []).map((b) => [b.key, b.label.split(" (")[0]]), ["none", "None"]], M.source))}
+      ${section("Colours", `<div class="tone-grid">${BASE_TONES.map(([k, l]) =>
+        `<button class="tone ${k === M.tone ? "on" : ""}" data-chip="map.tone" data-value="${k}"><span class="tone-dot tone-${k}"></span>${l}</button>`).join("")}</div>`)}
+      ${section("Summary on the map", toggleChip("kpis", s.kpis, "Show summary"))}
+    </div>`;
+  const heatCol = `<div class="panel-col"><div class="col-title">Heatmap</div>
+      ${section("Style", chips("heatmap.style", [["density", "Density", "Overlapping routes get stronger"], ["coverage", "Coverage", "Solid lines"], ["glow", "Heat glow", "Colour gradient"]], H.style))}
+      ${section("Line colour", colorRow("heatmap.color", H.color) + (heat.isAll ? `<div style="margin-top:6px">${toggleChip("heatmap.perPerson", H.perPerson, "A colour per person")}</div>` : ""))}
+      ${section("Heat glow gradient", rampPicker("heatmap.ramp", H.ramp))}
+      ${section("Line width", `<input type="range" min="1" max="6" step="0.5" value="${H.width}" name="heatmap.width">`)}
+      ${section("Overlap strength", `<input type="range" min="0.1" max="0.9" step="0.05" value="${H.intensity}" name="heatmap.intensity">`)}
+    </div>`;
+  const tilesCol = `<div class="panel-col"><div class="col-title">Explorer tiles</div>
+      ${section("Tile size", `<div class="chips">${TILE_SIZES.map(([z, l]) =>
+        `<button class="chip ${z === T.zoom ? "on" : ""}" data-chip="tiles.zoom" data-value="${z}">${l} <span class="chip-note" data-km="${z}">${num(tileWidthKm(z, lat), z >= 16 ? 2 : 1)} km</span></button>`).join("")}</div>`)}
+      ${section("Style", chips("tiles.style", [["coverage", "Coverage"], ["heat", "By visits"]], T.style))}
+      ${section("Tile colour", colorRow("tiles.color", T.color))}
+      ${section("Visits gradient", rampPicker("tiles.ramp", T.ramp))}
+      ${section("Display", chips("tiles.display", [["grid", "Single tiles"], ["area", "One area"]], T.display))}
+      ${section("Highlights", `<div class="chips">${toggleChip("tiles.square", T.square, "Max square", "Largest square made only of visited tiles")}
+        ${toggleChip("tiles.cluster", T.cluster, "Cluster", "Largest connected group of tiles with visited tiles on all four sides")}
+        ${toggleChip("tiles.routes", T.routes, "Routes")}</div>`)}
+    </div>`;
   const el = view.querySelector("[data-settings]");
-  el.innerHTML = `<div class="panel-cols"><div>${modeSections}</div><div>${mapSection}</div></div>`;
+  el.innerHTML = `<div class="panel-cols3">${mapCol}${heatCol}${tilesCol}</div>`;
   bindSettingsPanel(el);
 }
 
-// Apply one setting with the cheapest possible map update.
+// Apply one setting with the cheapest possible map update. Settings of the mode that is not
+// shown are only saved.
 function bindSettingsPanel(el) {
   const s = heat.settings;
   const set = (path, value) => {
-    const [a, b, c] = path.split(".");
-    if (c) s[a][b][c] = value; else s[a][b] = value;
+    const [a, b] = path.split(".");
+    if (b === undefined) s[a] = value; else s[a][b] = value;
     saveMapSettings(s);
   };
-  const resolve = (name) => (name.startsWith("map.") ? `${s.layer}.${name}` : name);
-  el.querySelectorAll("input[type=radio]").forEach((r) => r.onchange = () => {
-    const name = resolve(r.name), value = r.name === "tiles.zoom" ? Number(r.value) : r.value;
-    set(name, value);
-    if (r.name === "map.source") applyBase(true);
-    else if (r.name === "map.tone") applyBase(false);
-    else { drawHeatLayers(); if (/style$/.test(r.name)) renderSettingsPanel(); }
+  const shown = (path) => path.startsWith("map.") || path.startsWith(s.layer + ".");
+  const refresh = (path, kind) => {
+    if (path === "map.source") return applyBase(true);
+    if (path === "map.tone") return applyBase(false);
+    if (!shown(path)) return;
+    if (kind === "paint") updatePaint(); else drawHeatLayers();
+  };
+  el.querySelectorAll("[data-chip]").forEach((b) => b.onclick = () => {
+    const path = b.dataset.chip, value = path === "tiles.zoom" ? Number(b.dataset.value) : b.dataset.value;
+    set(path, value);
+    el.querySelectorAll(`[data-chip="${path}"]`).forEach((x) => x.classList.toggle("on", x === b));
+    refresh(path, "layers");
   });
-  el.querySelectorAll("input[type=checkbox]").forEach((c) => c.onchange = () => {
-    set(c.name, c.checked);
-    drawHeatLayers();
+  el.querySelectorAll("[data-toggle]").forEach((b) => b.onclick = () => {
+    const path = b.dataset.toggle, on = !b.classList.contains("on");
+    b.classList.toggle("on", on);
+    if (path === "kpis") {
+      set("kpis", on);
+      document.getElementById("heat-kpis").hidden = !on;
+      view.querySelector("[data-kpis]")?.classList.toggle("on", on);
+      return;
+    }
+    set(path, on);
+    refresh(path, path === "heatmap.perPerson" ? "paint" : "layers");
   });
-  el.querySelectorAll("input[type=range]").forEach((r) => {
-    r.oninput = () => { set(r.name, Number(r.value)); updatePaint(); };
-  });
+  el.querySelectorAll("input[type=range]").forEach((r) => { r.oninput = () => { set(r.name, Number(r.value)); refresh(r.name, "paint"); }; });
   el.querySelectorAll("[data-color]").forEach((b) => b.onclick = () => {
     set(b.dataset.color, b.dataset.value);
     el.querySelectorAll(`[data-color="${b.dataset.color}"]`).forEach((x) => x.classList.toggle("active", x === b));
     el.querySelector(`input[type=color][name="${b.dataset.color}"]`).value = b.dataset.value;
-    updatePaint();
+    refresh(b.dataset.color, "paint");
   });
-  el.querySelectorAll("input[type=color]").forEach((inp) => inp.oninput = () => {
+  el.querySelectorAll("input[type=color]").forEach((inp) => { inp.oninput = () => {
     set(inp.name, inp.value);
     el.querySelectorAll(`[data-color="${inp.name}"]`).forEach((x) => x.classList.remove("active"));
-    updatePaint();
-  });
+    refresh(inp.name, "paint");
+  }; });
   el.querySelectorAll("[data-ramp]").forEach((b) => b.onclick = () => {
     set(b.dataset.ramp, b.dataset.value);
     el.querySelectorAll(`[data-ramp="${b.dataset.ramp}"]`).forEach((x) => x.classList.toggle("active", x === b));
-    updatePaint();
+    refresh(b.dataset.ramp, "paint");
   });
 }
 
-// Base map: change only the raster paint for colours, swap the style only for a new source.
 function applyBase(newSource) {
   const map = heat.map;
   if (!map) return;
-  const M = heat.settings[heat.settings.layer].map;
+  const M = heat.settings.map;
   if (newSource) {
     map.setStyle(baseStyle(M));
     map.once("style.load", () => drawHeatLayers());
@@ -949,14 +1026,21 @@ function renderHeatKpis() {
   if (!el) return;
   const t = heat.tracks;
   const sum = (k) => t.reduce((a, x) => a + (x[k] || 0), 0);
-  let html = `${kpi("Activities", num(t.length))}${kpi("Distance", km(sum("distance_m")))}${kpi("Moving time", hours(sum("moving_s")))}`;
+  const days = new Set(t.map((x) => x.day)).size;
+  const items = [
+    ["Activities", num(t.length), `${num(days)} active days`],
+    ["Distance", km(sum("distance_m")), ""],
+    ["Moving time", hours(sum("moving_s")), ""],
+  ];
   if (heat.settings.layer === "tiles") {
     const { tiles, square, cluster } = heatTiles();
-    html += `${kpi("Tiles", num(tiles.size))}${kpi("Max square", square.size ? `${square.size} × ${square.size}` : "–")}${kpi("Cluster", `${num(cluster.length)} tiles`)}`;
+    items.push(["Tiles", num(tiles.size), TILE_SIZES.find(([z]) => z === heat.settings.tiles.zoom)?.[1] || ""],
+      ["Max square", square.size ? `${square.size} × ${square.size}` : "–", ""],
+      ["Cluster", `${num(cluster.length)} tiles`, ""]);
   } else {
-    html += kpi("Ascent", meters(sum("ascent_m")));
+    items.push(["Elevation gain", meters(sum("ascent_m")), ""]);
   }
-  el.innerHTML = html;
+  el.innerHTML = statStrip(items, "floating");
 }
 
 const HEAT_LAYERS = ["routes-glow", "tiles-fill", "tiles-line", "cluster", "square", "routes"];
@@ -1011,7 +1095,7 @@ function drawHeatLayers() {
     }
     // Routes on top of the tiles, so they stay visible.
     map.addLayer({ id: "routes", type: "line", source: "routes", layout: { "line-join": "round", "line-cap": "round", visibility: T.routes ? "visible" : "none" },
-      paint: { "line-color": DARK_TONES.has(T.map.tone) || T.map.source === "none" && document.documentElement.dataset.theme === "dark" ? "#ffffff" : "#1b1e25",
+      paint: { "line-color": DARK_TONES.has(s.map.tone) || s.map.source === "none" && document.documentElement.dataset.theme === "dark" ? "#ffffff" : "#1b1e25",
                "line-opacity": 0.7, "line-width": ["interpolate", ["linear"], ["zoom"], 8, 0.6, 14, 1.6] } });
   }
   updatePaint();
@@ -1020,7 +1104,7 @@ function drawHeatLayers() {
 
 async function showRouteMap(container, polyline) {
   const coords = lonLat(polyline);
-  const map = await createMap(container, loadMapSettings().heatmap.map, { bounds: boundsOf([coords]) });
+  const map = await createMap(container, loadMapSettings().map, { bounds: boundsOf([coords]) });
   const accent = getComputedStyle(document.documentElement).getPropertyValue("--accent").trim();
   map.addSource("route", { type: "geojson", data: { type: "Feature", properties: {}, geometry: { type: "LineString", coordinates: coords } } });
   map.addLayer({ id: "route", type: "line", source: "route", layout: { "line-join": "round", "line-cap": "round" },
@@ -1102,7 +1186,14 @@ async function renderSettings(tab, params) {
 async function settingsGeneral(el) {
   const s = await api("settings");
   const interval = (m) => (m === 0 ? "Off" : m < 60 ? `${m} min` : m === 60 ? "1 hour" : `${m / 60} hours`);
+  const accent = store.get("accent") || "sky";
   el.innerHTML = `
+    <div class="card">
+      <h3>Appearance</h3>
+      ${hint("Accent colour of buttons, links and highlights. Saved in this browser.")}
+      <div class="chips" style="margin-top:8px">${ACCENTS.map(([k, l, light, dark]) =>
+        `<button class="chip ${k === accent ? "on" : ""}" data-accent="${k}"><span class="dot" style="background:${document.documentElement.dataset.theme === "dark" ? dark : light}"></span>${l}</button>`).join("")}</div>
+    </div>
     <div class="card">
       <h3>Watched folder</h3>
       ${hint(`Absolute path to the folder with FIT files.${s.allowed_roots ? ` It must be inside: ${esc(s.allowed_roots)}.` : ""}`)}
@@ -1127,6 +1218,11 @@ async function settingsGeneral(el) {
       <div>${s.next_scan_at ? state(`Next scan at ${browserTime(s.next_scan_at)}`) : state("No automatic scan scheduled", "warn")}</div>
       <div class="card-row" style="margin-top:12px"><button class="primary" data-save="scan_interval_min">Save</button><span data-msg></span></div>
     </div>`;
+  el.querySelectorAll("[data-accent]").forEach((b) => b.onclick = () => {
+    store.set("accent", b.dataset.accent);
+    applyAccent();
+    el.querySelectorAll("[data-accent]").forEach((x) => x.classList.toggle("on", x === b));
+  });
   el.querySelectorAll("[data-save]").forEach((btn) => btn.onclick = async () => {
     const key = btn.dataset.save, card = btn.closest(".card"), out = card.querySelector("[data-msg]");
     const field = key === "person_mode" ? card.querySelector("input[name=person_mode]:checked") : card.querySelector(`[name=${key}]`);
@@ -1286,12 +1382,13 @@ function scanCard(st) {
 
 async function settingsImport(el, params) {
   params = { sort: "processed", dir: "desc", ...params };
-  const q = { limit: FILE_PAGE, offset: Number(params.page || 0) * FILE_PAGE, sort: params.sort, dir: params.dir };
+  const q = { limit: PAGE_SIZE, sort: params.sort, dir: params.dir };
   for (const k of ["status", "person", "file", "content", "recorded", "fit", "processed"]) if (params[k]) q[k] = params[k];
-  const [st, files] = await Promise.all([api("import/status"), api("import/files?" + new URLSearchParams(q))]);
+  const fetchPage = (offset) => api("import/files?" + new URLSearchParams({ ...q, offset }));
+  const [st, files] = await Promise.all([api("import/status"), fetchPage(0)]);
   const columns = [
     { key: "status", label: "Status", sort: true,
-      filter: { type: "select", options: STATUSES.map((s) => [s, `${s} (${num(st.files[s] ?? 0)})`]) },
+      filter: { type: "select", options: STATUSES.map((x) => [x, `${x} (${num(st.files[x] ?? 0)})`]) },
       render: (f) => state(f.status, STATUS_KIND[f.status] || "") +
         (f.status === "missing" && f.prev_status ? ` <span class="hint">was ${f.prev_status}</span>` : "") },
     { key: "file", label: "File", sort: true, wrap: true, filter: { type: "text" },
@@ -1309,24 +1406,43 @@ async function settingsImport(el, params) {
       render: (f) => browserTime(f.imported_at) || "–" },
     { key: "actions", label: "", cls: "actions", render: fileActions },
   ];
-  el.innerHTML = `${scanCard(st)}<div class="card"><h3>Files</h3>${tableHtml(columns, files.items, params, files.total, FILE_PAGE)}</div>`;
+  el.innerHTML = `<div data-scan>${scanCard(st)}</div><div class="card"><h3>Files</h3>${tableHtml(columns, files.items, params, files.total)}</div>`;
   bindTable("#/settings/import", params);
-  const reload = () => settingsImport(el, params);
-  el.querySelector("#scan").onclick = async () => { await api("import/scan", { method: "POST" }).catch((e) => alert(e.message)); reload(); };
-  el.querySelectorAll("[data-retry]").forEach((b) => b.onclick = async () => { await api(`import/files/${b.dataset.retry}/retry`, { method: "POST" }); reload(); });
-  el.querySelectorAll("[data-keep]").forEach((b) => b.onclick = async () => { await api(`import/files/${b.dataset.keep}/dismiss`, { method: "POST" }); reload(); });
-  el.querySelectorAll("[data-del]").forEach((b) => b.onclick = async () => {
-    if (!confirm("Delete this activity from the database? The file stays in the history as 'removed' and will not be imported again.")) return;
-    await api(`activities/${b.dataset.del}`, { method: "DELETE" }); reload();
+  infinite(el, files.items.length, files.total, async (offset) => (await fetchPage(offset)).items, (items) => {
+    el.querySelector("[data-rows]").insertAdjacentHTML("beforeend", items.map((f) => rowHtml(columns, f)).join(""));
   });
-  el.querySelectorAll("[data-forget]").forEach((b) => b.onclick = async () => {
+  const reload = () => settingsImport(el, params);
+  const bindScan = () => {
+    el.querySelector("#scan").onclick = async () => {
+      await api("import/scan", { method: "POST" }).catch((e) => alert(e.message));
+      pollScan();
+    };
+  };
+  // While a scan runs only the scan card refreshes, so the list keeps its scroll position.
+  const pollScan = async () => {
+    const now = await api("import/status");
+    el.querySelector("[data-scan]").innerHTML = scanCard(now);
+    bindScan();
+    if (now.running) timer = setTimeout(pollScan, 2000);
+  };
+  bindScan();
+  if (st.running) timer = setTimeout(pollScan, 2000);
+  el.onclick = async (e) => {
+    const b = e.target.closest("[data-retry], [data-keep], [data-del], [data-forget]");
+    if (!b) return;
+    if (b.dataset.retry) { await api(`import/files/${b.dataset.retry}/retry`, { method: "POST" }); return reload(); }
+    if (b.dataset.keep) { await api(`import/files/${b.dataset.keep}/dismiss`, { method: "POST" }); return reload(); }
+    if (b.dataset.del) {
+      if (!confirm("Delete this activity from the database? The file stays in the history as 'removed' and will not be imported again.")) return;
+      await api(`activities/${b.dataset.del}`, { method: "DELETE" }); return reload();
+    }
     const msg = b.dataset.owner === "1"
       ? "Remove this file from the import history?\n\nIts activity is deleted too and will be rebuilt from the file on the next folder scan (manual type changes are lost)."
       : "Remove this file from the import history?\n\nThe next folder scan will process it again.";
     if (!confirm(msg)) return;
-    await api(`import/files/${b.dataset.forget}`, { method: "DELETE" }); reload();
-  });
-  if (st.running) timer = setTimeout(reload, 2000);
+    await api(`import/files/${b.dataset.forget}`, { method: "DELETE" });
+    b.closest("tr")?.remove();
+  };
 }
 
 function settingsTypes(el, params) {
@@ -1363,6 +1479,7 @@ function settingsTypes(el, params) {
 
 async function route() {
   clearTimeout(timer);
+  stopObservers();
   disposeMap();
   document.body.classList.remove("fullmap");
   const [path, query] = (location.hash.slice(1) || "/activities").split("?");
@@ -1389,5 +1506,6 @@ async function route() {
   }
 }
 
+applyAccent();
 window.addEventListener("hashchange", route);
 route();

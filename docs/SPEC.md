@@ -372,7 +372,14 @@ at the right end of the row.
 
 ### Style rules
 - Light theme by default, dark theme via a toggle (remembered per browser).
-- Accent colour: deep teal (no default "link blue").
+- Accent colour: sky by default; Settings › General offers sky, teal, indigo, violet, rose,
+  amber, green, graphite (saved per browser, applied before first paint). Logo icon before
+  “Trailbook” uses the accent.
+- Lists load **50 rows at a time** while scrolling (no page buttons) — the rule for every
+  list (activities, tiles, import files, later calendar lists).
+- Summary instead of big KPI cards: one compact strip (label, value, small note), e.g.
+  activities + active days, distance + average, time + per week, elevation gain, longest,
+  calories.
 - Every section is a card with a background (no borders).
 - Descriptions always use the same small muted style; states (next scan, saved, running,
   errors, file statuses) always the same small size in a state colour.
@@ -390,9 +397,11 @@ at the right end of the row.
   policy requires; each tile is downloaded once. Source configurable (setting `basemap_url`).
   Dark theme: desaturated and darkened tiles. Vector tiles (as in HA 2026.10) are a later
   option.
-- The Heatmap page is full screen: header row (title + badges), then the map.
-  Badges: **Heatmap | Explorer tiles** (main switch) · **Settings** · **Filter** · **KPIs**.
-  Settings (per mode, including the base map — so each mode keeps its own map):
+- The Heatmap page is full screen: the map fills the page and the header row (title, badges
+  Settings · Filter · Summary, and the Heatmap | Explorer tiles switch with icons on the right)
+  floats above it, aligned with the content column of the other tabs.
+  Settings is one panel with three columns, always all of them: Map, Heatmap, Explorer tiles
+  (the base map is shared; settings of the hidden mode are kept for when you switch):
   - Base map: OpenStreetMap (default), OpenTopoMap, CyclOSM or none; colours: faded light
     (default), original, muted, grayscale, soft dark, slate, dusk, dark (high contrast). The
     soft dark tones lift blacks and lower contrast so routes stand out without a harsh map.

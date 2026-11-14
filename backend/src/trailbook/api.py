@@ -427,7 +427,10 @@ def create_app(db_path: str | Path) -> Starlette:
         with closing(conn()) as c:
             totals = c.execute(
                 f"""SELECT COUNT(*) count, SUM(distance_m) distance_m, SUM(moving_s) moving_s,
-                           SUM(ascent_m) ascent_m, SUM(calories) calories
+                           SUM(ascent_m) ascent_m, SUM(calories) calories,
+                           COUNT(DISTINCT substr(start_time_utc, 1, 10)) active_days,
+                           MAX(distance_m) longest_m, MAX(moving_s) longest_s,
+                           MIN(start_time_utc) first, MAX(start_time_utc) last
                     FROM activities {clause}""",
                 params,
             ).fetchone()

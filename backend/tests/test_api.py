@@ -86,6 +86,9 @@ def test_activity_endpoints_on_sample_data(tmp_path):
 
     listing = client.get("/api/activities?limit=5").json()
     assert listing["total"] > 0 and len(listing["items"]) <= 5
+    totals = listing["totals"]
+    assert 0 < totals["active_days"] <= totals["count"]
+    assert totals["longest_m"] <= totals["distance_m"] and totals["first"] <= totals["last"]
     starts = [a["start_time_utc"] for a in listing["items"]]
     assert starts == sorted(starts, reverse=True)
 

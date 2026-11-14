@@ -9,13 +9,21 @@
   try {
     const t = localStorage.getItem("trailbook-theme");
     if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
-  } catch (e) { /* storage unavailable: keep light */ }
+    // Accent colour (same table as ACCENTS in preview.js), applied before first paint.
+    const A = { sky: ["#0284c7", "#38bdf8"], teal: ["#0f766e", "#3fb5a0"], indigo: ["#4f46e5", "#8b93ff"],
+                violet: ["#7c3aed", "#a78bfa"], rose: ["#e11d48", "#fb7185"], amber: ["#b45309", "#fbbf24"],
+                green: ["#15803d", "#4ade80"], graphite: ["#334155", "#cbd5e1"] };
+    const a = A[localStorage.getItem("trailbook-accent")] || A.sky;
+    const dark = document.documentElement.dataset.theme === "dark";
+    document.documentElement.style.setProperty("--accent", dark ? a[1] : a[0]);
+    document.documentElement.style.setProperty("--state", dark ? a[1] : a[0]);
+  } catch (e) { /* storage unavailable: keep defaults */ }
 </script>
 <link rel="stylesheet" href="preview.css">
 </head>
 <body>
 <header>
-  <a class="brand" href="#/activities">Trailbook</a>
+  <a class="brand" href="#/activities"><svg class="logo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="5" cy="18" r="2.2" fill="currentColor" stroke="none"/><path d="M6.8 16.6C9 14 8 11 11 9.5s6 .5 7.5-3"/><path d="M15.5 4.5h4v4"/></svg>Trailbook</a>
   <nav id="nav"></nav>
   <div id="tools" class="tools"></div>
 </header>
