@@ -969,8 +969,9 @@ const RAMP_LABELS = { fire: "Fire", ice: "Ice", viridis: "Viridis", magma: "Magm
 // All options visible, one chosen (radio-like list); `extra(value)` adds e.g. a gradient bar.
 const pickList = (name, options, current, extra = () => "") => `<div class="pick-list" role="radiogroup">${options.map(([v, l]) =>
   `<button type="button" role="radio" aria-checked="${String(v) === String(current)}" class="pick-item ${String(v) === String(current) ? "on" : ""}" data-pick="${name}" data-value="${esc(v)}"><span class="pick-dot"></span><span class="pick-label">${esc(l)}</span>${extra(v)}</button>`).join("")}</div>`;
-const rampPicker = (name, current) => pickList(name, Object.keys(RAMPS).map((k) => [k, RAMP_LABELS[k] || k]), current,
-  (k) => `<span class="pick-ramp" style="background:linear-gradient(90deg,${RAMPS[k].join(",")})"></span>`);
+// Gradients: full-width bars one under another, the chosen one framed (like the colour swatches).
+const rampPicker = (name, current) => `<div class="ramp-pick" role="radiogroup">${Object.entries(RAMPS).map(([k, cols]) =>
+  `<button type="button" role="radio" aria-checked="${k === current}" aria-label="${esc(RAMP_LABELS[k] || k)}" title="${esc(RAMP_LABELS[k] || k)}" class="ramp-bar ${k === current ? "on" : ""}" data-pick="${name}" data-value="${k}" style="background:linear-gradient(90deg,${cols.join(",")})"></button>`).join("")}</div>`;
 const section = (title, body) => `<div class="panel-section"><div class="panel-title">${title}</div>${body}</div>`;
 
 // ---- Heatmap page -------------------------------------------------------------------
