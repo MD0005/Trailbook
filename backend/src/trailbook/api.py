@@ -145,11 +145,26 @@ def create_app(db_path: str | Path) -> Starlette:
             )
 
     async def types(request: Request):
+        sources = sports.fit_sources()
+        with closing(conn()) as c:
+            counts = dict(
+                c.execute(
+                    "SELECT activity_type, COUNT(*) FROM activities GROUP BY activity_type"
+                ).fetchall()
+            )
         return JSONResponse(
             {
                 "groups": [{"key": k, "en": en, "pl": pl} for k, (en, pl) in sports.GROUPS.items()],
                 "types": [
-                    {"key": t.key, "group": t.group, "en": t.en, "pl": t.pl, "indoor": t.indoor}
+                    {
+                        "key": t.key,
+                        "group": t.group,
+                        "en": t.en,
+                        "pl": t.pl,
+                        "indoor": t.indoor,
+                        "fit": sources[t.key],
+                        "activities": counts.get(t.key, 0),
+                    }
                     for t in sports.TYPES.values()
                 ],
             }
@@ -162,7 +177,7 @@ def create_app(db_path: str | Path) -> Starlette:
             rows = c.execute(
                 """SELECT p.*, COUNT(a.id) activities FROM persons p
                    LEFT JOIN activities a ON a.person_id = p.id
-                   GROUP BY p.id ORDER BY p.label"""
+                   GROUP BY p.id ORDER BY p.sort_order, p.label"""
             ).fetchall()
             return JSONResponse([dict(r) for r in rows])
 
@@ -176,7 +191,12 @@ def create_app(db_path: str | Path) -> Starlette:
             pid, n = base, 2
             while c.execute("SELECT 1 FROM persons WHERE id = ?", (pid,)).fetchone():
                 pid, n = f"{base}-{n}", n + 1
-            c.execute("INSERT INTO persons (id, label) VALUES (?, ?)", (pid, label))
+            c.execute(
+                """INSERT INTO persons (id, label, sort_order) VALUES
+                   (?, ?, (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM persons
+                           WHERE id != '_unassigned'))""",
+                (pid, label),
+            )
             row = c.execute("SELECT * FROM persons WHERE id = ?", (pid,)).fetchone()
         return JSONResponse(dict(row), status_code=201)
 
@@ -263,10 +283,68 @@ def create_app(db_path: str | Path) -> Starlette:
         sched.settings_changed()
         return JSONResponse(result)
 
+    async def persons_order(request: Request):
+        body = await request.json()
+        ids = body.get("ids")
+        if not isinstance(ids, list) or not all(isinstance(i, str) for i in ids):
+            raise HTTPException(400, "ids must be a list of person ids")
+        with closing(conn()) as c:
+            known = {r["id"] for r in c.execute("SELECT id FROM persons")}
+            if set(ids) - known:
+                raise HTTPException(400, "unknown person in order")
+            c.execute("BEGIN")
+            for i, pid in enumerate(ids, start=1):
+                c.execute("UPDATE persons SET sort_order = ? WHERE id = ?", (i, pid))
+            c.execute("COMMIT")
+        return Response(status_code=204)
+
+    # ---- comparison ------------------------------------------------------------------
+
+    async def compare(request: Request):
+        q = request.query_params
+        where, params = [], []
+        if q.get("year"):
+            where.append("substr(a.start_time_utc, 1, 4) = ?")
+            params.append(q["year"])
+        clause = f"AND {' AND '.join(where)}" if where else ""
+        with closing(conn()) as c:
+            people = c.execute(
+                f"""SELECT p.id, p.label, p.color, p.icon, p.sort_order,
+                           COUNT(a.id) activities, SUM(a.distance_m) distance_m,
+                           SUM(a.moving_s) moving_s, SUM(a.ascent_m) ascent_m,
+                           SUM(a.calories) calories, MAX(a.start_time_utc) last_activity
+                    FROM persons p LEFT JOIN activities a ON a.person_id = p.id {clause}
+                    WHERE p.id != '_unassigned'
+                    GROUP BY p.id ORDER BY p.sort_order, p.label""",
+                params,
+            ).fetchall()
+            groups = c.execute(
+                f"""SELECT a.person_id, a.category, COUNT(*) activities,
+                           SUM(a.distance_m) distance_m, SUM(a.moving_s) moving_s
+                    FROM activities a WHERE 1 = 1 {clause}
+                    GROUP BY a.person_id, a.category""",
+                params,
+            ).fetchall()
+            years = [
+                r[0]
+                for r in c.execute(
+                    "SELECT DISTINCT substr(start_time_utc, 1, 4) y FROM activities ORDER BY y DESC"
+                )
+            ]
+        by_person: dict[str, list] = {}
+        for g in groups:
+            by_person.setdefault(g["person_id"], []).append(dict(g))
+        items = []
+        for p in people:
+            item = dict(p)
+            item["groups"] = sorted(by_person.get(p["id"], []), key=lambda g: -(g["moving_s"] or 0))
+            items.append(item)
+        return JSONResponse({"years": years, "people": items})
+
     async def person_update(request: Request):
         pid = request.path_params["id"]
         body = await request.json()
-        fields = {k: body[k] for k in ("label", "color") if k in body}
+        fields = {k: body[k] for k in ("label", "color", "icon") if k in body}
         if "label" in fields and not str(fields["label"]).strip():
             raise HTTPException(400, "label must not be empty")
         with closing(conn()) as c:
@@ -311,13 +389,28 @@ def create_app(db_path: str | Path) -> Starlette:
         offset = _int(request, "offset", 0, 0, 10**9)
         order = _order(q, ACTIVITY_SORTS, "date", "id")
         with closing(conn()) as c:
-            total = c.execute(f"SELECT COUNT(*) FROM activities {clause}", params).fetchone()[0]
+            totals = c.execute(
+                f"""SELECT COUNT(*) count, SUM(distance_m) distance_m, SUM(moving_s) moving_s,
+                           SUM(ascent_m) ascent_m, SUM(calories) calories
+                    FROM activities {clause}""",
+                params,
+            ).fetchone()
+            fields = ", ".join(ACTIVITY_LIST_FIELDS)
+            with_track = q.get("track") == "1"
+            if with_track:
+                fields += ", (SELECT polyline FROM tracks t WHERE t.activity_id = id) polyline"
             rows = c.execute(
-                f"""SELECT {", ".join(ACTIVITY_LIST_FIELDS)} FROM activities {clause}
+                f"""SELECT {fields} FROM activities {clause}
                     ORDER BY {order} LIMIT ? OFFSET ?""",
                 [*params, limit, offset],
             ).fetchall()
-            return JSONResponse({"total": total, "items": [dict(r) for r in rows]})
+            return JSONResponse(
+                {
+                    "total": totals["count"],
+                    "totals": dict(totals),
+                    "items": [dict(r) for r in rows],
+                }
+            )
 
     async def activity(request: Request):
         aid = request.path_params["id"]
@@ -505,6 +598,8 @@ def create_app(db_path: str | Path) -> Starlette:
         Route("/api/types", types),
         Route("/api/persons", persons),
         Route("/api/persons", person_create, methods=["POST"]),
+        Route("/api/persons/order", persons_order, methods=["PUT"]),
+        Route("/api/compare", compare),
         Route("/api/devices", devices),
         Route("/api/devices/{serial:int}", device_update, methods=["PATCH"]),
         Route("/api/settings", settings_get),

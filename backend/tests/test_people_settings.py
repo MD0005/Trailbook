@@ -157,3 +157,30 @@ def test_folder_mode_watch_change_moves_only_unassigned(conn, tmp_path):
     owners = dict(conn.execute("SELECT rel_path, person_id FROM files").fetchall())
     assert owners["alice/a.fit"] == "alice"  # the folder still decides
     assert owners["loose.fit"] == "bob"  # root-level file follows the watch
+
+
+def test_person_order_icon_and_compare(client):
+    cl, _ = client
+    ids = [p["id"] for p in cl.get("/api/persons").json()]
+    assert ids == ["alice", "bob"]
+    assert cl.put("/api/persons/order", json={"ids": ["bob", "alice"]}).status_code == 204
+    assert [p["id"] for p in cl.get("/api/persons").json()] == ["bob", "alice"]
+    assert cl.put("/api/persons/order", json={"ids": ["nobody"]}).status_code == 400
+    assert (
+        cl.patch("/api/persons/bob", json={"icon": "🚴", "color": "#ff6b6b"}).json()["icon"] == "🚴"
+    )
+    new = cl.post("/api/persons", json={"label": "Ewa"}).json()
+    assert new["sort_order"] == 3
+
+    compare = cl.get("/api/compare").json()
+    assert [p["id"] for p in compare["people"]] == ["bob", "alice", "ewa"]
+    assert all("groups" in p for p in compare["people"])
+
+
+def test_activity_list_totals_and_type_sources(client):
+    cl, _ = client
+    data = cl.get("/api/activities").json()
+    assert data["totals"]["count"] == 0 and data["total"] == 0
+    types = {t["key"]: t for t in cl.get("/api/types").json()["types"]}
+    assert "training / yoga" in " ".join(types["yoga"]["fit"]) or "* / yoga" in types["yoga"]["fit"]
+    assert types["run"]["fit"] == ["running / street", "running / *"]

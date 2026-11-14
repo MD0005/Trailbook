@@ -16,6 +16,7 @@ small ARM boards such as the Home Assistant Yellow (Raspberry Pi CM4).
 - Support several people; each person is a subfolder.
 - Statistics: totals and trends per sport, week, month, year.
 - Map: every route of a person drawn as lines; overlapping routes produce a heatmap effect.
+- Explorer tiles: visited zoom-14 tiles, max square, cluster.
 - Per-activity analysis: route, charts of streams (HR, pace/speed, power, cadence,
   altitude), laps, best efforts.
 - Fitness model: training load, fitness (CTL), fatigue (ATL), form (TSB); power and
@@ -25,7 +26,6 @@ small ARM boards such as the Home Assistant Yellow (Raspberry Pi CM4).
 - English UI first, Polish translation; more languages via translation files.
 
 ### Non-goals (for now)
-- Explorer tiles / max square / clusters.
 - Syncing with Garmin Connect, Strava or other cloud services.
 - Archiving original FIT files. The folder is the source of truth for files;
   the database keeps the derived data.
@@ -338,26 +338,38 @@ All JSON, prefix `/api`. Read endpoints accept `person`, `from`, `to`, `category
 
 ## 10. Frontend
 
-The visual design is defined separately by the project owner. This section lists only
-the views and data each one needs.
+The visual design is defined by the project owner; the technical preview follows these rules.
 
+### Navigation
+- Main header: **Activities · Calendar · Heatmap · Fitness · Statistics**, then on the right
+  the **person picker** (the only coloured icon), the light/dark switch and a **gear** for
+  Settings.
+- Person picker: one person or **Everyone**. The first person in the configured order is the
+  default (never Everyone). The choice is remembered per browser.
+- With **Everyone** selected, Fitness and Statistics are hidden (they are per person) and a
+  **Compare** tab appears: people side by side (activities, distance, time, ascent; per group).
+- Settings has tabs: **General** (folder, person mode, automatic scan), **People** (label,
+  icon, colour, drag & drop order, watches), **Import** (scan card + file table),
+  **Activity types** (read-only list with the FIT sport/sub-sport behind every type).
+
+### Views
 | View | Content |
 |---|---|
-| Dashboard | Recent activities, this week/month totals, current fitness/form. |
-| Activities | Filterable list (person, category, date range, search). |
-| Activity | Route map, stream charts with linked cursor (hover on chart ↔ point on map), laps, best efforts. |
-| Map | All routes of selected people/categories/years as low-opacity lines (heatmap effect); click a line → activity. |
-| Fitness | CTL / ATL / TSB chart, weekly load. |
-| Progress | Totals by week/month/year per category; year-over-year comparison. |
-| Curves | Power, pace and HR duration curves; compare periods. |
-| Import | Root folder, people found, queue progress, files by status, missing-file actions. |
-| Settings | People (label, color, thresholds), units, language, map style. |
+| Activities | KPI row (count, distance, time, ascent, calories for the current filters); list / small tiles / large tiles (with route) switch at the right of the page title; sortable columns with a filter row. |
+| Activity | Route, stream charts, laps, best efforts; change type; delete. |
+| Calendar | Month/year view with activities per day and weekly totals. |
+| Heatmap | All routes as low-opacity lines; explorer tiles, max square, cluster. |
+| Fitness | Load, CTL / ATL / TSB. |
+| Statistics | Totals by week/month/year and type; duration curves; records. |
+| Compare | Everyone side by side (only with “Everyone” selected). |
 
-Display requirements: works inside the HA Ingress panel and in an iframe; dark theme by
-default plus light theme (toggle, remembered per browser); usable on phone width. Style
-rules: every section is a card (background, no border); descriptions always use the same
-small muted style; states (next scan, saved, running, errors) always the same small size in
-a state colour.
+### Style rules
+- Dark theme by default, light theme via a toggle (remembered per browser).
+- Every section is a card with a background (no borders).
+- Descriptions always use the same small muted style; states (next scan, saved, running,
+  errors, file statuses) always the same small size in a state colour.
+- **Numbers are always shown with their unit** (km, m, bpm, W, spm/rpm, kcal, h, /km).
+- Works inside the HA Ingress panel and in an iframe; usable on phone width.
 
 ---
 
@@ -429,7 +441,7 @@ API: `POST /api/export`, `GET /api/export/status`, `GET /api/export/{name}` (dow
    import manager (scan, statuses, duplicates, missing), CLI to run it on a PC. Tested on a
    real Garmin export.
 2. **API + minimal UI** — activity list and detail with streams. *(done: `trailbook serve`, technical preview UI)*
-3. **Map** — all routes, heatmap effect, tile proxy.
+3. **Map / Heatmap** — all routes, heatmap effect, tile proxy, explorer tiles (visited tiles, max square, cluster).
 4. **Statistics** — totals, load, CTL/ATL/TSB, best efforts and curves.
 5. **Add-on** — packaging, Ingress, stdin trigger, multi-arch CI, install on HA Yellow.
 6. **Export / restore** — migration ZIP (section 13), tested by moving a PC install to HA Yellow.

@@ -387,6 +387,22 @@ _INDOOR_SUB_SPORTS = frozenset(
 )
 
 
+def fit_sources() -> dict[str, list[str]]:
+    """For every type, the FIT sport/sub_sport combinations that map to it.
+
+    '*' means "any". Used to explain the mapping in the UI.
+    """
+    sources: dict[str, list[str]] = {k: [] for k in TYPES}
+    for (sport, sub), key in _EXACT.items():
+        sources[key].append(f"{sport} / {sub}")
+    for sub, key in _BY_SUB_SPORT.items():
+        sources[key].append(f"* / {sub}")
+    for sport, key in _BY_SPORT.items():
+        sources[key].append(f"{sport} / *")
+    sources["other"].append("anything else")
+    return sources
+
+
 def resolve_type(sport: str | int | None, sub_sport: str | int | None) -> ActivityType:
     sport_s = str(sport) if sport is not None else ""
     sub_s = str(sub_sport) if sub_sport is not None else ""

@@ -125,7 +125,8 @@ def person_mode(conn: sqlite3.Connection) -> str:
 
 def ensure_unassigned(conn: sqlite3.Connection) -> None:
     conn.execute(
-        "INSERT OR IGNORE INTO persons (id, label) VALUES (?, 'Unassigned')", (UNASSIGNED,)
+        "INSERT OR IGNORE INTO persons (id, label, sort_order) VALUES (?, 'Unassigned', 100000)",
+        (UNASSIGNED,),
     )
 
 
@@ -159,7 +160,9 @@ def scan(conn: sqlite3.Connection, root: str | Path, mode: str | None = None) ->
                 persons.add(UNASSIGNED)
             elif e.person_id not in persons:
                 conn.execute(
-                    "INSERT INTO persons (id, label) VALUES (?, ?)", (e.person_id, e.person_id)
+                    """INSERT INTO persons (id, label, sort_order)
+                       VALUES (?, ?, (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM persons))""",
+                    (e.person_id, e.person_id),
                 )
                 persons.add(e.person_id)
                 result.new_persons.append(e.person_id)

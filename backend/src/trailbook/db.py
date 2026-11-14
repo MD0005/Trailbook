@@ -205,6 +205,13 @@ MIGRATIONS: list[str] = [
         SELECT device_serial, MIN(person_id), MIN(first_seen), MAX(first_seen) FROM files
         WHERE device_serial IS NOT NULL GROUP BY device_serial;
     """,
+    # v4 — people get a display order (drag & drop) and an icon for the person picker.
+    """
+    ALTER TABLE persons ADD COLUMN sort_order INTEGER;
+    ALTER TABLE persons ADD COLUMN icon TEXT;
+    UPDATE persons SET sort_order = (
+        SELECT COUNT(*) FROM persons p2 WHERE p2.rowid <= persons.rowid);
+    """,
 ]
 
 SCHEMA_VERSION = len(MIGRATIONS)
