@@ -653,6 +653,7 @@ def snap(conn: sqlite3.Connection, pins: list[tuple[float, float]], category: st
         "activity_type": a["activity_type"],
         "category": a["category"],
         "start_time_utc": a["start_time_utc"],
+        "utc_offset_s": a["utc_offset_s"],
         "start_s": start_s,
         "end_s": end_s,
         "distance_m": round(path_length(pts), 1),

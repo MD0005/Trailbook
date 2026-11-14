@@ -137,6 +137,7 @@ const NAV = [
   { key: "activities", label: "Activities" },
   { key: "calendar", label: "Calendar" },
   { key: "heatmap", label: "Map" },
+  { key: "segments", label: "Segments" },
   { key: "fitness", label: "Fitness", single: true },
   { key: "wellbeing", label: "Wellbeing", single: true },
   { key: "stats", label: "Statistics", single: true },
@@ -1852,7 +1853,7 @@ async function route() {
     TYPES ??= await api("types");
     PERSONS = await api("persons");
     if (CURRENT === null || (CURRENT !== "all" && !person(CURRENT))) CURRENT = pickDefaultPerson();
-    let section = parts[0] === "activity" ? "activities" : parts[0] || "activities";
+    let section = parts[0] === "activity" ? "activities" : parts[0] === "segment" ? "segments" : parts[0] || "activities";
     // Views that only make sense for one person / for everyone.
     if (CURRENT === "all" && (section === "fitness" || section === "stats" || section === "wellbeing")) { location.hash = "#/compare"; return; }
     if (CURRENT !== "all" && section === "compare") { location.hash = "#/activities"; return; }
@@ -1860,6 +1861,9 @@ async function route() {
     renderHeader(section);
     setHeaderHeight();
     if (parts[0] === "activity") await renderActivity(parts[1]);
+    else if (parts[0] === "segment") await renderSegment(parts[1], params);
+    else if (section === "segments" && parts[1] === "new") await (parts[2] === "map" ? renderSegmentFromMap(params) : renderSegmentFromActivity(params));
+    else if (section === "segments") await renderSegments(params);
     else if (section === "settings") await renderSettings(parts[1], params);
     else if (section === "compare") await renderCompare(params);
     else if (section === "heatmap") await renderHeatmap(params);
