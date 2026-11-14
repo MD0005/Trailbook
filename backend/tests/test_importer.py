@@ -15,7 +15,7 @@ def statuses(conn):
     }
 
 
-def test_scan_discovers_persons_and_ignores_root_files(conn, tmp_path):
+def test_scan_discovers_persons_and_root_files(conn, tmp_path):
     root = tmp_path / "root"
     (root / "alice").mkdir(parents=True)
     (root / "bob" / "2024").mkdir(parents=True)
@@ -26,10 +26,16 @@ def test_scan_discovers_persons_and_ignores_root_files(conn, tmp_path):
 
     result = importer.scan(conn, root)
 
-    assert result.scanned == 2
+    assert result.scanned == 3
     assert sorted(result.new_persons) == ["alice", "bob"]
-    assert result.ignored == ["stray.fit"]
-    assert statuses(conn) == {("alice/a.fit", ""): "new", ("bob/2024/b.FIT", ""): "new"}
+    assert result.ignored == []
+    assert statuses(conn) == {
+        ("alice/a.fit", ""): "new",
+        ("bob/2024/b.FIT", ""): "new",
+        ("stray.fit", ""): "new",  # root-level file: person comes from the watch
+    }
+    owner = conn.execute("SELECT person_id FROM files WHERE rel_path = 'stray.fit'").fetchone()
+    assert owner["person_id"] == importer.UNASSIGNED
 
 
 def test_non_activity_files_are_skipped_with_reason(conn, tmp_path):

@@ -106,6 +106,11 @@ person modes (setting `person_mode`):
   watch; files of unknown watches go to *Unassigned* until the user links the watch on the
   People page, which moves its files and activities.
 
+In folder mode, files lying directly in the watched folder (not in a person's subfolder) are
+assigned by their watch as well; changing a watch's person moves only those, never files in
+a person's subfolder. Two people sharing one watch therefore need folder mode.
+Switching the mode keeps existing assignments; the new rule applies to files imported later.
+
 ```
 /share/trailbook/            ← root folder (configurable; must be inside an HA-mapped dir)
 ├── alice/                   ← person id = folder name
@@ -348,8 +353,11 @@ the views and data each one needs.
 | Import | Root folder, people found, queue progress, files by status, missing-file actions. |
 | Settings | People (label, color, thresholds), units, language, map style. |
 
-Display requirements: works inside the HA Ingress panel and in an iframe; light and dark
-themes; usable on phone width.
+Display requirements: works inside the HA Ingress panel and in an iframe; dark theme by
+default plus light theme (toggle, remembered per browser); usable on phone width. Style
+rules: every section is a card (background, no border); descriptions always use the same
+small muted style; states (next scan, saved, running, errors) always the same small size in
+a state colour.
 
 ---
 

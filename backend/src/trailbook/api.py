@@ -188,7 +188,10 @@ def create_app(db_path: str | Path) -> Starlette:
                 """SELECT d.*, p.label person_label,
                           (SELECT COUNT(*) FROM activities a WHERE a.device_serial = d.serial)
                               activities,
-                          (SELECT COUNT(*) FROM files f WHERE f.device_serial = d.serial) files
+                          (SELECT COUNT(*) FROM files f WHERE f.device_serial = d.serial) files,
+                          (SELECT GROUP_CONCAT(DISTINCT f.person_id) FROM files f
+                           WHERE f.device_serial = d.serial AND f.person_id != '_unassigned')
+                              folders
                    FROM devices d LEFT JOIN persons p ON p.id = d.person_id
                    ORDER BY d.last_seen DESC"""
             ).fetchall()

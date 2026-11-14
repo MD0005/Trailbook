@@ -1,21 +1,29 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Trailbook</title>
+<script>
+  // Apply the saved theme before first paint (dark is the default).
+  try {
+    const t = localStorage.getItem("trailbook-theme");
+    if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+  } catch (e) { /* storage unavailable: keep dark */ }
+</script>
 <link rel="stylesheet" href="preview.css">
 </head>
 <body>
 <header>
-  <strong>Trailbook</strong> <span class="muted">technical preview</span>
+  <span class="brand">Trailbook</span> <span class="hint">technical preview</span>
   <nav>
-    <a href="#/activities">Activities</a>
-    <a href="#/import">Import</a>
-    <a href="#/people">People</a>
-    <a href="#/types">Types</a>
-    <a href="#/settings">Settings</a>
+    <a href="#/activities" data-nav="activities">Activities</a>
+    <a href="#/import" data-nav="import">Import</a>
+    <a href="#/people" data-nav="people">People</a>
+    <a href="#/types" data-nav="types">Types</a>
+    <a href="#/settings" data-nav="settings">Settings</a>
   </nav>
+  <button id="theme" class="icon" title="Switch light / dark theme" aria-label="Switch theme"></button>
 </header>
 <main id="view"></main>
 <script src="preview.js"></script>

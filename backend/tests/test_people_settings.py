@@ -140,3 +140,20 @@ def test_files_sort_and_column_filters(client):
 def test_static_files_are_revalidated(client):
     cl, _ = client
     assert cl.get("/preview.js").headers["cache-control"] == "no-cache"
+
+
+def test_folder_mode_watch_change_moves_only_unassigned(conn, tmp_path):
+    root = tmp_path / "root"
+    write(root / "alice" / "a.fit", make_fit(49, serial=111, created=T0))
+    write(root / "loose.fit", make_fit(49, serial=111, created=T0 + 60))  # no folder person
+    importer.scan(conn, root)
+    importer.run_queue(conn, root)
+    owners = dict(conn.execute("SELECT rel_path, person_id FROM files").fetchall())
+    # The root-level file follows the watch, which was learned from alice's folder.
+    assert owners == {"alice/a.fit": "alice", "loose.fit": "alice"}
+
+    conn.execute("INSERT INTO persons (id, label) VALUES ('bob', 'Bob')")
+    importer.assign_device(conn, 111, "bob")
+    owners = dict(conn.execute("SELECT rel_path, person_id FROM files").fetchall())
+    assert owners["alice/a.fit"] == "alice"  # the folder still decides
+    assert owners["loose.fit"] == "bob"  # root-level file follows the watch

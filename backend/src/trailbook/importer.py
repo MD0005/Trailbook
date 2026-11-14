@@ -60,8 +60,9 @@ class _Entry:
 def _walk(root: Path, result: ScanResult, mode: str) -> Iterator[_Entry]:
     """Yield every FIT file (or ZIP member) below `root`.
 
-    "folders" mode: only files inside first-level subfolders count (subfolder = person).
-    "devices" mode: every file counts; the person is resolved from the watch at import.
+    "folders" mode: a first-level subfolder is the person; files lying directly in the root
+    are resolved from the watch at import (like "devices" mode).
+    "devices" mode: every file is resolved from the watch at import.
     """
     if mode == "devices":
         yield from _walk_dir(root, root, UNASSIGNED, result)
@@ -72,7 +73,8 @@ def _walk(root: Path, result: ScanResult, mode: str) -> Iterator[_Entry]:
         if person_dir.name.startswith("."):
             continue
         if not person_dir.is_dir():
-            result.ignored.append(person_dir.name)  # files directly in root belong to nobody
+            # Files directly in the root have no folder person: the watch decides.
+            yield from _file_entries(root, person_dir.path, person_dir.name, UNASSIGNED, result)
             continue
         yield from _walk_dir(root, Path(person_dir.path), person_dir.name, result)
 
@@ -83,16 +85,21 @@ def _walk_dir(root: Path, start: Path, person_id: str, result: ScanResult) -> It
         for name in sorted(filenames):
             if name.startswith("."):
                 continue
-            lower = name.lower()
-            if not (lower.endswith(".fit") or lower.endswith(".zip")):
-                continue
-            full = os.path.join(dirpath, name)
-            st = os.stat(full)
-            rel = Path(full).relative_to(root).as_posix()
-            if lower.endswith(".fit"):
-                yield _Entry(person_id, rel, "", st.st_size, st.st_mtime)
-            else:
-                yield from _zip_entries(full, person_id, rel, st, result)
+            yield from _file_entries(root, os.path.join(dirpath, name), name, person_id, result)
+
+
+def _file_entries(
+    root: Path, full: str, name: str, person_id: str, result: ScanResult
+) -> Iterator[_Entry]:
+    lower = name.lower()
+    if not (lower.endswith(".fit") or lower.endswith(".zip")):
+        return
+    st = os.stat(full)
+    rel = Path(full).relative_to(root).as_posix()
+    if lower.endswith(".fit"):
+        yield _Entry(person_id, rel, "", st.st_size, st.st_mtime)
+    else:
+        yield from _zip_entries(full, person_id, rel, st, result)
 
 
 def _zip_entries(full: str, person_id: str, rel: str, st: os.stat_result, result: ScanResult):
@@ -131,8 +138,6 @@ def scan(conn: sqlite3.Connection, root: str | Path, mode: str | None = None) ->
     if not root.is_dir():
         raise FileNotFoundError(f"Root folder not found: {root}")
     mode = mode or person_mode(conn)
-    if mode == "devices":
-        ensure_unassigned(conn)
 
     result = ScanResult()
     stamp = now_iso()
@@ -149,7 +154,10 @@ def scan(conn: sqlite3.Connection, root: str | Path, mode: str | None = None) ->
             key = (e.rel_path, e.zip_member)
             seen.add(key)
 
-            if e.person_id not in persons and e.person_id != UNASSIGNED:
+            if e.person_id not in persons and e.person_id == UNASSIGNED:
+                ensure_unassigned(conn)
+                persons.add(UNASSIGNED)
+            elif e.person_id not in persons:
                 conn.execute(
                     "INSERT INTO persons (id, label) VALUES (?, ?)", (e.person_id, e.person_id)
                 )
@@ -372,8 +380,9 @@ def _resolve_person(conn: sqlite3.Connection, row: sqlite3.Row, fid) -> str:
 def assign_device(conn: sqlite3.Connection, serial: int, person_id: str | None) -> int:
     """Link a watch to a person and move its files and activities there.
 
-    Folder mode: files keep their folder person, so only still-unassigned activities move.
-    Device mode: all activities of the watch move. Returns the number of moved activities.
+    Folder mode: files in a person's subfolder stay with that person; files lying directly in
+    the root follow the watch. Device mode: everything of the watch moves.
+    Returns the number of activities that now belong to the person.
     """
     conn.execute("BEGIN")
     try:
@@ -387,12 +396,26 @@ def assign_device(conn: sqlite3.Connection, serial: int, person_id: str | None) 
         if person_id is None:
             ensure_unassigned(conn)
         target = person_id or UNASSIGNED
-        extra = " AND person_id = ?" if person_mode(conn) == "folders" else ""
-        params = (target, serial, UNASSIGNED) if extra else (target, serial)
-        conn.execute(f"UPDATE files SET person_id = ? WHERE device_serial = ?{extra}", params)
-        moved = conn.execute(
-            f"UPDATE activities SET person_id = ? WHERE device_serial = ?{extra}", params
-        ).rowcount
+        if person_mode(conn) == "folders":
+            # The subfolder decides; only files lying directly in the root (and anything
+            # still unassigned) follow the watch.
+            follow = "(instr(rel_path, '/') = 0 OR person_id = ?)"
+            conn.execute(
+                f"UPDATE files SET person_id = ? WHERE device_serial = ? AND {follow}",
+                (target, serial, UNASSIGNED),
+            )
+            moved = conn.execute(
+                """UPDATE activities SET person_id = ?
+                    WHERE id IN (SELECT activity_id FROM files
+                                 WHERE device_serial = ? AND activity_id IS NOT NULL
+                                   AND status = 'imported' AND person_id = ?)""",
+                (target, serial, target),
+            ).rowcount
+        else:
+            conn.execute("UPDATE files SET person_id = ? WHERE device_serial = ?", (target, serial))
+            moved = conn.execute(
+                "UPDATE activities SET person_id = ? WHERE device_serial = ?", (target, serial)
+            ).rowcount
         conn.execute("COMMIT")
     except Exception:
         conn.execute("ROLLBACK")
