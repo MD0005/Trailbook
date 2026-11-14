@@ -29,6 +29,7 @@ from . import (
     db,
     explorer,
     fitfile,
+    garmin,
     importer,
     jobs,
     scheduler,
@@ -648,6 +649,7 @@ def create_app(db_path: str | Path) -> Starlette:
             last = c.execute("SELECT * FROM import_runs ORDER BY id DESC LIMIT 1").fetchone()
             progress = jobs.read_progress(c)
             root = db.get_setting(c, "root")
+            source = db.get_setting(c, "data_source") or "folder"
             due = scheduler.next_scan_at(c)
             interval = scheduler.interval_min(c)
         running = job.running()
@@ -657,6 +659,7 @@ def create_app(db_path: str | Path) -> Starlette:
         return JSONResponse(
             {
                 "root": root,
+                "data_source": source,
                 "running": running,
                 "progress": progress,
                 "files": counts,
@@ -700,9 +703,69 @@ def create_app(db_path: str | Path) -> Starlette:
         started = job.start(trigger="upload")
         return JSONResponse({"queued": queued, "started": started, "bytes": size}, status_code=202)
 
+    # ---- Garmin Connect ----------------------------------------------------------------
+
+    def _person_or_400(c: sqlite3.Connection, pid: str) -> None:
+        if (
+            pid == importer.UNASSIGNED
+            or not c.execute("SELECT 1 FROM persons WHERE id = ?", (pid,)).fetchone()
+        ):
+            raise HTTPException(400, "choose a person")
+
+    async def garmin_accounts(request: Request):
+        with closing(conn()) as c:
+            return JSONResponse({"accounts": garmin.accounts(c)})
+
+    async def garmin_account_set(request: Request):
+        pid = request.path_params["id"]
+        body = await request.json()
+        key = str(body.get("api_key") or "").strip()
+        history_from = body.get("history_from") or None
+        if history_from is not None and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(history_from)):
+            raise HTTPException(400, "history start must be a date (YYYY-MM-DD)")
+        with closing(conn()) as c:
+            _person_or_400(c, pid)
+            if key:
+                if len(key) < 16 or re.search(r"\s", key):
+                    raise HTTPException(400, "this does not look like a Garmin personal API key")
+                garmin.set_account(c, pid, key, history_from)
+            elif c.execute("SELECT 1 FROM garmin_accounts WHERE person_id = ?", (pid,)).fetchone():
+                c.execute(
+                    """UPDATE garmin_accounts SET history_from = ?, backfill_offset = 0,
+                              backfill_done = 0 WHERE person_id = ?""",
+                    (history_from, pid),
+                )
+            else:
+                raise HTTPException(400, "enter the API key")
+        sched.settings_changed()
+        return await garmin_account_test(request)
+
+    async def garmin_account_test(request: Request):
+        pid = request.path_params["id"]
+
+        def run() -> dict:
+            with closing(conn()) as c:
+                try:
+                    return garmin.test_account(c, pid)
+                except garmin.GarminError as exc:
+                    return {"ok": False, "error": str(exc)}
+
+        result = await run_in_threadpool(run)
+        with closing(conn()) as c:
+            result["account"] = garmin.accounts(c).get(pid)
+        return JSONResponse(result)
+
+    async def garmin_account_delete(request: Request):
+        pid = request.path_params["id"]
+        with closing(conn()) as c:
+            c.execute("DELETE FROM garmin_accounts WHERE person_id = ?", (pid,))
+        sched.settings_changed()
+        return JSONResponse({"deleted": True})
+
     async def import_scan(request: Request):
         with closing(conn()) as c:
-            if not db.get_setting(c, "root"):
+            source = db.get_setting(c, "data_source") or "folder"
+            if source == "folder" and not db.get_setting(c, "root"):
                 raise HTTPException(409, "root folder is not configured")
         if not job.start(trigger="manual"):
             return JSONResponse({"started": False, "reason": "already running"}, status_code=409)
@@ -791,6 +854,10 @@ def create_app(db_path: str | Path) -> Starlette:
         Route("/api/heatmap/tiles", heatmap_tiles),
         Route("/api/basemaps", basemaps),
         Route("/api/basemap/{source}/{z:int}/{x:int}/{y:int}.png", basemap_tile),
+        Route("/api/garmin", garmin_accounts),
+        Route("/api/garmin/{id}", garmin_account_set, methods=["PUT"]),
+        Route("/api/garmin/{id}", garmin_account_delete, methods=["DELETE"]),
+        Route("/api/garmin/{id}/test", garmin_account_test, methods=["POST"]),
         Route("/api/import/status", import_status),
         Route("/api/import/scan", import_scan, methods=["POST"]),
         Route("/api/import/files", import_files),

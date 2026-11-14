@@ -1,0 +1,464 @@
+"""Garmin Connect personal API: download each person's activities as original FIT files.
+
+Every person connects their own Garmin account with a *personal API key* (self-service in
+Garmin Connect; it expires after 30 days to 1 year). The key is exchanged for an access
+token (valid 24 h, no refresh tokens: a new one is requested when needed).
+
+Downloads are slow on purpose: one request every few seconds, a limited number of
+downloads per run (the history is filled in over several runs) and a full stop on any
+refusal or server error, so the next scheduled run tries again later. Downloaded files are
+stored like uploads (`uploads/<person>/garmin-<id>.zip`) and queued for the normal
+importer, so activities that already came from a folder are recognised by their FIT id
+and never imported twice.
+
+Only the standard library is used (urllib), no extra dependencies.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+import sqlite3
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+import zipfile
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+
+from . import __version__, importer
+
+BASE_URL = "https://personal.connectapi.garmin.com"
+TOKEN_PATH = "/personalapitoken-service/personal-api/personal-api-key/token"
+SEARCH_PATH = "/activitylist-service/activities/search/activities"
+DOWNLOAD_PATH = "/download-service/files/activity/{id}"
+PROFILE_PATH = "/userprofile-service/userprofile/settings"
+USER_AGENT = f"Trailbook/{__version__} (self-hosted training log)"
+
+PAGE_SIZE = 50
+REQUEST_GAP_S = 3.0  # pause between two requests to Garmin
+MAX_DOWNLOADS_PER_RUN = 60  # the history is completed over several runs
+BACKFILL_OVERLAP = 10  # re-read a few rows when resuming the history, nothing is missed
+TOKEN_FALLBACK_S = 23 * 3600
+
+# (method, url, headers, timeout) -> (status, headers, body)
+Transport = Callable[[str, str, dict, float], tuple[int, dict, bytes]]
+ProgressFn = Callable[..., None]
+
+
+class GarminError(Exception):
+    """A request failed. `stop_run` = stop all downloads now and retry on the next run."""
+
+    def __init__(self, message: str, status: int | None = None, stop_run: bool = False):
+        super().__init__(message)
+        self.status = status
+        self.stop_run = stop_run
+
+
+class AuthError(GarminError):
+    """The key was refused (wrong, revoked or expired). Needs the person's action."""
+
+
+def urllib_transport(method: str, url: str, headers: dict, timeout: float) -> tuple:
+    req = urllib.request.Request(
+        url, method=method, headers=headers, data=b"" if method == "POST" else None
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 (fixed https host)
+            return resp.status, dict(resp.headers), resp.read()
+    except urllib.error.HTTPError as exc:
+        return exc.code, dict(exc.headers or {}), exc.read() or b""
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        raise GarminError(f"Garmin is not reachable: {exc}", stop_run=True) from exc
+
+
+def _parse_token(body: bytes) -> tuple[str, int]:
+    """Token response → (token, lifetime in s). Accepts JSON (OAuth2 style) or plain text."""
+    text = body.decode("utf-8", "replace").strip()
+    try:
+        data = json.loads(text)
+    except ValueError:
+        data = text
+    if isinstance(data, str):
+        return data.strip('"'), TOKEN_FALLBACK_S
+    if isinstance(data, dict):
+        token = data.get("access_token") or data.get("accessToken") or data.get("token")
+        life = data.get("expires_in") or data.get("expiresIn")
+        if token:
+            try:
+                life = int(life) if life else TOKEN_FALLBACK_S
+            except (TypeError, ValueError):
+                life = TOKEN_FALLBACK_S
+            return str(token), max(60, life - 300)  # renew 5 min early
+    raise GarminError("Garmin returned an unexpected token response")
+
+
+def _message(status: int, body: bytes) -> str:
+    snippet = re.sub(r"\s+", " ", body[:200].decode("utf-8", "replace")).strip()
+    return f"HTTP {status}" + (f": {snippet}" if snippet else "")
+
+
+class Client:
+    def __init__(
+        self,
+        api_key: str,
+        *,
+        token: str | None = None,
+        token_expires: datetime | None = None,
+        transport: Transport | None = None,
+        base_url: str = BASE_URL,
+        gap_s: float = REQUEST_GAP_S,
+        sleep: Callable[[float], None] = time.sleep,
+        timeout: float = 60.0,
+    ):
+        self.api_key = api_key.strip()
+        self.token = token
+        self.token_expires = token_expires
+        self.transport = transport or urllib_transport
+        self.base_url = base_url.rstrip("/")
+        self.gap_s = gap_s
+        self.sleep = sleep
+        self.timeout = timeout
+        self._last = 0.0
+        self.requests = 0
+
+    def _pace(self) -> None:
+        wait = self._last + self.gap_s - time.monotonic()
+        if self.requests and wait > 0:
+            self.sleep(wait)
+        self._last = time.monotonic()
+        self.requests += 1
+
+    def _send(self, method: str, url: str, headers: dict) -> tuple[int, dict, bytes]:
+        self._pace()
+        headers = {"User-Agent": USER_AGENT, **headers}
+        return self.transport(method, url, headers, self.timeout)
+
+    def fetch_token(self) -> str:
+        status, _, body = self._send(
+            "POST", self.base_url + TOKEN_PATH, {"Authorization": f"ApiKey {self.api_key}"}
+        )
+        if status in (400, 401, 403):
+            raise AuthError("Garmin refused the API key (wrong, deleted or expired)", status)
+        if status != 200:
+            raise GarminError(f"Token request failed, {_message(status, body)}", status, True)
+        self.token, life = _parse_token(body)
+        self.token_expires = datetime.now(UTC) + timedelta(seconds=life)
+        return self.token
+
+    def _valid_token(self) -> str:
+        if not self.token or not self.token_expires or self.token_expires <= datetime.now(UTC):
+            return self.fetch_token()
+        return self.token
+
+    def get(self, path: str, params: dict | None = None) -> bytes:
+        url = self.base_url + path
+        if params:
+            url += "?" + urllib.parse.urlencode({k: v for k, v in params.items() if v is not None})
+        for attempt in range(2):
+            token = self._valid_token()
+            status, headers, body = self._send("GET", url, {"Authorization": f"Bearer {token}"})
+            if status == 200:
+                return body
+            if status == 401 and attempt == 0:
+                self.token = None  # expired early: get a new token once
+                continue
+            if status in (401, 403):
+                raise AuthError(f"Garmin refused access, {_message(status, body)}", status)
+            if status == 429 or status >= 500:
+                retry = headers.get("Retry-After") or headers.get("retry-after")
+                hint = f" (retry after {retry} s)" if retry else ""
+                raise GarminError(
+                    f"Garmin asked to slow down, {_message(status, body)}{hint}", status, True
+                )
+            raise GarminError(_message(status, body), status)
+        raise GarminError("Garmin refused access")  # pragma: no cover
+
+    def search(
+        self, start: int, limit: int = PAGE_SIZE, start_date: str | None = None
+    ) -> list[dict]:
+        body = self.get(
+            SEARCH_PATH,
+            {"start": start, "limit": limit, "sortOrder": "desc", "startDate": start_date},
+        )
+        data = json.loads(body or b"[]")
+        if not isinstance(data, list):
+            raise GarminError("Garmin returned an unexpected activity list")
+        return data
+
+    def download(self, activity_id: int) -> bytes:
+        return self.get(DOWNLOAD_PATH.format(id=int(activity_id)))
+
+
+# ---- accounts ----------------------------------------------------------------------------
+
+
+def key_hint(api_key: str) -> str:
+    key = api_key.strip()
+    return "…" + key[-4:] if len(key) > 8 else "…"
+
+
+def set_account(
+    conn: sqlite3.Connection, person_id: str, api_key: str, history_from: str | None
+) -> None:
+    """Store (or replace) a person's key. A new key resets the token and the error state."""
+    conn.execute(
+        """INSERT INTO garmin_accounts
+               (person_id, api_key, key_hint, history_from, status, created_at)
+           VALUES (?, ?, ?, ?, 'new', ?)
+           ON CONFLICT(person_id) DO UPDATE SET api_key = excluded.api_key,
+               key_hint = excluded.key_hint, history_from = excluded.history_from,
+               token = NULL, token_expires = NULL, status = 'new', last_error = NULL,
+               backfill_offset = 0, backfill_done = 0""",
+        (person_id, api_key.strip(), key_hint(api_key), history_from, importer.now_iso()),
+    )
+
+
+def client_for(row: sqlite3.Row, **kwargs) -> Client:
+    expires = None
+    if row["token_expires"]:
+        expires = datetime.strptime(row["token_expires"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
+    return Client(row["api_key"], token=row["token"], token_expires=expires, **kwargs)
+
+
+def _save_token(conn: sqlite3.Connection, person_id: str, client: Client) -> None:
+    expires = client.token_expires.strftime("%Y-%m-%dT%H:%M:%SZ") if client.token_expires else None
+    conn.execute(
+        "UPDATE garmin_accounts SET token = ?, token_expires = ? WHERE person_id = ?",
+        (client.token, expires, person_id),
+    )
+
+
+def test_account(conn: sqlite3.Connection, person_id: str, **kwargs) -> dict:
+    """Get a token and read the newest activity. Updates the account status."""
+    row = conn.execute("SELECT * FROM garmin_accounts WHERE person_id = ?", (person_id,)).fetchone()
+    if row is None:
+        raise GarminError("no API key stored for this person")
+    client = client_for(row, **{"gap_s": 0.0, **kwargs})
+    try:
+        client.fetch_token()
+        latest = client.search(0, 1)
+    except GarminError as exc:
+        _set_status(
+            conn, person_id, "auth_error" if isinstance(exc, AuthError) else "error", str(exc)
+        )
+        raise
+    _save_token(conn, person_id, client)
+    _set_status(conn, person_id, "ok", None)
+    item = latest[0] if latest else None
+    return {
+        "ok": True,
+        "latest": {
+            "name": item.get("activityName"),
+            "start": item.get("startTimeLocal"),
+        }
+        if item
+        else None,
+    }
+
+
+def _set_status(conn: sqlite3.Connection, person_id: str, status: str, error: str | None) -> None:
+    conn.execute(
+        "UPDATE garmin_accounts SET status = ?, last_error = ? WHERE person_id = ?",
+        (status, error, person_id),
+    )
+
+
+# ---- sync --------------------------------------------------------------------------------
+
+
+@dataclass
+class SyncResult:
+    downloaded: int = 0
+    queued_files: int = 0
+    errors: int = 0
+    stopped: str | None = None  # reason the whole run stopped early
+    persons: list[str] = field(default_factory=list)
+
+
+def _known(conn: sqlite3.Connection, person_id: str, ids: list[int]) -> set[int]:
+    if not ids:
+        return set()
+    marks = ",".join("?" * len(ids))
+    rows = conn.execute(
+        f"""SELECT activity_id FROM garmin_activities
+            WHERE person_id = ? AND activity_id IN ({marks})""",
+        (person_id, *ids),
+    )
+    return {r[0] for r in rows}
+
+
+def _store_download(
+    conn: sqlite3.Connection, uploads_dir: Path, person_id: str, item: dict, data: bytes
+) -> int:
+    activity_id = int(item["activityId"])
+    suffix = ".zip" if data[:2] == b"PK" else ".fit"
+    folder = uploads_dir / re.sub(r"[^A-Za-z0-9._-]+", "_", person_id)
+    folder.mkdir(parents=True, exist_ok=True)
+    target = folder / f"garmin-{activity_id}{suffix}"
+    target.write_bytes(data)
+    try:
+        queued = importer.register_upload(conn, uploads_dir, person_id, target)
+    except zipfile.BadZipFile:
+        target.unlink(missing_ok=True)
+        raise GarminError(f"activity {activity_id}: download is not a valid ZIP") from None
+    conn.execute(
+        """INSERT OR REPLACE INTO garmin_activities
+               (person_id, activity_id, start_gmt, name, type_key, status, file_rel, error,
+                fetched_at)
+           VALUES (?, ?, ?, ?, ?, 'downloaded', ?, NULL, ?)""",
+        (
+            person_id, activity_id, item.get("startTimeGMT"), item.get("activityName"),
+            (item.get("activityType") or {}).get("typeKey"),
+            importer.UPLOADS_PREFIX + target.relative_to(uploads_dir).as_posix(),
+            importer.now_iso(),
+        ),
+    )  # fmt: skip
+    return queued
+
+
+def _mark_failed(conn: sqlite3.Connection, person_id: str, item: dict, error: str) -> None:
+    conn.execute(
+        """INSERT OR REPLACE INTO garmin_activities
+               (person_id, activity_id, start_gmt, name, type_key, status, error, fetched_at)
+           VALUES (?, ?, ?, ?, ?, 'error', ?, ?)""",
+        (
+            person_id, int(item["activityId"]), item.get("startTimeGMT"), item.get("activityName"),
+            (item.get("activityType") or {}).get("typeKey"), error, importer.now_iso(),
+        ),
+    )  # fmt: skip
+
+
+def sync_person(
+    conn: sqlite3.Connection,
+    row: sqlite3.Row,
+    uploads_dir: Path,
+    result: SyncResult,
+    budget: int,
+    progress: ProgressFn | None = None,
+    **client_kwargs,
+) -> int:
+    """Download new activities of one person, then continue the history. Returns downloads."""
+    pid = row["person_id"]
+    client = client_for(row, **client_kwargs)
+    done = 0
+
+    def fetch(items: list[dict]) -> bool:
+        """Download unknown items; False once the budget is used up."""
+        nonlocal done
+        unknown = [i for i in items if i.get("activityId") is not None]
+        known = _known(conn, pid, [int(i["activityId"]) for i in unknown])
+        for item in unknown:
+            if int(item["activityId"]) in known:
+                continue
+            if done >= budget:
+                return False
+            try:
+                data = client.download(int(item["activityId"]))
+            except AuthError:
+                raise
+            except GarminError as exc:
+                if exc.stop_run:
+                    raise
+                _mark_failed(conn, pid, item, str(exc))
+                result.errors += 1
+                continue
+            result.queued_files += _store_download(conn, uploads_dir, pid, item, data)
+            done += 1
+            result.downloaded += 1
+            if progress:
+                progress(person=pid, downloaded=result.downloaded, name=item.get("activityName"))
+        return True
+
+    try:
+        # 1) newest first until we reach activities we already have
+        start = 0
+        while True:
+            page = client.search(start, PAGE_SIZE, row["history_from"])
+            ids = [int(i["activityId"]) for i in page if i.get("activityId") is not None]
+            had_known = bool(_known(conn, pid, ids))
+            if not fetch(page):
+                break
+            if not page or len(page) < PAGE_SIZE or had_known or not row["backfill_done"]:
+                # During the first history pass the backfill below continues from its offset.
+                break
+            start += len(page)
+
+        # 2) the history, resumed where the last run stopped
+        if not row["backfill_done"] and done < budget:
+            offset = max(0, row["backfill_offset"] - BACKFILL_OVERLAP)
+            while done < budget:
+                page = client.search(offset, PAGE_SIZE, row["history_from"])
+                complete = fetch(page)
+                if not complete:
+                    break
+                offset += len(page)
+                conn.execute(
+                    "UPDATE garmin_accounts SET backfill_offset = ? WHERE person_id = ?",
+                    (offset, pid),
+                )
+                if len(page) < PAGE_SIZE:
+                    conn.execute(
+                        "UPDATE garmin_accounts SET backfill_done = 1 WHERE person_id = ?", (pid,)
+                    )
+                    break
+    except AuthError as exc:
+        _save_token(conn, pid, client)
+        _set_status(conn, pid, "auth_error", str(exc))
+        result.errors += 1
+        return done
+    except GarminError as exc:
+        _save_token(conn, pid, client)
+        _set_status(conn, pid, "error", str(exc))
+        if exc.stop_run:
+            result.stopped = str(exc)
+        result.errors += 1
+        return done
+    _save_token(conn, pid, client)
+    conn.execute(
+        """UPDATE garmin_accounts SET status = 'ok', last_error = NULL, last_sync_at = ?
+           WHERE person_id = ?""",
+        (importer.now_iso(), pid),
+    )
+    return done
+
+
+def sync_all(
+    conn: sqlite3.Connection,
+    uploads_dir: Path,
+    progress: ProgressFn | None = None,
+    max_downloads: int = MAX_DOWNLOADS_PER_RUN,
+    **client_kwargs,
+) -> SyncResult:
+    """One run over every connected person; stops early on refusals or server errors."""
+    result = SyncResult()
+    rows = conn.execute(
+        """SELECT g.* FROM garmin_accounts g JOIN persons p ON p.id = g.person_id
+           WHERE g.status != 'auth_error' ORDER BY p.sort_order, p.id"""
+    ).fetchall()
+    for row in rows:
+        budget = max_downloads - result.downloaded
+        if budget <= 0 or result.stopped:
+            break
+        result.persons.append(row["person_id"])
+        sync_person(conn, row, uploads_dir, result, budget, progress, **client_kwargs)
+    return result
+
+
+def accounts(conn: sqlite3.Connection) -> dict[str, dict]:
+    """Public account state per person (never the key or the token)."""
+    out = {}
+    for r in conn.execute(
+        """SELECT g.person_id, g.key_hint, g.history_from, g.status, g.last_error, g.last_sync_at,
+                  g.backfill_done, g.created_at,
+                  (SELECT COUNT(*) FROM garmin_activities a
+                    WHERE a.person_id = g.person_id AND a.status = 'downloaded') AS downloaded,
+                  (SELECT COUNT(*) FROM garmin_activities a
+                    WHERE a.person_id = g.person_id AND a.status = 'error') AS failed
+           FROM garmin_accounts g"""
+    ):
+        out[r["person_id"]] = {**dict(r), "backfill_done": bool(r["backfill_done"])}
+    return out

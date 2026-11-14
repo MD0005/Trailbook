@@ -1,0 +1,1351 @@
+{
+  "groups": [
+    {
+      "key": "run",
+      "en": "Running",
+      "pl": "Bieganie"
+    },
+    {
+      "key": "ride",
+      "en": "Cycling",
+      "pl": "Kolarstwo"
+    },
+    {
+      "key": "swim",
+      "en": "Swimming",
+      "pl": "Pływanie"
+    },
+    {
+      "key": "walk",
+      "en": "Walking",
+      "pl": "Chodzenie"
+    },
+    {
+      "key": "hike",
+      "en": "Hiking",
+      "pl": "Turystyka"
+    },
+    {
+      "key": "winter",
+      "en": "Winter sports",
+      "pl": "Sporty zimowe"
+    },
+    {
+      "key": "water",
+      "en": "Water sports",
+      "pl": "Sporty wodne"
+    },
+    {
+      "key": "fitness",
+      "en": "Fitness & gym",
+      "pl": "Fitness i siłownia"
+    },
+    {
+      "key": "mind_body",
+      "en": "Mind & body",
+      "pl": "Ciało i umysł"
+    },
+    {
+      "key": "climbing",
+      "en": "Climbing",
+      "pl": "Wspinaczka"
+    },
+    {
+      "key": "racket",
+      "en": "Racket sports",
+      "pl": "Sporty rakietowe"
+    },
+    {
+      "key": "team",
+      "en": "Team sports",
+      "pl": "Sporty drużynowe"
+    },
+    {
+      "key": "combat",
+      "en": "Combat sports",
+      "pl": "Sporty walki"
+    },
+    {
+      "key": "multisport",
+      "en": "Multisport",
+      "pl": "Multisport"
+    },
+    {
+      "key": "other",
+      "en": "Other",
+      "pl": "Inne"
+    }
+  ],
+  "types": [
+    {
+      "key": "run",
+      "group": "run",
+      "en": "Run",
+      "pl": "Bieg",
+      "indoor": false,
+      "fit": [
+        "running / street",
+        "running / *"
+      ]
+    },
+    {
+      "key": "trail_run",
+      "group": "run",
+      "en": "Trail run",
+      "pl": "Bieg terenowy",
+      "indoor": false,
+      "fit": [
+        "running / trail"
+      ]
+    },
+    {
+      "key": "treadmill_run",
+      "group": "run",
+      "en": "Treadmill run",
+      "pl": "Bieżnia mechaniczna",
+      "indoor": true,
+      "fit": [
+        "running / treadmill",
+        "* / treadmill"
+      ]
+    },
+    {
+      "key": "indoor_run",
+      "group": "run",
+      "en": "Indoor run",
+      "pl": "Bieg w hali",
+      "indoor": true,
+      "fit": [
+        "running / indoor_running",
+        "fitness_equipment / indoor_running"
+      ]
+    },
+    {
+      "key": "track_run",
+      "group": "run",
+      "en": "Track run",
+      "pl": "Bieg na stadionie",
+      "indoor": false,
+      "fit": [
+        "running / track"
+      ]
+    },
+    {
+      "key": "virtual_run",
+      "group": "run",
+      "en": "Virtual run",
+      "pl": "Bieg wirtualny",
+      "indoor": true,
+      "fit": [
+        "running / virtual_activity"
+      ]
+    },
+    {
+      "key": "ultra_run",
+      "group": "run",
+      "en": "Ultra run",
+      "pl": "Bieg ultra",
+      "indoor": false,
+      "fit": [
+        "running / ultra"
+      ]
+    },
+    {
+      "key": "obstacle_run",
+      "group": "run",
+      "en": "Obstacle run",
+      "pl": "Bieg z przeszkodami",
+      "indoor": false,
+      "fit": [
+        "running / obstacle"
+      ]
+    },
+    {
+      "key": "wheelchair_run",
+      "group": "run",
+      "en": "Wheelchair push run",
+      "pl": "Wózek – bieg",
+      "indoor": false,
+      "fit": [
+        "wheelchair_push_run / *"
+      ]
+    },
+    {
+      "key": "ride",
+      "group": "ride",
+      "en": "Ride",
+      "pl": "Jazda na rowerze",
+      "indoor": false,
+      "fit": [
+        "cycling / *"
+      ]
+    },
+    {
+      "key": "road_ride",
+      "group": "ride",
+      "en": "Road ride",
+      "pl": "Kolarstwo szosowe",
+      "indoor": false,
+      "fit": [
+        "cycling / road"
+      ]
+    },
+    {
+      "key": "mtb_ride",
+      "group": "ride",
+      "en": "Mountain bike",
+      "pl": "Rower górski (MTB)",
+      "indoor": false,
+      "fit": [
+        "cycling / mountain"
+      ]
+    },
+    {
+      "key": "gravel_ride",
+      "group": "ride",
+      "en": "Gravel ride",
+      "pl": "Gravel",
+      "indoor": false,
+      "fit": [
+        "cycling / gravel_cycling",
+        "cycling / mixed_surface"
+      ]
+    },
+    {
+      "key": "cyclocross",
+      "group": "ride",
+      "en": "Cyclocross",
+      "pl": "Przełaj",
+      "indoor": false,
+      "fit": [
+        "cycling / cyclocross"
+      ]
+    },
+    {
+      "key": "downhill_ride",
+      "group": "ride",
+      "en": "Downhill",
+      "pl": "Downhill",
+      "indoor": false,
+      "fit": [
+        "cycling / downhill"
+      ]
+    },
+    {
+      "key": "enduro_ride",
+      "group": "ride",
+      "en": "Enduro",
+      "pl": "Enduro",
+      "indoor": false,
+      "fit": [
+        "cycling / enduro"
+      ]
+    },
+    {
+      "key": "indoor_ride",
+      "group": "ride",
+      "en": "Indoor ride",
+      "pl": "Trenażer",
+      "indoor": true,
+      "fit": [
+        "cycling / indoor_cycling",
+        "fitness_equipment / indoor_cycling"
+      ]
+    },
+    {
+      "key": "spin",
+      "group": "ride",
+      "en": "Spin class",
+      "pl": "Spinning",
+      "indoor": true,
+      "fit": [
+        "cycling / spin"
+      ]
+    },
+    {
+      "key": "virtual_ride",
+      "group": "ride",
+      "en": "Virtual ride",
+      "pl": "Jazda wirtualna",
+      "indoor": true,
+      "fit": [
+        "cycling / virtual_activity"
+      ]
+    },
+    {
+      "key": "ebike_ride",
+      "group": "ride",
+      "en": "E-bike ride",
+      "pl": "Rower elektryczny",
+      "indoor": false,
+      "fit": [
+        "cycling / e_bike_fitness",
+        "e_biking / *"
+      ]
+    },
+    {
+      "key": "emtb_ride",
+      "group": "ride",
+      "en": "E-mountain bike",
+      "pl": "Elektryczny MTB",
+      "indoor": false,
+      "fit": [
+        "cycling / e_bike_mountain",
+        "cycling / e_bike_enduro",
+        "e_biking / e_bike_mountain",
+        "e_biking / e_bike_enduro"
+      ]
+    },
+    {
+      "key": "commute_ride",
+      "group": "ride",
+      "en": "Bike commute",
+      "pl": "Dojazd rowerem",
+      "indoor": false,
+      "fit": [
+        "cycling / commuting"
+      ]
+    },
+    {
+      "key": "track_ride",
+      "group": "ride",
+      "en": "Track cycling",
+      "pl": "Kolarstwo torowe",
+      "indoor": false,
+      "fit": [
+        "cycling / track_cycling"
+      ]
+    },
+    {
+      "key": "bmx",
+      "group": "ride",
+      "en": "BMX",
+      "pl": "BMX",
+      "indoor": false,
+      "fit": [
+        "cycling / bmx"
+      ]
+    },
+    {
+      "key": "handcycle",
+      "group": "ride",
+      "en": "Handcycle",
+      "pl": "Handbike",
+      "indoor": false,
+      "fit": [
+        "cycling / hand_cycling",
+        "cycling / indoor_hand_cycling"
+      ]
+    },
+    {
+      "key": "recumbent",
+      "group": "ride",
+      "en": "Recumbent",
+      "pl": "Rower poziomy",
+      "indoor": false,
+      "fit": [
+        "cycling / recumbent"
+      ]
+    },
+    {
+      "key": "swim",
+      "group": "swim",
+      "en": "Swim",
+      "pl": "Pływanie",
+      "indoor": false,
+      "fit": [
+        "swimming / *"
+      ]
+    },
+    {
+      "key": "pool_swim",
+      "group": "swim",
+      "en": "Pool swim",
+      "pl": "Basen",
+      "indoor": true,
+      "fit": [
+        "swimming / lap_swimming",
+        "* / lap_swimming"
+      ]
+    },
+    {
+      "key": "open_water_swim",
+      "group": "swim",
+      "en": "Open water swim",
+      "pl": "Wody otwarte",
+      "indoor": false,
+      "fit": [
+        "swimming / open_water",
+        "* / open_water"
+      ]
+    },
+    {
+      "key": "walk",
+      "group": "walk",
+      "en": "Walk",
+      "pl": "Spacer",
+      "indoor": false,
+      "fit": [
+        "walking / casual_walking",
+        "walking / *"
+      ]
+    },
+    {
+      "key": "speed_walk",
+      "group": "walk",
+      "en": "Speed walk",
+      "pl": "Szybki marsz",
+      "indoor": false,
+      "fit": [
+        "walking / speed_walking"
+      ]
+    },
+    {
+      "key": "indoor_walk",
+      "group": "walk",
+      "en": "Indoor walk",
+      "pl": "Chód w pomieszczeniu",
+      "indoor": true,
+      "fit": [
+        "fitness_equipment / indoor_walking",
+        "walking / indoor_walking"
+      ]
+    },
+    {
+      "key": "rucking",
+      "group": "walk",
+      "en": "Rucking",
+      "pl": "Marsz z obciążeniem",
+      "indoor": false,
+      "fit": [
+        "walking / rucking",
+        "hiking / rucking"
+      ]
+    },
+    {
+      "key": "wheelchair_walk",
+      "group": "walk",
+      "en": "Wheelchair push",
+      "pl": "Wózek – spacer",
+      "indoor": false,
+      "fit": [
+        "wheelchair_push_walk / *"
+      ]
+    },
+    {
+      "key": "hike",
+      "group": "hike",
+      "en": "Hike",
+      "pl": "Wędrówka",
+      "indoor": false,
+      "fit": [
+        "hiking / *"
+      ]
+    },
+    {
+      "key": "mountaineering",
+      "group": "hike",
+      "en": "Mountaineering",
+      "pl": "Alpinizm",
+      "indoor": false,
+      "fit": [
+        "mountaineering / *"
+      ]
+    },
+    {
+      "key": "ski_alpine",
+      "group": "winter",
+      "en": "Alpine ski",
+      "pl": "Narciarstwo zjazdowe",
+      "indoor": false,
+      "fit": [
+        "alpine_skiing / resort",
+        "alpine_skiing / *"
+      ]
+    },
+    {
+      "key": "ski_backcountry",
+      "group": "winter",
+      "en": "Backcountry ski",
+      "pl": "Skitury",
+      "indoor": false,
+      "fit": [
+        "cross_country_skiing / backcountry",
+        "alpine_skiing / backcountry"
+      ]
+    },
+    {
+      "key": "ski_xc",
+      "group": "winter",
+      "en": "Cross-country ski",
+      "pl": "Narciarstwo biegowe",
+      "indoor": false,
+      "fit": [
+        "cross_country_skiing / *"
+      ]
+    },
+    {
+      "key": "ski_skate",
+      "group": "winter",
+      "en": "Skate ski",
+      "pl": "Biegówki – łyżwa",
+      "indoor": false,
+      "fit": [
+        "cross_country_skiing / skate_skiing"
+      ]
+    },
+    {
+      "key": "ski_indoor",
+      "group": "winter",
+      "en": "Indoor ski",
+      "pl": "Narty w hali / ergometr",
+      "indoor": true,
+      "fit": [
+        "fitness_equipment / indoor_skiing",
+        "cross_country_skiing / indoor_skiing"
+      ]
+    },
+    {
+      "key": "snowboard",
+      "group": "winter",
+      "en": "Snowboard",
+      "pl": "Snowboard",
+      "indoor": false,
+      "fit": [
+        "snowboarding / backcountry",
+        "snowboarding / *"
+      ]
+    },
+    {
+      "key": "snowshoe",
+      "group": "winter",
+      "en": "Snowshoe",
+      "pl": "Rakiety śnieżne",
+      "indoor": false,
+      "fit": [
+        "snowshoeing / *"
+      ]
+    },
+    {
+      "key": "ice_skate",
+      "group": "winter",
+      "en": "Ice skating",
+      "pl": "Łyżwy",
+      "indoor": false,
+      "fit": [
+        "ice_skating / *"
+      ]
+    },
+    {
+      "key": "winter_other",
+      "group": "winter",
+      "en": "Winter sport",
+      "pl": "Sport zimowy",
+      "indoor": false,
+      "fit": [
+        "winter_sport / *"
+      ]
+    },
+    {
+      "key": "row",
+      "group": "water",
+      "en": "Rowing",
+      "pl": "Wioślarstwo",
+      "indoor": false,
+      "fit": [
+        "rowing / *"
+      ]
+    },
+    {
+      "key": "kayak",
+      "group": "water",
+      "en": "Kayaking",
+      "pl": "Kajak",
+      "indoor": false,
+      "fit": [
+        "paddling / whitewater",
+        "kayaking / *"
+      ]
+    },
+    {
+      "key": "canoe",
+      "group": "water",
+      "en": "Canoeing",
+      "pl": "Kanadyjka",
+      "indoor": false,
+      "fit": [
+        "canoeing / *"
+      ]
+    },
+    {
+      "key": "paddle",
+      "group": "water",
+      "en": "Paddling",
+      "pl": "Wiosłowanie",
+      "indoor": false,
+      "fit": [
+        "paddling / *"
+      ]
+    },
+    {
+      "key": "sup",
+      "group": "water",
+      "en": "Stand up paddle",
+      "pl": "SUP",
+      "indoor": false,
+      "fit": [
+        "stand_up_paddleboarding / *"
+      ]
+    },
+    {
+      "key": "surf",
+      "group": "water",
+      "en": "Surfing",
+      "pl": "Surfing",
+      "indoor": false,
+      "fit": [
+        "surfing / *"
+      ]
+    },
+    {
+      "key": "windsurf",
+      "group": "water",
+      "en": "Windsurfing",
+      "pl": "Windsurfing",
+      "indoor": false,
+      "fit": [
+        "windsurfing / *"
+      ]
+    },
+    {
+      "key": "kitesurf",
+      "group": "water",
+      "en": "Kitesurfing",
+      "pl": "Kitesurfing",
+      "indoor": false,
+      "fit": [
+        "kitesurfing / *"
+      ]
+    },
+    {
+      "key": "sail",
+      "group": "water",
+      "en": "Sailing",
+      "pl": "Żeglarstwo",
+      "indoor": false,
+      "fit": [
+        "sailing / *",
+        "grinding / *"
+      ]
+    },
+    {
+      "key": "rafting",
+      "group": "water",
+      "en": "Rafting",
+      "pl": "Rafting",
+      "indoor": false,
+      "fit": [
+        "rafting / *"
+      ]
+    },
+    {
+      "key": "wakeboard",
+      "group": "water",
+      "en": "Wakeboarding",
+      "pl": "Wakeboard",
+      "indoor": false,
+      "fit": [
+        "wakeboarding / *"
+      ]
+    },
+    {
+      "key": "wakesurf",
+      "group": "water",
+      "en": "Wakesurfing",
+      "pl": "Wakesurfing",
+      "indoor": false,
+      "fit": [
+        "wakesurfing / *"
+      ]
+    },
+    {
+      "key": "water_ski",
+      "group": "water",
+      "en": "Water skiing",
+      "pl": "Narty wodne",
+      "indoor": false,
+      "fit": [
+        "water_skiing / *"
+      ]
+    },
+    {
+      "key": "snorkel",
+      "group": "water",
+      "en": "Snorkeling",
+      "pl": "Snorkeling",
+      "indoor": false,
+      "fit": [
+        "snorkeling / *"
+      ]
+    },
+    {
+      "key": "dive",
+      "group": "water",
+      "en": "Diving",
+      "pl": "Nurkowanie",
+      "indoor": false,
+      "fit": [
+        "diving / *"
+      ]
+    },
+    {
+      "key": "apnea",
+      "group": "water",
+      "en": "Freediving",
+      "pl": "Freediving",
+      "indoor": false,
+      "fit": [
+        "diving / apnea_diving",
+        "diving / apnea_hunting",
+        "diving / dynamic_apnea",
+        "pool_apnea / *"
+      ]
+    },
+    {
+      "key": "boating",
+      "group": "water",
+      "en": "Boating",
+      "pl": "Pływanie łodzią",
+      "indoor": false,
+      "fit": [
+        "boating / *"
+      ]
+    },
+    {
+      "key": "water_other",
+      "group": "water",
+      "en": "Water sport",
+      "pl": "Sport wodny",
+      "indoor": false,
+      "fit": [
+        "water_tubing / *",
+        "water_sport / *"
+      ]
+    },
+    {
+      "key": "strength",
+      "group": "fitness",
+      "en": "Strength training",
+      "pl": "Trening siłowy",
+      "indoor": false,
+      "fit": [
+        "* / strength_training"
+      ]
+    },
+    {
+      "key": "hiit",
+      "group": "fitness",
+      "en": "HIIT",
+      "pl": "HIIT",
+      "indoor": false,
+      "fit": [
+        "* / hiit",
+        "* / amrap",
+        "* / emom",
+        "* / tabata",
+        "hiit / *"
+      ]
+    },
+    {
+      "key": "cardio",
+      "group": "fitness",
+      "en": "Cardio",
+      "pl": "Cardio",
+      "indoor": false,
+      "fit": [
+        "* / cardio_training"
+      ]
+    },
+    {
+      "key": "training",
+      "group": "fitness",
+      "en": "Training",
+      "pl": "Trening",
+      "indoor": false,
+      "fit": [
+        "training / *"
+      ]
+    },
+    {
+      "key": "gym_equipment",
+      "group": "fitness",
+      "en": "Gym equipment",
+      "pl": "Sprzęt fitness",
+      "indoor": true,
+      "fit": [
+        "fitness_equipment / *"
+      ]
+    },
+    {
+      "key": "elliptical",
+      "group": "fitness",
+      "en": "Elliptical",
+      "pl": "Orbitrek",
+      "indoor": true,
+      "fit": [
+        "* / elliptical"
+      ]
+    },
+    {
+      "key": "stair_stepper",
+      "group": "fitness",
+      "en": "Stair stepper",
+      "pl": "Stepper / schody",
+      "indoor": true,
+      "fit": [
+        "* / stair_climbing"
+      ]
+    },
+    {
+      "key": "indoor_row",
+      "group": "fitness",
+      "en": "Indoor rowing",
+      "pl": "Ergometr wioślarski",
+      "indoor": true,
+      "fit": [
+        "rowing / indoor_rowing",
+        "* / indoor_rowing"
+      ]
+    },
+    {
+      "key": "floor_climb",
+      "group": "fitness",
+      "en": "Floor climbing",
+      "pl": "Wchodzenie po schodach",
+      "indoor": false,
+      "fit": [
+        "floor_climbing / *"
+      ]
+    },
+    {
+      "key": "jump_rope",
+      "group": "fitness",
+      "en": "Jump rope",
+      "pl": "Skakanka",
+      "indoor": false,
+      "fit": [
+        "jump_rope / *"
+      ]
+    },
+    {
+      "key": "dance",
+      "group": "fitness",
+      "en": "Dance",
+      "pl": "Taniec",
+      "indoor": false,
+      "fit": [
+        "dance / *"
+      ]
+    },
+    {
+      "key": "warm_up",
+      "group": "fitness",
+      "en": "Warm-up",
+      "pl": "Rozgrzewka",
+      "indoor": false,
+      "fit": [
+        "* / warm_up"
+      ]
+    },
+    {
+      "key": "yoga",
+      "group": "mind_body",
+      "en": "Yoga",
+      "pl": "Joga",
+      "indoor": false,
+      "fit": [
+        "* / yoga"
+      ]
+    },
+    {
+      "key": "pilates",
+      "group": "mind_body",
+      "en": "Pilates",
+      "pl": "Pilates",
+      "indoor": false,
+      "fit": [
+        "* / pilates"
+      ]
+    },
+    {
+      "key": "stretching",
+      "group": "mind_body",
+      "en": "Stretching",
+      "pl": "Rozciąganie",
+      "indoor": false,
+      "fit": [
+        "* / flexibility_training"
+      ]
+    },
+    {
+      "key": "mobility",
+      "group": "mind_body",
+      "en": "Mobility",
+      "pl": "Mobilność",
+      "indoor": false,
+      "fit": [
+        "mobility / *"
+      ]
+    },
+    {
+      "key": "meditation",
+      "group": "mind_body",
+      "en": "Meditation",
+      "pl": "Medytacja",
+      "indoor": false,
+      "fit": [
+        "meditation / *"
+      ]
+    },
+    {
+      "key": "breathwork",
+      "group": "mind_body",
+      "en": "Breathwork",
+      "pl": "Ćwiczenia oddechowe",
+      "indoor": false,
+      "fit": [
+        "* / breathing"
+      ]
+    },
+    {
+      "key": "climb",
+      "group": "climbing",
+      "en": "Rock climbing",
+      "pl": "Wspinaczka skałkowa",
+      "indoor": false,
+      "fit": [
+        "rock_climbing / *"
+      ]
+    },
+    {
+      "key": "indoor_climb",
+      "group": "climbing",
+      "en": "Indoor climbing",
+      "pl": "Ścianka",
+      "indoor": true,
+      "fit": [
+        "* / indoor_climbing"
+      ]
+    },
+    {
+      "key": "bouldering",
+      "group": "climbing",
+      "en": "Bouldering",
+      "pl": "Bouldering",
+      "indoor": false,
+      "fit": [
+        "* / bouldering"
+      ]
+    },
+    {
+      "key": "tennis",
+      "group": "racket",
+      "en": "Tennis",
+      "pl": "Tenis",
+      "indoor": false,
+      "fit": [
+        "tennis / *"
+      ]
+    },
+    {
+      "key": "padel",
+      "group": "racket",
+      "en": "Padel",
+      "pl": "Padel",
+      "indoor": false,
+      "fit": [
+        "* / padel"
+      ]
+    },
+    {
+      "key": "pickleball",
+      "group": "racket",
+      "en": "Pickleball",
+      "pl": "Pickleball",
+      "indoor": false,
+      "fit": [
+        "* / pickleball"
+      ]
+    },
+    {
+      "key": "squash",
+      "group": "racket",
+      "en": "Squash",
+      "pl": "Squash",
+      "indoor": false,
+      "fit": [
+        "* / squash"
+      ]
+    },
+    {
+      "key": "badminton",
+      "group": "racket",
+      "en": "Badminton",
+      "pl": "Badminton",
+      "indoor": false,
+      "fit": [
+        "* / badminton"
+      ]
+    },
+    {
+      "key": "table_tennis",
+      "group": "racket",
+      "en": "Table tennis",
+      "pl": "Tenis stołowy",
+      "indoor": false,
+      "fit": [
+        "* / table_tennis"
+      ]
+    },
+    {
+      "key": "racquetball",
+      "group": "racket",
+      "en": "Racquetball",
+      "pl": "Racquetball",
+      "indoor": false,
+      "fit": [
+        "* / racquetball"
+      ]
+    },
+    {
+      "key": "racket",
+      "group": "racket",
+      "en": "Racket sport",
+      "pl": "Sport rakietowy",
+      "indoor": false,
+      "fit": [
+        "racket / *"
+      ]
+    },
+    {
+      "key": "soccer",
+      "group": "team",
+      "en": "Soccer",
+      "pl": "Piłka nożna",
+      "indoor": false,
+      "fit": [
+        "soccer / *"
+      ]
+    },
+    {
+      "key": "basketball",
+      "group": "team",
+      "en": "Basketball",
+      "pl": "Koszykówka",
+      "indoor": false,
+      "fit": [
+        "basketball / *"
+      ]
+    },
+    {
+      "key": "volleyball",
+      "group": "team",
+      "en": "Volleyball",
+      "pl": "Siatkówka",
+      "indoor": false,
+      "fit": [
+        "volleyball / *"
+      ]
+    },
+    {
+      "key": "hockey",
+      "group": "team",
+      "en": "Hockey",
+      "pl": "Hokej",
+      "indoor": false,
+      "fit": [
+        "hockey / *"
+      ]
+    },
+    {
+      "key": "rugby",
+      "group": "team",
+      "en": "Rugby",
+      "pl": "Rugby",
+      "indoor": false,
+      "fit": [
+        "rugby / *"
+      ]
+    },
+    {
+      "key": "american_football",
+      "group": "team",
+      "en": "American football",
+      "pl": "Futbol amerykański",
+      "indoor": false,
+      "fit": [
+        "american_football / *"
+      ]
+    },
+    {
+      "key": "baseball",
+      "group": "team",
+      "en": "Baseball",
+      "pl": "Baseball",
+      "indoor": false,
+      "fit": [
+        "baseball / *"
+      ]
+    },
+    {
+      "key": "cricket",
+      "group": "team",
+      "en": "Cricket",
+      "pl": "Krykiet",
+      "indoor": false,
+      "fit": [
+        "cricket / *"
+      ]
+    },
+    {
+      "key": "lacrosse",
+      "group": "team",
+      "en": "Lacrosse",
+      "pl": "Lacrosse",
+      "indoor": false,
+      "fit": [
+        "lacrosse / *"
+      ]
+    },
+    {
+      "key": "ultimate",
+      "group": "team",
+      "en": "Ultimate",
+      "pl": "Ultimate frisbee",
+      "indoor": false,
+      "fit": [
+        "team_sport / ultimate"
+      ]
+    },
+    {
+      "key": "team_sport",
+      "group": "team",
+      "en": "Team sport",
+      "pl": "Sport drużynowy",
+      "indoor": false,
+      "fit": [
+        "team_sport / *"
+      ]
+    },
+    {
+      "key": "boxing",
+      "group": "combat",
+      "en": "Boxing",
+      "pl": "Boks",
+      "indoor": false,
+      "fit": [
+        "boxing / *"
+      ]
+    },
+    {
+      "key": "mma",
+      "group": "combat",
+      "en": "Mixed martial arts",
+      "pl": "MMA",
+      "indoor": false,
+      "fit": [
+        "mixed_martial_arts / *"
+      ]
+    },
+    {
+      "key": "multisport",
+      "group": "multisport",
+      "en": "Multisport",
+      "pl": "Multisport",
+      "indoor": false,
+      "fit": [
+        "multisport / brick",
+        "multisport / *"
+      ]
+    },
+    {
+      "key": "triathlon",
+      "group": "multisport",
+      "en": "Triathlon",
+      "pl": "Triathlon",
+      "indoor": false,
+      "fit": [
+        "* / triathlon",
+        "* / pool_triathlon"
+      ]
+    },
+    {
+      "key": "duathlon",
+      "group": "multisport",
+      "en": "Duathlon",
+      "pl": "Duathlon",
+      "indoor": false,
+      "fit": [
+        "* / duathlon"
+      ]
+    },
+    {
+      "key": "swimrun",
+      "group": "multisport",
+      "en": "Swimrun",
+      "pl": "Swimrun",
+      "indoor": false,
+      "fit": [
+        "multisport / swim_run",
+        "* / swim_run"
+      ]
+    },
+    {
+      "key": "transition",
+      "group": "multisport",
+      "en": "Transition",
+      "pl": "Strefa zmian",
+      "indoor": false,
+      "fit": [
+        "transition / *"
+      ]
+    },
+    {
+      "key": "golf",
+      "group": "other",
+      "en": "Golf",
+      "pl": "Golf",
+      "indoor": false,
+      "fit": [
+        "golf / *"
+      ]
+    },
+    {
+      "key": "disc_golf",
+      "group": "other",
+      "en": "Disc golf",
+      "pl": "Disc golf",
+      "indoor": false,
+      "fit": [
+        "disc_golf / *"
+      ]
+    },
+    {
+      "key": "horse_riding",
+      "group": "other",
+      "en": "Horse riding",
+      "pl": "Jazda konna",
+      "indoor": false,
+      "fit": [
+        "horseback_riding / *"
+      ]
+    },
+    {
+      "key": "inline_skate",
+      "group": "other",
+      "en": "Inline skating",
+      "pl": "Rolki",
+      "indoor": false,
+      "fit": [
+        "inline_skating / *"
+      ]
+    },
+    {
+      "key": "motor",
+      "group": "other",
+      "en": "Motor sports",
+      "pl": "Sporty motorowe",
+      "indoor": false,
+      "fit": [
+        "motorcycling / *",
+        "motor_sports / *",
+        "driving / *",
+        "snowmobiling / *"
+      ]
+    },
+    {
+      "key": "flying",
+      "group": "other",
+      "en": "Flying",
+      "pl": "Latanie",
+      "indoor": false,
+      "fit": [
+        "flying / *",
+        "hang_gliding / *",
+        "sky_diving / *",
+        "jumpmaster / *"
+      ]
+    },
+    {
+      "key": "fishing",
+      "group": "other",
+      "en": "Fishing",
+      "pl": "Wędkarstwo",
+      "indoor": false,
+      "fit": [
+        "fishing / *"
+      ]
+    },
+    {
+      "key": "hunting",
+      "group": "other",
+      "en": "Hunting",
+      "pl": "Myślistwo",
+      "indoor": false,
+      "fit": [
+        "hunting / *"
+      ]
+    },
+    {
+      "key": "archery",
+      "group": "other",
+      "en": "Archery",
+      "pl": "Łucznictwo",
+      "indoor": false,
+      "fit": [
+        "archery / *"
+      ]
+    },
+    {
+      "key": "shooting",
+      "group": "other",
+      "en": "Shooting",
+      "pl": "Strzelectwo",
+      "indoor": false,
+      "fit": [
+        "shooting / *"
+      ]
+    },
+    {
+      "key": "geocaching",
+      "group": "other",
+      "en": "Geocaching",
+      "pl": "Geocaching",
+      "indoor": false,
+      "fit": [
+        "geocaching / *"
+      ]
+    },
+    {
+      "key": "esports",
+      "group": "other",
+      "en": "Esports",
+      "pl": "E-sport",
+      "indoor": true,
+      "fit": [
+        "* / esport",
+        "video_gaming / *"
+      ]
+    },
+    {
+      "key": "other",
+      "group": "other",
+      "en": "Other",
+      "pl": "Inne",
+      "indoor": false,
+      "fit": [
+        "anything else"
+      ]
+    }
+  ]
+}

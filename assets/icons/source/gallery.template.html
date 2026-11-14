@@ -1,0 +1,58 @@
+<div id="tb-full-gallery" aria-label="Pełny zestaw ikon Trailbook B">
+<style>
+#tb-full-gallery{--tb-accent:#53c4ff;--tb-bg:#101216;--tb-panel:#20242d;--tb-border:#323844;--tb-text:#edf2fa;--tb-secondary:#aeb9cb;font-family:Inter,Segoe UI,Arial,sans-serif;color:var(--tb-text)}
+#tb-full-gallery *{box-sizing:border-box}
+#tb-full-gallery .tb-controls{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:16px;padding-right:85px;color:light-dark(#202733,#edf2fa)}
+#tb-full-gallery .tb-controls label{display:flex;align-items:center;gap:8px;max-width:100%}
+#tb-full-gallery .tb-controls select{max-width:100%;min-width:0}
+#tb-full-gallery .tb-stage{background:var(--tb-bg);padding:20px;border-radius:14px;border:1px solid var(--tb-border)}
+#tb-full-gallery .tb-topline{display:flex;gap:12px;justify-content:space-between;flex-wrap:wrap;margin-bottom:20px}
+#tb-full-gallery h3{margin:0;font-size:16px;font-weight:600;line-height:1.5}
+#tb-full-gallery .tb-info{font-size:12px;color:var(--tb-secondary)}
+#tb-full-gallery .tb-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+#tb-full-gallery .tb-cell{padding:16px 12px;background:var(--tb-panel);border-radius:10px;display:flex;flex-direction:column;gap:14px;min-width:0}
+#tb-full-gallery .tb-samples{display:flex;align-items:center;gap:20px;min-height:48px;color:var(--tb-accent)}
+#tb-full-gallery .tb-big{width:44px;height:44px;flex:none}
+#tb-full-gallery .tb-small{width:20px;height:20px;flex:none}
+#tb-full-gallery .tb-name{font-size:13px;line-height:1.45;overflow-wrap:anywhere}
+@media(max-width:600px){#tb-full-gallery .tb-grid{grid-template-columns:repeat(3,minmax(0,1fr))}#tb-full-gallery .tb-samples{gap:12px}}
+@media(max-width:430px){#tb-full-gallery .tb-grid{grid-template-columns:repeat(2,minmax(0,1fr))}#tb-full-gallery .tb-stage{padding:12px}#tb-full-gallery .tb-cell{padding:12px}}
+</style>
+<div class="tb-controls">
+ <label class="form-label">Grupa <select class="form-select" aria-label="Grupa aktywności"></select></label>
+ <label class="form-label">Akcent <input class="form-control form-control-color" type="color" value="#53c4ff" aria-label="Kolor ikon"></label>
+ <label class="form-label">Tło <select class="form-select" aria-label="Motyw"><option value="dark">Ciemne</option><option value="light">Jasne</option></select></label>
+</div>
+<div class="tb-stage"><div class="tb-topline"><h3>B · Pełne sylwetki</h3><span class="tb-info" aria-live="polite"></span></div><div class="tb-grid"></div></div>
+<script type="application/json" id="tb-full-data">__DATA__</script>
+<script>
+(() => {
+ const root=document.getElementById('tb-full-gallery');
+ const data=JSON.parse(root.querySelector('#tb-full-data').textContent);
+ const group=root.querySelector('select');
+ const theme=root.querySelectorAll('select')[1];
+ const accent=root.querySelector('input');
+ const featured=['hiit','tennis','padel','pickleball','squash','badminton','table_tennis','racquetball','racket'];
+ const escape=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+ group.innerHTML='<option value="featured">Poprawione: HIIT i rakietowe</option>'+data.groups.map(g=>`<option value="${g.key}">${escape(g.pl)}</option>`).join('')+'<option value="all">Wszystkie · 123</option>';
+ function render(){
+  const icons=group.value==='featured'?featured.map(k=>data.icons.find(i=>i.key===k)):data.icons.filter(i=>group.value==='all'||i.group===group.value);
+  root.style.setProperty('--tb-accent',accent.value);
+  const palette=theme.value==='light'?['#f5f7fa','#ffffff','#dce2eb','#172131','#56667e']:['#101216','#20242d','#323844','#edf2fa','#aeb9cb'];
+  ['bg','panel','border','text','secondary'].forEach((name,i)=>root.style.setProperty('--tb-'+name,palette[i]));
+  root.querySelector('.tb-info').textContent=icons.length+' / 123 · 44 px i 20 px';
+  root.querySelector('.tb-grid').innerHTML=icons.map(i=>`<div class="tb-cell"><div class="tb-samples"><svg class="tb-big" viewBox="0 0 24 24" fill="none" aria-hidden="true">${i.body}</svg><svg class="tb-small" viewBox="0 0 24 24" fill="none" aria-hidden="true">${i.body}</svg></div><span class="tb-name">${escape(i.pl)}</span></div>`).join('');
+ }
+ function restore(s){
+  if(s&&[...group.options].some(o=>o.value===s.group))group.value=s.group;
+  if(s&&/^#[a-f0-9]{6}$/i.test(s.accent||''))accent.value=s.accent;
+  if(s&&['light','dark'].includes(s.theme))theme.value=s.theme;
+  render();
+ }
+ function update(){render();if(window.openai?.setWidgetState)window.openai.setWidgetState({modelContent:{group:group.value,accent:accent.value,theme:theme.value},privateContent:null}).catch(()=>{});}
+ group.addEventListener('change',update);theme.addEventListener('change',update);accent.addEventListener('input',update);
+ restore(window.openai?.widgetState?.modelContent);
+ window.addEventListener('openai:set_globals',e=>{if(e.detail?.globals?.widgetState)restore(e.detail.globals.widgetState.modelContent);});
+})();
+</script>
+</div>

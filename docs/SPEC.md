@@ -26,7 +26,8 @@ small ARM boards such as the Home Assistant Yellow (Raspberry Pi CM4).
 - English UI first, Polish translation; more languages via translation files.
 
 ### Non-goals (for now)
-- Syncing with Garmin Connect, Strava or other cloud services.
+- Syncing with Strava or other cloud services (Garmin Connect only through each person's
+  own personal API key, see §3a).
 - Archiving original FIT files. The folder is the source of truth for files;
   the database keeps the derived data.
 - Sleep, daily monitoring, HRV and other non-activity FIT data (skipped on import).
@@ -96,16 +97,37 @@ Browser: static HTML/JS (MapLibre GL + ECharts) — all rendering client-side
 Settings › General › *Data connection* chooses where new activities come from (setting
 `data_source`); only the options of the chosen source are shown below it:
 
-1. **Garmin Connect** *(planned)* — each person connects their own account with a Garmin
-   *personal API key* (self-service in Garmin Connect, expires after 30/90/180/365 days, token
-   valid 24 h, no documented rate limit → pull slowly, back off on refusals). Activities come
-   as original FIT files (same FIT id as folder files → no duplicates). Later: sleep, HRV,
-   stress, resting HR, steps, weight for the Wellbeing tab, stored per person + day.
+1. **Garmin Connect** — each person connects their own account with a Garmin *personal API
+   key* (self-service in Garmin Connect, expires after 30/90/180/365 days). Module `garmin.py`
+   (stdlib `urllib` only):
+   - `POST personal.connectapi.garmin.com/personalapitoken-service/personal-api/personal-api-key/token`
+     with `Authorization: ApiKey <key>` → access token (24 h, no refresh tokens; JSON or plain
+     text accepted), stored in `garmin_accounts` and reused until it expires; then
+     `Authorization: Bearer <token>`.
+   - `GET /activitylist-service/activities/search/activities?start&limit&sortOrder=desc&startDate`
+     (newest first, 50 per page) and `GET /download-service/files/activity/{id}` (original
+     file, a ZIP with the FIT).
+   - Runs inside the normal low-priority import process (phase `garmin` before the queue),
+     on the same schedule as folder scans (`scan_interval_min`) or with *Download now*.
+   - Slow on purpose: one request every 3 s, at most 60 downloads per run. A run first fetches
+     new activities (until it meets known ones), then continues the history from a stored
+     offset (`backfill_offset`, re-reading 10 rows) until the end (`backfill_done`).
+   - 429 / 5xx / network errors stop the whole run (retried next run); 401/403 on the token
+     marks the account `auth_error` and it is skipped until a new key is saved; a single
+     failing download is recorded (`garmin_activities.status = error`) and not retried.
+   - Downloads are saved as `uploads/<person>/garmin-<id>.zip` and queued like uploads, so
+     the FIT id dedup applies (activities already imported from a folder become `duplicate`).
+     `garmin_activities` remembers every downloaded id → nothing is downloaded twice.
+   - Optional *Download from* date per person limits the history.
+   - The key is stored in the database (never returned by the API, only `…last4`).
+   - Later: sleep, HRV, stress, resting HR, steps, weight for the Wellbeing tab, stored per
+     person + day.
 2. **Upload a ZIP** — one-time import of a Garmin export / ZIP of FIT files / single .fit for a
    chosen person (`POST /api/uploads`). Uploads are kept in `uploads/` next to the database,
    tracked as `@uploads/<person>/<file>` and never touched by folder scans.
 3. **Watch a folder** — watched folder, assigning files to people (with the watch table when
-   "assign by watch" is chosen), automatic folder scan. Scheduled scans run only in this mode.
+   "assign by watch" is chosen), automatic folder scan. Scheduled runs happen in folder and
+   Garmin mode (never for uploads).
 
 ## 4. Folders and people
 
@@ -350,6 +372,10 @@ All JSON, prefix `/api`. Read endpoints accept `person`, `from`, `to`, `category
 | GET | `/stats/curves` | Power / pace / HR duration curves. |
 | GET | `/import/status` | Queue progress, last run. |
 | POST | `/import/scan` | Start scan + import. |
+| GET | `/garmin` | Garmin account state per person (key hint, status, counts; never the key). |
+| PUT | `/garmin/{person}` | Save a key and/or *Download from* date, then test it. |
+| POST | `/garmin/{person}/test` | Get a token and read the newest activity. |
+| DELETE | `/garmin/{person}` | Disconnect (delete the key; imported activities stay). |
 | GET | `/import/files?status=…` | Import manager list. |
 | POST | `/import/files/{id}/retry` | Retry an errored file. |
 | POST | `/import/files/{id}/dismiss` | Acknowledge a missing file, keep data. |
@@ -402,7 +428,16 @@ at the right end of the row.
 - Filters inside a badge panel are applied with **Apply** (or Enter), so several can be set
   first; a **Clear** badge appears right after *Filter* while filters are active.
 - The main switch (e.g. Heatmap | Explorer tiles, List | Tiles | Large tiles, settings tabs)
-  shows the selected option in the accent colour.
+  looks like the main navigation: no box, the selected option on a light tint in the accent
+  colour.
+- The page keeps space for the vertical scrollbar (`scrollbar-gutter: stable`), so nothing
+  jumps when a long page gets a scrollbar; full-screen map pages shift header and bar by the
+  measured scrollbar width so they line up with the other pages.
+- **Activity type icons** (“Trailbook B” set, `assets/icons/`, served from `static/icons/`,
+  `TrailbookIcons.render(key, {size})`, unknown → `other`): small (18 px) next to activity
+  names and types in every list and filter, larger (32–40 px) only in Activities › tiles.
+  The type filter is a custom dropdown with icons and search (a native select cannot show
+  icons); it keeps its value in a hidden input, so staged filters work unchanged.
 - Lists load **50 rows at a time** while scrolling (no page buttons) — the rule for every
   list (activities, tiles, import files, later calendar lists).
 - Summary instead of big KPI cards: one compact strip (label, value, small note), e.g.

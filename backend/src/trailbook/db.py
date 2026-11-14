@@ -223,6 +223,36 @@ MIGRATIONS: list[str] = [
     CREATE INDEX ix_activity_tiles_xy ON activity_tiles(x, y);
     ALTER TABLE activities ADD COLUMN tiles_version INTEGER NOT NULL DEFAULT 0;
     """,
+    # v6 — Garmin Connect personal API: one account (key) per person and the activities
+    # already downloaded, so nothing is fetched twice.
+    """
+    CREATE TABLE garmin_accounts (
+        person_id       TEXT PRIMARY KEY REFERENCES persons(id) ON DELETE CASCADE,
+        api_key         TEXT NOT NULL,
+        key_hint        TEXT,
+        history_from    TEXT,                   -- YYYY-MM-DD, NULL = whole history
+        token           TEXT,
+        token_expires   TEXT,
+        status          TEXT NOT NULL DEFAULT 'new',  -- new / ok / error / auth_error
+        last_error      TEXT,
+        last_sync_at    TEXT,
+        backfill_offset INTEGER NOT NULL DEFAULT 0,
+        backfill_done   INTEGER NOT NULL DEFAULT 0,
+        created_at      TEXT NOT NULL
+    );
+    CREATE TABLE garmin_activities (
+        person_id   TEXT NOT NULL,
+        activity_id INTEGER NOT NULL,
+        start_gmt   TEXT,
+        name        TEXT,
+        type_key    TEXT,
+        status      TEXT NOT NULL,              -- downloaded / error
+        file_rel    TEXT,
+        error       TEXT,
+        fetched_at  TEXT NOT NULL,
+        PRIMARY KEY (person_id, activity_id)
+    ) WITHOUT ROWID;
+    """,
 ]
 
 SCHEMA_VERSION = len(MIGRATIONS)

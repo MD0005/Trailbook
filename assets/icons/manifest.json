@@ -1,0 +1,1196 @@
+{
+  "name": "Trailbook B",
+  "version": "1.1.0",
+  "date": "2026-11-14",
+  "viewBox": "0 0 24 24",
+  "color": "currentColor",
+  "fallback": "other",
+  "catalogSource": "http://localhost:8099/api/types",
+  "count": 123,
+  "groups": [
+    {
+      "key": "run",
+      "en": "Running",
+      "pl": "Bieganie"
+    },
+    {
+      "key": "ride",
+      "en": "Cycling",
+      "pl": "Kolarstwo"
+    },
+    {
+      "key": "swim",
+      "en": "Swimming",
+      "pl": "Pływanie"
+    },
+    {
+      "key": "walk",
+      "en": "Walking",
+      "pl": "Chodzenie"
+    },
+    {
+      "key": "hike",
+      "en": "Hiking",
+      "pl": "Turystyka"
+    },
+    {
+      "key": "winter",
+      "en": "Winter sports",
+      "pl": "Sporty zimowe"
+    },
+    {
+      "key": "water",
+      "en": "Water sports",
+      "pl": "Sporty wodne"
+    },
+    {
+      "key": "fitness",
+      "en": "Fitness & gym",
+      "pl": "Fitness i siłownia"
+    },
+    {
+      "key": "mind_body",
+      "en": "Mind & body",
+      "pl": "Ciało i umysł"
+    },
+    {
+      "key": "climbing",
+      "en": "Climbing",
+      "pl": "Wspinaczka"
+    },
+    {
+      "key": "racket",
+      "en": "Racket sports",
+      "pl": "Sporty rakietowe"
+    },
+    {
+      "key": "team",
+      "en": "Team sports",
+      "pl": "Sporty drużynowe"
+    },
+    {
+      "key": "combat",
+      "en": "Combat sports",
+      "pl": "Sporty walki"
+    },
+    {
+      "key": "multisport",
+      "en": "Multisport",
+      "pl": "Multisport"
+    },
+    {
+      "key": "other",
+      "en": "Other",
+      "pl": "Inne"
+    }
+  ],
+  "icons": [
+    {
+      "key": "run",
+      "group": "run",
+      "en": "Run",
+      "pl": "Bieg",
+      "indoor": false,
+      "file": "svg/run.svg",
+      "symbol": "tb-run"
+    },
+    {
+      "key": "trail_run",
+      "group": "run",
+      "en": "Trail run",
+      "pl": "Bieg terenowy",
+      "indoor": false,
+      "file": "svg/trail_run.svg",
+      "symbol": "tb-trail_run"
+    },
+    {
+      "key": "treadmill_run",
+      "group": "run",
+      "en": "Treadmill run",
+      "pl": "Bieżnia mechaniczna",
+      "indoor": true,
+      "file": "svg/treadmill_run.svg",
+      "symbol": "tb-treadmill_run"
+    },
+    {
+      "key": "indoor_run",
+      "group": "run",
+      "en": "Indoor run",
+      "pl": "Bieg w hali",
+      "indoor": true,
+      "file": "svg/indoor_run.svg",
+      "symbol": "tb-indoor_run"
+    },
+    {
+      "key": "track_run",
+      "group": "run",
+      "en": "Track run",
+      "pl": "Bieg na stadionie",
+      "indoor": false,
+      "file": "svg/track_run.svg",
+      "symbol": "tb-track_run"
+    },
+    {
+      "key": "virtual_run",
+      "group": "run",
+      "en": "Virtual run",
+      "pl": "Bieg wirtualny",
+      "indoor": true,
+      "file": "svg/virtual_run.svg",
+      "symbol": "tb-virtual_run"
+    },
+    {
+      "key": "ultra_run",
+      "group": "run",
+      "en": "Ultra run",
+      "pl": "Bieg ultra",
+      "indoor": false,
+      "file": "svg/ultra_run.svg",
+      "symbol": "tb-ultra_run"
+    },
+    {
+      "key": "obstacle_run",
+      "group": "run",
+      "en": "Obstacle run",
+      "pl": "Bieg z przeszkodami",
+      "indoor": false,
+      "file": "svg/obstacle_run.svg",
+      "symbol": "tb-obstacle_run"
+    },
+    {
+      "key": "wheelchair_run",
+      "group": "run",
+      "en": "Wheelchair push run",
+      "pl": "Wózek – bieg",
+      "indoor": false,
+      "file": "svg/wheelchair_run.svg",
+      "symbol": "tb-wheelchair_run"
+    },
+    {
+      "key": "ride",
+      "group": "ride",
+      "en": "Ride",
+      "pl": "Jazda na rowerze",
+      "indoor": false,
+      "file": "svg/ride.svg",
+      "symbol": "tb-ride"
+    },
+    {
+      "key": "road_ride",
+      "group": "ride",
+      "en": "Road ride",
+      "pl": "Kolarstwo szosowe",
+      "indoor": false,
+      "file": "svg/road_ride.svg",
+      "symbol": "tb-road_ride"
+    },
+    {
+      "key": "mtb_ride",
+      "group": "ride",
+      "en": "Mountain bike",
+      "pl": "Rower górski (MTB)",
+      "indoor": false,
+      "file": "svg/mtb_ride.svg",
+      "symbol": "tb-mtb_ride"
+    },
+    {
+      "key": "gravel_ride",
+      "group": "ride",
+      "en": "Gravel ride",
+      "pl": "Gravel",
+      "indoor": false,
+      "file": "svg/gravel_ride.svg",
+      "symbol": "tb-gravel_ride"
+    },
+    {
+      "key": "cyclocross",
+      "group": "ride",
+      "en": "Cyclocross",
+      "pl": "Przełaj",
+      "indoor": false,
+      "file": "svg/cyclocross.svg",
+      "symbol": "tb-cyclocross"
+    },
+    {
+      "key": "downhill_ride",
+      "group": "ride",
+      "en": "Downhill",
+      "pl": "Downhill",
+      "indoor": false,
+      "file": "svg/downhill_ride.svg",
+      "symbol": "tb-downhill_ride"
+    },
+    {
+      "key": "enduro_ride",
+      "group": "ride",
+      "en": "Enduro",
+      "pl": "Enduro",
+      "indoor": false,
+      "file": "svg/enduro_ride.svg",
+      "symbol": "tb-enduro_ride"
+    },
+    {
+      "key": "indoor_ride",
+      "group": "ride",
+      "en": "Indoor ride",
+      "pl": "Trenażer",
+      "indoor": true,
+      "file": "svg/indoor_ride.svg",
+      "symbol": "tb-indoor_ride"
+    },
+    {
+      "key": "spin",
+      "group": "ride",
+      "en": "Spin class",
+      "pl": "Spinning",
+      "indoor": true,
+      "file": "svg/spin.svg",
+      "symbol": "tb-spin"
+    },
+    {
+      "key": "virtual_ride",
+      "group": "ride",
+      "en": "Virtual ride",
+      "pl": "Jazda wirtualna",
+      "indoor": true,
+      "file": "svg/virtual_ride.svg",
+      "symbol": "tb-virtual_ride"
+    },
+    {
+      "key": "ebike_ride",
+      "group": "ride",
+      "en": "E-bike ride",
+      "pl": "Rower elektryczny",
+      "indoor": false,
+      "file": "svg/ebike_ride.svg",
+      "symbol": "tb-ebike_ride"
+    },
+    {
+      "key": "emtb_ride",
+      "group": "ride",
+      "en": "E-mountain bike",
+      "pl": "Elektryczny MTB",
+      "indoor": false,
+      "file": "svg/emtb_ride.svg",
+      "symbol": "tb-emtb_ride"
+    },
+    {
+      "key": "commute_ride",
+      "group": "ride",
+      "en": "Bike commute",
+      "pl": "Dojazd rowerem",
+      "indoor": false,
+      "file": "svg/commute_ride.svg",
+      "symbol": "tb-commute_ride"
+    },
+    {
+      "key": "track_ride",
+      "group": "ride",
+      "en": "Track cycling",
+      "pl": "Kolarstwo torowe",
+      "indoor": false,
+      "file": "svg/track_ride.svg",
+      "symbol": "tb-track_ride"
+    },
+    {
+      "key": "bmx",
+      "group": "ride",
+      "en": "BMX",
+      "pl": "BMX",
+      "indoor": false,
+      "file": "svg/bmx.svg",
+      "symbol": "tb-bmx"
+    },
+    {
+      "key": "handcycle",
+      "group": "ride",
+      "en": "Handcycle",
+      "pl": "Handbike",
+      "indoor": false,
+      "file": "svg/handcycle.svg",
+      "symbol": "tb-handcycle"
+    },
+    {
+      "key": "recumbent",
+      "group": "ride",
+      "en": "Recumbent",
+      "pl": "Rower poziomy",
+      "indoor": false,
+      "file": "svg/recumbent.svg",
+      "symbol": "tb-recumbent"
+    },
+    {
+      "key": "swim",
+      "group": "swim",
+      "en": "Swim",
+      "pl": "Pływanie",
+      "indoor": false,
+      "file": "svg/swim.svg",
+      "symbol": "tb-swim"
+    },
+    {
+      "key": "pool_swim",
+      "group": "swim",
+      "en": "Pool swim",
+      "pl": "Basen",
+      "indoor": true,
+      "file": "svg/pool_swim.svg",
+      "symbol": "tb-pool_swim"
+    },
+    {
+      "key": "open_water_swim",
+      "group": "swim",
+      "en": "Open water swim",
+      "pl": "Wody otwarte",
+      "indoor": false,
+      "file": "svg/open_water_swim.svg",
+      "symbol": "tb-open_water_swim"
+    },
+    {
+      "key": "walk",
+      "group": "walk",
+      "en": "Walk",
+      "pl": "Spacer",
+      "indoor": false,
+      "file": "svg/walk.svg",
+      "symbol": "tb-walk"
+    },
+    {
+      "key": "speed_walk",
+      "group": "walk",
+      "en": "Speed walk",
+      "pl": "Szybki marsz",
+      "indoor": false,
+      "file": "svg/speed_walk.svg",
+      "symbol": "tb-speed_walk"
+    },
+    {
+      "key": "indoor_walk",
+      "group": "walk",
+      "en": "Indoor walk",
+      "pl": "Chód w pomieszczeniu",
+      "indoor": true,
+      "file": "svg/indoor_walk.svg",
+      "symbol": "tb-indoor_walk"
+    },
+    {
+      "key": "rucking",
+      "group": "walk",
+      "en": "Rucking",
+      "pl": "Marsz z obciążeniem",
+      "indoor": false,
+      "file": "svg/rucking.svg",
+      "symbol": "tb-rucking"
+    },
+    {
+      "key": "wheelchair_walk",
+      "group": "walk",
+      "en": "Wheelchair push",
+      "pl": "Wózek – spacer",
+      "indoor": false,
+      "file": "svg/wheelchair_walk.svg",
+      "symbol": "tb-wheelchair_walk"
+    },
+    {
+      "key": "hike",
+      "group": "hike",
+      "en": "Hike",
+      "pl": "Wędrówka",
+      "indoor": false,
+      "file": "svg/hike.svg",
+      "symbol": "tb-hike"
+    },
+    {
+      "key": "mountaineering",
+      "group": "hike",
+      "en": "Mountaineering",
+      "pl": "Alpinizm",
+      "indoor": false,
+      "file": "svg/mountaineering.svg",
+      "symbol": "tb-mountaineering"
+    },
+    {
+      "key": "ski_alpine",
+      "group": "winter",
+      "en": "Alpine ski",
+      "pl": "Narciarstwo zjazdowe",
+      "indoor": false,
+      "file": "svg/ski_alpine.svg",
+      "symbol": "tb-ski_alpine"
+    },
+    {
+      "key": "ski_backcountry",
+      "group": "winter",
+      "en": "Backcountry ski",
+      "pl": "Skitury",
+      "indoor": false,
+      "file": "svg/ski_backcountry.svg",
+      "symbol": "tb-ski_backcountry"
+    },
+    {
+      "key": "ski_xc",
+      "group": "winter",
+      "en": "Cross-country ski",
+      "pl": "Narciarstwo biegowe",
+      "indoor": false,
+      "file": "svg/ski_xc.svg",
+      "symbol": "tb-ski_xc"
+    },
+    {
+      "key": "ski_skate",
+      "group": "winter",
+      "en": "Skate ski",
+      "pl": "Biegówki – łyżwa",
+      "indoor": false,
+      "file": "svg/ski_skate.svg",
+      "symbol": "tb-ski_skate"
+    },
+    {
+      "key": "ski_indoor",
+      "group": "winter",
+      "en": "Indoor ski",
+      "pl": "Narty w hali / ergometr",
+      "indoor": true,
+      "file": "svg/ski_indoor.svg",
+      "symbol": "tb-ski_indoor"
+    },
+    {
+      "key": "snowboard",
+      "group": "winter",
+      "en": "Snowboard",
+      "pl": "Snowboard",
+      "indoor": false,
+      "file": "svg/snowboard.svg",
+      "symbol": "tb-snowboard"
+    },
+    {
+      "key": "snowshoe",
+      "group": "winter",
+      "en": "Snowshoe",
+      "pl": "Rakiety śnieżne",
+      "indoor": false,
+      "file": "svg/snowshoe.svg",
+      "symbol": "tb-snowshoe"
+    },
+    {
+      "key": "ice_skate",
+      "group": "winter",
+      "en": "Ice skating",
+      "pl": "Łyżwy",
+      "indoor": false,
+      "file": "svg/ice_skate.svg",
+      "symbol": "tb-ice_skate"
+    },
+    {
+      "key": "winter_other",
+      "group": "winter",
+      "en": "Winter sport",
+      "pl": "Sport zimowy",
+      "indoor": false,
+      "file": "svg/winter_other.svg",
+      "symbol": "tb-winter_other"
+    },
+    {
+      "key": "row",
+      "group": "water",
+      "en": "Rowing",
+      "pl": "Wioślarstwo",
+      "indoor": false,
+      "file": "svg/row.svg",
+      "symbol": "tb-row"
+    },
+    {
+      "key": "kayak",
+      "group": "water",
+      "en": "Kayaking",
+      "pl": "Kajak",
+      "indoor": false,
+      "file": "svg/kayak.svg",
+      "symbol": "tb-kayak"
+    },
+    {
+      "key": "canoe",
+      "group": "water",
+      "en": "Canoeing",
+      "pl": "Kanadyjka",
+      "indoor": false,
+      "file": "svg/canoe.svg",
+      "symbol": "tb-canoe"
+    },
+    {
+      "key": "paddle",
+      "group": "water",
+      "en": "Paddling",
+      "pl": "Wiosłowanie",
+      "indoor": false,
+      "file": "svg/paddle.svg",
+      "symbol": "tb-paddle"
+    },
+    {
+      "key": "sup",
+      "group": "water",
+      "en": "Stand up paddle",
+      "pl": "SUP",
+      "indoor": false,
+      "file": "svg/sup.svg",
+      "symbol": "tb-sup"
+    },
+    {
+      "key": "surf",
+      "group": "water",
+      "en": "Surfing",
+      "pl": "Surfing",
+      "indoor": false,
+      "file": "svg/surf.svg",
+      "symbol": "tb-surf"
+    },
+    {
+      "key": "windsurf",
+      "group": "water",
+      "en": "Windsurfing",
+      "pl": "Windsurfing",
+      "indoor": false,
+      "file": "svg/windsurf.svg",
+      "symbol": "tb-windsurf"
+    },
+    {
+      "key": "kitesurf",
+      "group": "water",
+      "en": "Kitesurfing",
+      "pl": "Kitesurfing",
+      "indoor": false,
+      "file": "svg/kitesurf.svg",
+      "symbol": "tb-kitesurf"
+    },
+    {
+      "key": "sail",
+      "group": "water",
+      "en": "Sailing",
+      "pl": "Żeglarstwo",
+      "indoor": false,
+      "file": "svg/sail.svg",
+      "symbol": "tb-sail"
+    },
+    {
+      "key": "rafting",
+      "group": "water",
+      "en": "Rafting",
+      "pl": "Rafting",
+      "indoor": false,
+      "file": "svg/rafting.svg",
+      "symbol": "tb-rafting"
+    },
+    {
+      "key": "wakeboard",
+      "group": "water",
+      "en": "Wakeboarding",
+      "pl": "Wakeboard",
+      "indoor": false,
+      "file": "svg/wakeboard.svg",
+      "symbol": "tb-wakeboard"
+    },
+    {
+      "key": "wakesurf",
+      "group": "water",
+      "en": "Wakesurfing",
+      "pl": "Wakesurfing",
+      "indoor": false,
+      "file": "svg/wakesurf.svg",
+      "symbol": "tb-wakesurf"
+    },
+    {
+      "key": "water_ski",
+      "group": "water",
+      "en": "Water skiing",
+      "pl": "Narty wodne",
+      "indoor": false,
+      "file": "svg/water_ski.svg",
+      "symbol": "tb-water_ski"
+    },
+    {
+      "key": "snorkel",
+      "group": "water",
+      "en": "Snorkeling",
+      "pl": "Snorkeling",
+      "indoor": false,
+      "file": "svg/snorkel.svg",
+      "symbol": "tb-snorkel"
+    },
+    {
+      "key": "dive",
+      "group": "water",
+      "en": "Diving",
+      "pl": "Nurkowanie",
+      "indoor": false,
+      "file": "svg/dive.svg",
+      "symbol": "tb-dive"
+    },
+    {
+      "key": "apnea",
+      "group": "water",
+      "en": "Freediving",
+      "pl": "Freediving",
+      "indoor": false,
+      "file": "svg/apnea.svg",
+      "symbol": "tb-apnea"
+    },
+    {
+      "key": "boating",
+      "group": "water",
+      "en": "Boating",
+      "pl": "Pływanie łodzią",
+      "indoor": false,
+      "file": "svg/boating.svg",
+      "symbol": "tb-boating"
+    },
+    {
+      "key": "water_other",
+      "group": "water",
+      "en": "Water sport",
+      "pl": "Sport wodny",
+      "indoor": false,
+      "file": "svg/water_other.svg",
+      "symbol": "tb-water_other"
+    },
+    {
+      "key": "strength",
+      "group": "fitness",
+      "en": "Strength training",
+      "pl": "Trening siłowy",
+      "indoor": false,
+      "file": "svg/strength.svg",
+      "symbol": "tb-strength"
+    },
+    {
+      "key": "hiit",
+      "group": "fitness",
+      "en": "HIIT",
+      "pl": "HIIT",
+      "indoor": false,
+      "file": "svg/hiit.svg",
+      "symbol": "tb-hiit"
+    },
+    {
+      "key": "cardio",
+      "group": "fitness",
+      "en": "Cardio",
+      "pl": "Cardio",
+      "indoor": false,
+      "file": "svg/cardio.svg",
+      "symbol": "tb-cardio"
+    },
+    {
+      "key": "training",
+      "group": "fitness",
+      "en": "Training",
+      "pl": "Trening",
+      "indoor": false,
+      "file": "svg/training.svg",
+      "symbol": "tb-training"
+    },
+    {
+      "key": "gym_equipment",
+      "group": "fitness",
+      "en": "Gym equipment",
+      "pl": "Sprzęt fitness",
+      "indoor": true,
+      "file": "svg/gym_equipment.svg",
+      "symbol": "tb-gym_equipment"
+    },
+    {
+      "key": "elliptical",
+      "group": "fitness",
+      "en": "Elliptical",
+      "pl": "Orbitrek",
+      "indoor": true,
+      "file": "svg/elliptical.svg",
+      "symbol": "tb-elliptical"
+    },
+    {
+      "key": "stair_stepper",
+      "group": "fitness",
+      "en": "Stair stepper",
+      "pl": "Stepper / schody",
+      "indoor": true,
+      "file": "svg/stair_stepper.svg",
+      "symbol": "tb-stair_stepper"
+    },
+    {
+      "key": "indoor_row",
+      "group": "fitness",
+      "en": "Indoor rowing",
+      "pl": "Ergometr wioślarski",
+      "indoor": true,
+      "file": "svg/indoor_row.svg",
+      "symbol": "tb-indoor_row"
+    },
+    {
+      "key": "floor_climb",
+      "group": "fitness",
+      "en": "Floor climbing",
+      "pl": "Wchodzenie po schodach",
+      "indoor": false,
+      "file": "svg/floor_climb.svg",
+      "symbol": "tb-floor_climb"
+    },
+    {
+      "key": "jump_rope",
+      "group": "fitness",
+      "en": "Jump rope",
+      "pl": "Skakanka",
+      "indoor": false,
+      "file": "svg/jump_rope.svg",
+      "symbol": "tb-jump_rope"
+    },
+    {
+      "key": "dance",
+      "group": "fitness",
+      "en": "Dance",
+      "pl": "Taniec",
+      "indoor": false,
+      "file": "svg/dance.svg",
+      "symbol": "tb-dance"
+    },
+    {
+      "key": "warm_up",
+      "group": "fitness",
+      "en": "Warm-up",
+      "pl": "Rozgrzewka",
+      "indoor": false,
+      "file": "svg/warm_up.svg",
+      "symbol": "tb-warm_up"
+    },
+    {
+      "key": "yoga",
+      "group": "mind_body",
+      "en": "Yoga",
+      "pl": "Joga",
+      "indoor": false,
+      "file": "svg/yoga.svg",
+      "symbol": "tb-yoga"
+    },
+    {
+      "key": "pilates",
+      "group": "mind_body",
+      "en": "Pilates",
+      "pl": "Pilates",
+      "indoor": false,
+      "file": "svg/pilates.svg",
+      "symbol": "tb-pilates"
+    },
+    {
+      "key": "stretching",
+      "group": "mind_body",
+      "en": "Stretching",
+      "pl": "Rozciąganie",
+      "indoor": false,
+      "file": "svg/stretching.svg",
+      "symbol": "tb-stretching"
+    },
+    {
+      "key": "mobility",
+      "group": "mind_body",
+      "en": "Mobility",
+      "pl": "Mobilność",
+      "indoor": false,
+      "file": "svg/mobility.svg",
+      "symbol": "tb-mobility"
+    },
+    {
+      "key": "meditation",
+      "group": "mind_body",
+      "en": "Meditation",
+      "pl": "Medytacja",
+      "indoor": false,
+      "file": "svg/meditation.svg",
+      "symbol": "tb-meditation"
+    },
+    {
+      "key": "breathwork",
+      "group": "mind_body",
+      "en": "Breathwork",
+      "pl": "Ćwiczenia oddechowe",
+      "indoor": false,
+      "file": "svg/breathwork.svg",
+      "symbol": "tb-breathwork"
+    },
+    {
+      "key": "climb",
+      "group": "climbing",
+      "en": "Rock climbing",
+      "pl": "Wspinaczka skałkowa",
+      "indoor": false,
+      "file": "svg/climb.svg",
+      "symbol": "tb-climb"
+    },
+    {
+      "key": "indoor_climb",
+      "group": "climbing",
+      "en": "Indoor climbing",
+      "pl": "Ścianka",
+      "indoor": true,
+      "file": "svg/indoor_climb.svg",
+      "symbol": "tb-indoor_climb"
+    },
+    {
+      "key": "bouldering",
+      "group": "climbing",
+      "en": "Bouldering",
+      "pl": "Bouldering",
+      "indoor": false,
+      "file": "svg/bouldering.svg",
+      "symbol": "tb-bouldering"
+    },
+    {
+      "key": "tennis",
+      "group": "racket",
+      "en": "Tennis",
+      "pl": "Tenis",
+      "indoor": false,
+      "file": "svg/tennis.svg",
+      "symbol": "tb-tennis"
+    },
+    {
+      "key": "padel",
+      "group": "racket",
+      "en": "Padel",
+      "pl": "Padel",
+      "indoor": false,
+      "file": "svg/padel.svg",
+      "symbol": "tb-padel"
+    },
+    {
+      "key": "pickleball",
+      "group": "racket",
+      "en": "Pickleball",
+      "pl": "Pickleball",
+      "indoor": false,
+      "file": "svg/pickleball.svg",
+      "symbol": "tb-pickleball"
+    },
+    {
+      "key": "squash",
+      "group": "racket",
+      "en": "Squash",
+      "pl": "Squash",
+      "indoor": false,
+      "file": "svg/squash.svg",
+      "symbol": "tb-squash"
+    },
+    {
+      "key": "badminton",
+      "group": "racket",
+      "en": "Badminton",
+      "pl": "Badminton",
+      "indoor": false,
+      "file": "svg/badminton.svg",
+      "symbol": "tb-badminton"
+    },
+    {
+      "key": "table_tennis",
+      "group": "racket",
+      "en": "Table tennis",
+      "pl": "Tenis stołowy",
+      "indoor": false,
+      "file": "svg/table_tennis.svg",
+      "symbol": "tb-table_tennis"
+    },
+    {
+      "key": "racquetball",
+      "group": "racket",
+      "en": "Racquetball",
+      "pl": "Racquetball",
+      "indoor": false,
+      "file": "svg/racquetball.svg",
+      "symbol": "tb-racquetball"
+    },
+    {
+      "key": "racket",
+      "group": "racket",
+      "en": "Racket sport",
+      "pl": "Sport rakietowy",
+      "indoor": false,
+      "file": "svg/racket.svg",
+      "symbol": "tb-racket"
+    },
+    {
+      "key": "soccer",
+      "group": "team",
+      "en": "Soccer",
+      "pl": "Piłka nożna",
+      "indoor": false,
+      "file": "svg/soccer.svg",
+      "symbol": "tb-soccer"
+    },
+    {
+      "key": "basketball",
+      "group": "team",
+      "en": "Basketball",
+      "pl": "Koszykówka",
+      "indoor": false,
+      "file": "svg/basketball.svg",
+      "symbol": "tb-basketball"
+    },
+    {
+      "key": "volleyball",
+      "group": "team",
+      "en": "Volleyball",
+      "pl": "Siatkówka",
+      "indoor": false,
+      "file": "svg/volleyball.svg",
+      "symbol": "tb-volleyball"
+    },
+    {
+      "key": "hockey",
+      "group": "team",
+      "en": "Hockey",
+      "pl": "Hokej",
+      "indoor": false,
+      "file": "svg/hockey.svg",
+      "symbol": "tb-hockey"
+    },
+    {
+      "key": "rugby",
+      "group": "team",
+      "en": "Rugby",
+      "pl": "Rugby",
+      "indoor": false,
+      "file": "svg/rugby.svg",
+      "symbol": "tb-rugby"
+    },
+    {
+      "key": "american_football",
+      "group": "team",
+      "en": "American football",
+      "pl": "Futbol amerykański",
+      "indoor": false,
+      "file": "svg/american_football.svg",
+      "symbol": "tb-american_football"
+    },
+    {
+      "key": "baseball",
+      "group": "team",
+      "en": "Baseball",
+      "pl": "Baseball",
+      "indoor": false,
+      "file": "svg/baseball.svg",
+      "symbol": "tb-baseball"
+    },
+    {
+      "key": "cricket",
+      "group": "team",
+      "en": "Cricket",
+      "pl": "Krykiet",
+      "indoor": false,
+      "file": "svg/cricket.svg",
+      "symbol": "tb-cricket"
+    },
+    {
+      "key": "lacrosse",
+      "group": "team",
+      "en": "Lacrosse",
+      "pl": "Lacrosse",
+      "indoor": false,
+      "file": "svg/lacrosse.svg",
+      "symbol": "tb-lacrosse"
+    },
+    {
+      "key": "ultimate",
+      "group": "team",
+      "en": "Ultimate",
+      "pl": "Ultimate frisbee",
+      "indoor": false,
+      "file": "svg/ultimate.svg",
+      "symbol": "tb-ultimate"
+    },
+    {
+      "key": "team_sport",
+      "group": "team",
+      "en": "Team sport",
+      "pl": "Sport drużynowy",
+      "indoor": false,
+      "file": "svg/team_sport.svg",
+      "symbol": "tb-team_sport"
+    },
+    {
+      "key": "boxing",
+      "group": "combat",
+      "en": "Boxing",
+      "pl": "Boks",
+      "indoor": false,
+      "file": "svg/boxing.svg",
+      "symbol": "tb-boxing"
+    },
+    {
+      "key": "mma",
+      "group": "combat",
+      "en": "Mixed martial arts",
+      "pl": "MMA",
+      "indoor": false,
+      "file": "svg/mma.svg",
+      "symbol": "tb-mma"
+    },
+    {
+      "key": "multisport",
+      "group": "multisport",
+      "en": "Multisport",
+      "pl": "Multisport",
+      "indoor": false,
+      "file": "svg/multisport.svg",
+      "symbol": "tb-multisport"
+    },
+    {
+      "key": "triathlon",
+      "group": "multisport",
+      "en": "Triathlon",
+      "pl": "Triathlon",
+      "indoor": false,
+      "file": "svg/triathlon.svg",
+      "symbol": "tb-triathlon"
+    },
+    {
+      "key": "duathlon",
+      "group": "multisport",
+      "en": "Duathlon",
+      "pl": "Duathlon",
+      "indoor": false,
+      "file": "svg/duathlon.svg",
+      "symbol": "tb-duathlon"
+    },
+    {
+      "key": "swimrun",
+      "group": "multisport",
+      "en": "Swimrun",
+      "pl": "Swimrun",
+      "indoor": false,
+      "file": "svg/swimrun.svg",
+      "symbol": "tb-swimrun"
+    },
+    {
+      "key": "transition",
+      "group": "multisport",
+      "en": "Transition",
+      "pl": "Strefa zmian",
+      "indoor": false,
+      "file": "svg/transition.svg",
+      "symbol": "tb-transition"
+    },
+    {
+      "key": "golf",
+      "group": "other",
+      "en": "Golf",
+      "pl": "Golf",
+      "indoor": false,
+      "file": "svg/golf.svg",
+      "symbol": "tb-golf"
+    },
+    {
+      "key": "disc_golf",
+      "group": "other",
+      "en": "Disc golf",
+      "pl": "Disc golf",
+      "indoor": false,
+      "file": "svg/disc_golf.svg",
+      "symbol": "tb-disc_golf"
+    },
+    {
+      "key": "horse_riding",
+      "group": "other",
+      "en": "Horse riding",
+      "pl": "Jazda konna",
+      "indoor": false,
+      "file": "svg/horse_riding.svg",
+      "symbol": "tb-horse_riding"
+    },
+    {
+      "key": "inline_skate",
+      "group": "other",
+      "en": "Inline skating",
+      "pl": "Rolki",
+      "indoor": false,
+      "file": "svg/inline_skate.svg",
+      "symbol": "tb-inline_skate"
+    },
+    {
+      "key": "motor",
+      "group": "other",
+      "en": "Motor sports",
+      "pl": "Sporty motorowe",
+      "indoor": false,
+      "file": "svg/motor.svg",
+      "symbol": "tb-motor"
+    },
+    {
+      "key": "flying",
+      "group": "other",
+      "en": "Flying",
+      "pl": "Latanie",
+      "indoor": false,
+      "file": "svg/flying.svg",
+      "symbol": "tb-flying"
+    },
+    {
+      "key": "fishing",
+      "group": "other",
+      "en": "Fishing",
+      "pl": "Wędkarstwo",
+      "indoor": false,
+      "file": "svg/fishing.svg",
+      "symbol": "tb-fishing"
+    },
+    {
+      "key": "hunting",
+      "group": "other",
+      "en": "Hunting",
+      "pl": "Myślistwo",
+      "indoor": false,
+      "file": "svg/hunting.svg",
+      "symbol": "tb-hunting"
+    },
+    {
+      "key": "archery",
+      "group": "other",
+      "en": "Archery",
+      "pl": "Łucznictwo",
+      "indoor": false,
+      "file": "svg/archery.svg",
+      "symbol": "tb-archery"
+    },
+    {
+      "key": "shooting",
+      "group": "other",
+      "en": "Shooting",
+      "pl": "Strzelectwo",
+      "indoor": false,
+      "file": "svg/shooting.svg",
+      "symbol": "tb-shooting"
+    },
+    {
+      "key": "geocaching",
+      "group": "other",
+      "en": "Geocaching",
+      "pl": "Geocaching",
+      "indoor": false,
+      "file": "svg/geocaching.svg",
+      "symbol": "tb-geocaching"
+    },
+    {
+      "key": "esports",
+      "group": "other",
+      "en": "Esports",
+      "pl": "E-sport",
+      "indoor": true,
+      "file": "svg/esports.svg",
+      "symbol": "tb-esports"
+    },
+    {
+      "key": "other",
+      "group": "other",
+      "en": "Other",
+      "pl": "Inne",
+      "indoor": false,
+      "file": "svg/other.svg",
+      "symbol": "tb-other"
+    }
+  ]
+}

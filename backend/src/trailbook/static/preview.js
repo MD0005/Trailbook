@@ -49,6 +49,15 @@ const ACCENTS = [
   ["rose", "Rose", "#e11d48", "#fb7185"], ["amber", "Amber", "#b45309", "#fbbf24"],
   ["green", "Green", "#15803d", "#4ade80"], ["graphite", "Graphite", "#334155", "#cbd5e1"],
 ];
+// Width of the vertical scrollbar, so full-screen pages (no gutter) line up with others.
+(function measureScrollbar() {
+  const d = document.createElement("div");
+  d.style.cssText = "position:absolute;top:-999px;width:100px;height:100px;overflow:scroll";
+  document.documentElement.appendChild(d);
+  document.documentElement.style.setProperty("--sbw", `${d.offsetWidth - d.clientWidth}px`);
+  d.remove();
+})();
+
 function applyAccent() {
   const a = ACCENTS.find(([k]) => k === store.get("accent")) || ACCENTS[0];
   const dark = document.documentElement.dataset.theme === "dark";
@@ -99,6 +108,13 @@ const browserTime = (iso) => {
 };
 const typeOf = (key) => TYPES?.types.find((t) => t.key === key);
 const typeLabel = (key) => typeOf(key)?.en ?? key;
+// Activity type icons (assets/icons, “Trailbook B”): small next to names in lists and
+// filters, larger only in Activities › tiles. Unknown types fall back to “other”.
+const typeIcon = (key, size = 18) => (window.TrailbookIcons ? TrailbookIcons.render(key, { size }) : "");
+const typeName = (key, text = typeLabel(key), size = 18) =>
+  `<span class="tb-activity-name">${typeIcon(key, size)}<span>${esc(text)}</span></span>`;
+// Group rows use the icon of the group's main type (run, ride, swim, …) when there is one.
+const groupIcon = (g, size = 18) => typeIcon(window.TrailbookIcons?.keys?.includes(g) ? g : (TYPES.types.find((t) => t.group === g)?.key || "other"), size);
 const groupLabel = (key) => TYPES?.groups.find((g) => g.key === key)?.en ?? key;
 const person = (id) => PERSONS.find((p) => p.id === id);
 const personLabel = (id) => person(id)?.label ?? id;
@@ -235,8 +251,79 @@ function infinite(root, loaded, total, fetchPage, append) {
   observers.push(obs);
 }
 
+// Dropdown of activity types with icons. Carries its value in a hidden input with the
+// same data-filter / data-pfilter attribute as other filters, and fires "change".
+function typePicker(attr, key, value, all = "All types") {
+  const label = (v) => (!v ? all : v.startsWith("g:") ? `All ${groupLabel(v.slice(2)).toLowerCase()}` : typeLabel(v));
+  const icon = (v) => (!v ? "" : v.startsWith("g:") ? groupIcon(v.slice(2)) : typeIcon(v));
+  const item = (v, text, ic, cls = "") =>
+    `<button type="button" class="tpick-item ${cls} ${v === value ? "on" : ""}" data-v="${esc(v)}" data-search="${esc(text.toLowerCase())}">${ic}<span>${esc(text)}</span></button>`;
+  const groups = TYPES.groups.map((g) => {
+    const types = TYPES.types.filter((t) => t.group === g.key);
+    return `<div class="tpick-group" data-group>${item(`g:${g.key}`, `All ${g.en.toLowerCase()}`, groupIcon(g.key), "grp")}
+      ${types.map((t) => item(t.key, t.en, typeIcon(t.key), "sub")).join("")}</div>`;
+  }).join("");
+  return `<div class="tpick">
+    <input type="hidden" ${attr}="${key}" value="${esc(value)}">
+    <button type="button" class="tpick-btn" data-tpick-btn>${icon(value)}<span class="tpick-label">${esc(label(value))}</span>${ICON.chevron}</button>
+    <div class="tpick-menu" hidden>
+      <input class="tpick-search" placeholder="Search…" autocomplete="off">
+      <div class="tpick-list">${item("", all, "", "all")}${groups}</div>
+    </div>
+  </div>`;
+}
+
+document.addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-tpick-btn]");
+  const pick = e.target.closest(".tpick");
+  document.querySelectorAll(".tpick-menu:not([hidden])").forEach((m) => {
+    if (!pick || m.parentElement !== pick) m.hidden = true;
+  });
+  if (btn) {
+    const menu = pick.querySelector(".tpick-menu");
+    menu.hidden = !menu.hidden;
+    if (!menu.hidden) {
+      const r = btn.getBoundingClientRect();
+      const width = Math.max(240, r.width);
+      menu.style.left = `${Math.min(r.left, window.innerWidth - width - 8)}px`;
+      menu.style.top = `${r.bottom + 4}px`;
+      menu.style.minWidth = `${width}px`;
+      menu.style.maxHeight = `${Math.max(200, window.innerHeight - r.bottom - 24)}px`;
+      const search = menu.querySelector(".tpick-search");
+      search.value = "";
+      search.dispatchEvent(new Event("input"));
+      search.focus();
+      menu.querySelector(".tpick-item.on")?.scrollIntoView({ block: "nearest" });
+    }
+    return;
+  }
+  const item = e.target.closest(".tpick-item");
+  if (item && pick) {
+    const input = pick.querySelector("input[type=hidden]");
+    input.value = item.dataset.v;
+    pick.querySelectorAll(".tpick-item.on").forEach((x) => x.classList.remove("on"));
+    item.classList.add("on");
+    const b = pick.querySelector("[data-tpick-btn]");
+    b.innerHTML = item.innerHTML.replace(/<span>/, '<span class="tpick-label">') + ICON.chevron;
+    pick.querySelector(".tpick-menu").hidden = true;
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+}, true);
+document.addEventListener("input", (e) => {
+  if (!e.target.classList.contains("tpick-search")) return;
+  const q = e.target.value.trim().toLowerCase();
+  const menu = e.target.closest(".tpick-menu");
+  menu.querySelectorAll(".tpick-item").forEach((i) => { i.hidden = q && !i.dataset.search.includes(q); });
+  menu.querySelectorAll("[data-group]").forEach((g) => { g.hidden = ![...g.querySelectorAll(".tpick-item")].some((i) => !i.hidden); });
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") document.querySelectorAll(".tpick-menu:not([hidden])").forEach((m) => { m.hidden = true; });
+});
+window.addEventListener("scroll", () => document.querySelectorAll(".tpick-menu:not([hidden])").forEach((m) => { m.hidden = true; }), { passive: true });
+
 function filterControl(c, params) {
   const f = c.filter, value = params[c.key] ?? "";
+  if (f.type === "types") return typePicker("data-filter", c.key, value, f.all || "All types");
   if (f.type === "select") {
     const opt = ([v, l]) => `<option value="${esc(v)}" ${v === value ? "selected" : ""}>${esc(l)}</option>`;
     const opts = f.options.map((o) => (o.group
@@ -278,7 +365,7 @@ function bindTable(route, params) {
   view.querySelectorAll("[data-filter]").forEach((el) => {
     const key = el.dataset.filter;
     const apply = () => go({ [key]: el.value.trim(), page: 0 });
-    if (el.tagName === "SELECT") {
+    if (el.tagName === "SELECT" || el.type === "hidden") {
       el.onchange = apply;
     } else {
       el.onkeydown = (e) => { if (e.key === "Enter") apply(); };
@@ -399,8 +486,8 @@ async function renderActivities(params) {
   const columns = [
     { key: "date", label: "Date", sort: true, filter: { type: "text", placeholder: "2026-02" },
       render: (a) => `<a href="#/activity/${a.id}">${localTime(a)}</a>` },
-    { key: "type", label: "Type", sort: true, filter: { type: "select", options: typeOptions(), all: "All types" },
-      render: (a) => esc(typeLabel(a.activity_type)) + (a.indoor ? ` <span class="hint">indoor</span>` : "") },
+    { key: "type", label: "Type", sort: true, filter: { type: "types", all: "All types" },
+      render: (a) => typeName(a.activity_type) + (a.indoor ? ` <span class="hint">indoor</span>` : "") },
     { key: "name", label: "Name", sort: true, filter: { type: "text", placeholder: "name…" }, render: (a) => esc(a.name) },
     { key: "distance", label: "Distance", sort: true, num: true, render: (a) => km(a.distance_m) },
     { key: "moving", label: "Moving time", sort: true, num: true, render: (a) => dur(a.moving_s) },
@@ -417,8 +504,9 @@ async function renderActivities(params) {
     <a class="tile ${mode}" href="#/activity/${a.id}">
       ${mode === "large" ? `<div class="tile-map">${tileContent === "pace" ? paceSpark(a.speed_series) : a.polyline ? trackSvg(a.polyline, "tile-track") : `<span class="hint">${a.indoor ? "indoor" : "no route"}</span>`}</div>` : ""}
       <div class="tile-head">
-        <b>${esc(a.name || typeLabel(a.activity_type))}</b>
-        <span class="hint">${esc(typeLabel(a.activity_type))} · ${localTime(a)}${isAll ? ` · ${esc(personLabel(a.person_id))}` : ""}</span>
+        <span class="tile-icon">${typeIcon(a.activity_type, mode === "large" ? 40 : 32)}</span>
+        <span class="tile-title"><b>${esc(a.name || typeLabel(a.activity_type))}</b>
+        <span class="hint">${esc(typeLabel(a.activity_type))} · ${localTime(a)}${isAll ? ` · ${esc(personLabel(a.person_id))}` : ""}</span></span>
       </div>
       <div class="tile-stats">
         ${a.distance_m ? `<span><span class="hint">Distance</span>${km(a.distance_m)}</span>` : ""}
@@ -505,7 +593,7 @@ async function renderActivity(id) {
   ].filter(Boolean).join("");
   view.innerHTML = `
     <a class="back" href="#/activities">← Activities</a>
-    <div class="page-head"><h2>${esc(a.name || typeLabel(a.activity_type))}</h2></div>
+    <div class="page-head"><h2 class="tb-activity-name">${typeIcon(a.activity_type, 24)}<span>${esc(a.name || typeLabel(a.activity_type))}</span></h2></div>
     <div class="card">
       <div class="card-row">
         ${avatar(person(a.person_id), 22)}
@@ -948,8 +1036,7 @@ function filterSummary() {
   return [pt.startsWith("g:") ? groupLabel(pt.slice(2)) : pt ? typeLabel(pt) : "", heat.params.year || ""].filter(Boolean).join(" · ") || "All";
 }
 function filterPanel() {
-  return `<div class="panel-grid">${section("Activity type", `<select data-pfilter="type"><option value="">All types</option>${typeOptions().map((g) =>
-      `<optgroup label="${esc(g.group)}">${g.options.map(([v, l]) => `<option value="${esc(v)}" ${v === heat.params.type ? "selected" : ""}>${esc(l)}</option>`).join("")}</optgroup>`).join("")}</select>`)}
+  return `<div class="panel-grid">${section("Activity type", typePicker("data-pfilter", "type", heat.params.type || ""))}
     ${section("Year", `<div class="chips">${[["", "All"], ...heat.years.map((y) => [y, y])].map(([v, l]) =>
       `<button class="chip ${v === (heat.params.year || "") ? "on" : ""}" data-pchip="year" data-value="${v}">${l}</button>`).join("")}</div>`)}</div>
     <div class="panel-actions"><button class="primary small" data-apply>Apply</button></div>`;
@@ -1264,9 +1351,10 @@ async function renderSettings(tab, params) {
 }
 
 async function settingsGeneral(el) {
-  const [s, devices] = await Promise.all([api("settings"), api("devices")]);
+  const [s, devices, garminState] = await Promise.all([api("settings"), api("devices"), api("garmin")]);
   PERSONS = await api("persons");
   const people = realPeople();
+  const accounts = garminState.accounts || {};
   const accent = store.get("accent") || "sky";
   const interval = (m) => (m === 0 ? "Off" : m < 60 ? `${m} min` : m === 60 ? "1 hour" : `${m / 60} hours`);
   const source = s.data_source || "folder";
@@ -1328,18 +1416,55 @@ async function settingsGeneral(el) {
       <div data-upload-msg style="margin-top:8px"></div>
     </div>`;
 
+  const GSTATE = { new: ["not tested", "warn"], ok: ["connected", "ok"], error: ["paused", "warn"], auth_error: ["key refused", "bad"] };
+  const garminRow = (p) => {
+    const a = accounts[p.id];
+    const st = a ? GSTATE[a.status] || [a.status, ""] : ["not connected", "muted"];
+    return `<div class="garmin-person" data-gperson="${esc(p.id)}">
+      <div class="garmin-head">
+        <span class="garmin-who">${avatar(p, 20)} <b>${esc(p.label)}</b></span>
+        ${state(st[0], st[1])}
+        ${a ? `<span class="hint">key ${esc(a.key_hint || "")} · ${num(a.downloaded)} activities downloaded${a.failed ? ` · ${num(a.failed)} failed` : ""}${a.last_sync_at ? ` · last download ${browserTime(a.last_sync_at)}` : ""}${a.downloaded && !a.backfill_done ? " · history still downloading" : ""}</span>` : ""}
+      </div>
+      ${a && a.last_error ? `<div class="hint garmin-err">${esc(a.last_error)}</div>` : ""}
+      <div class="garmin-form">
+        <label><span class="opt-label">Personal API key</span>
+          <input type="password" name="gkey" autocomplete="off" spellcheck="false" placeholder="${a ? "Stored — paste a new key to replace it" : "Paste the key from Garmin Connect"}"></label>
+        <label><span class="opt-label">Download from</span>
+          <input type="date" name="gfrom" value="${esc(a?.history_from || "")}" title="Empty = the whole history"></label>
+        <div class="garmin-actions">
+          <button class="primary small" data-gsave>${a ? "Save" : "Connect"}</button>
+          ${a ? `<button class="small" data-gtest>Test</button><button class="small" data-gremove>Disconnect</button>` : ""}
+          <span data-gmsg></span>
+        </div>
+      </div>
+    </div>`;
+  };
+  const connected = Object.keys(accounts).length;
   const garminCard = `
     <div class="card">
-      <h3>Garmin Connect ${state("planned", "warn")}</h3>
-      ${hint("Each person connects their own Garmin account with a personal API key (Garmin Connect → Personal API key). Keys expire after 30 days to 1 year; Garmin e-mails a reminder a week before.")}
-      <ul class="plain">
-        <li>Activities are downloaded in their original FIT format — the same FIT id as files from a folder, so nothing is duplicated.</li>
-        <li>Later: sleep, HRV, stress, resting heart rate, steps and weight for the Wellbeing tab.</li>
-        <li>Data is pulled slowly in the background and paused when Garmin refuses requests.</li>
-      </ul>
-      <div class="scroll"><table class="data"><thead><tr><th>Person</th><th>Personal API key</th><th>Status</th></tr></thead>
-        <tbody>${people.map((p) => `<tr><td>${avatar(p, 18)} ${esc(p.label)}</td><td><input disabled placeholder="Available in a later stage"></td><td>${state("not connected", "muted")}</td></tr>`).join("")
-          || `<tr><td colspan="3" class="hint">Add people first (Settings › People).</td></tr>`}</tbody></table></div>
+      <h3>Garmin Connect</h3>
+      ${hint("Each person connects their own Garmin account with a personal API key. Activities are downloaded as original FIT files in the background, slowly, at the lowest priority.")}
+      <ol class="plain steps">
+        <li>Sign in to <b>Garmin Connect on the web</b> and open the <b>Personal API key</b> page (account settings).</li>
+        <li><b>Create Key</b>, accept the terms and choose how long it stays valid (30 days – 1 year).</li>
+        <li>Copy the key — Garmin shows it only once — and paste it below for that person.</li>
+      </ol>
+      <div class="garmin-people">${people.map(garminRow).join("") || hint("Add people first (Settings › People).")}</div>
+      <div class="note"><b>Nothing is downloaded or imported twice.</b> Downloaded activities are remembered, and each activity is recognised by its FIT id, so activities you already imported from a folder or a ZIP are skipped. To save time, set <i>Download from</i> to the day after your last imported activity.</div>
+      <div class="note">The key is stored only in Trailbook's database on this Home Assistant and is never shown again. Keys expire — Garmin e-mails a reminder a week before; then paste the new key here. Sleep, HRV, stress and other health data will follow with the Wellbeing tab.</div>
+    </div>
+    <div class="card">
+      <h3>Automatic download</h3>
+      ${hint("New activities are checked for every connected person. The first run downloads the newest activities; older ones follow in the next runs (up to 60 activities per run, one request every 3 seconds). If Garmin refuses requests, downloading pauses until the next run.")}
+      <select class="field-input" name="scan_interval_min" style="max-width:200px">${s.scan_interval_choices.map((m) =>
+        `<option value="${m}" ${m === s.scan_interval_min ? "selected" : ""}>${interval(m)}</option>`).join("")}</select>
+      <div>${s.next_scan_at ? state(`Next download at ${browserTime(s.next_scan_at)}`) : state(connected ? "No automatic download scheduled" : "Connect a person first", "warn")}</div>
+      <div class="card-row" style="margin-top:12px">
+        <button class="primary" data-save="scan_interval_min">Save</button>
+        <button data-gsync ${connected ? "" : "disabled"}>Download now</button>
+        <span data-msg></span>
+      </div>
     </div>`;
 
   el.innerHTML = `
@@ -1362,7 +1487,7 @@ async function settingsGeneral(el) {
       <h3>Data connection</h3>
       ${hint("Where new activities come from.")}
       <div class="source-grid">
-        ${choice("data_source", "garmin", source, "Garmin Connect", "Download automatically for every person with their personal API key.", " " + state("planned", "warn"))}
+        ${choice("data_source", "garmin", source, "Garmin Connect", "Download automatically for every person with their personal API key.")}
         ${choice("data_source", "upload", source, "Upload a ZIP", "One-time import of a Garmin export or FIT files for a chosen person.")}
         ${choice("data_source", "folder", source, "Watch a folder", "Import FIT files that appear in a folder, e.g. saved by a Home Assistant automation.")}
       </div>
@@ -1408,6 +1533,46 @@ async function settingsGeneral(el) {
       out.innerHTML = state("Saved", "ok");
     } catch (e) { out.innerHTML = state(esc(e.message), "bad"); }
   });
+  el.querySelectorAll("[data-gperson]").forEach((box) => {
+    const pid = box.dataset.gperson, out = box.querySelector("[data-gmsg]");
+    const show = (r) => {
+      out.innerHTML = r.ok
+        ? state(`Connected${r.latest ? ` · newest activity: ${esc(r.latest.name || "")} (${esc((r.latest.start || "").slice(0, 10))})` : ""}`, "ok")
+        : state(esc(r.error || "Failed"), "bad");
+    };
+    box.querySelector("[data-gsave]").onclick = async (e) => {
+      const key = box.querySelector("[name=gkey]").value.trim();
+      const from = box.querySelector("[name=gfrom]").value || null;
+      e.target.disabled = true;
+      out.innerHTML = state("Checking the key with Garmin…");
+      try {
+        const r = await api("garmin/" + encodeURIComponent(pid), { method: "PUT", body: JSON.stringify({ api_key: key, history_from: from }) });
+        if (r.ok) { reload(); return; }
+        show(r);
+      } catch (err) { out.innerHTML = state(esc(err.message), "bad"); }
+      e.target.disabled = false;
+    };
+    const test = box.querySelector("[data-gtest]");
+    if (test) test.onclick = async () => {
+      out.innerHTML = state("Checking…");
+      try { show(await api(`garmin/${encodeURIComponent(pid)}/test`, { method: "POST" })); }
+      catch (err) { out.innerHTML = state(esc(err.message), "bad"); }
+    };
+    const rm = box.querySelector("[data-gremove]");
+    if (rm) rm.onclick = async () => {
+      if (!confirm("Disconnect this Garmin account? The stored key is deleted; imported activities stay.")) return;
+      await api("garmin/" + encodeURIComponent(pid), { method: "DELETE" });
+      reload();
+    };
+  });
+  const gsync = el.querySelector("[data-gsync]");
+  if (gsync) gsync.onclick = async () => {
+    const out = gsync.closest(".card").querySelector("[data-msg]");
+    try {
+      await api("import/scan", { method: "POST" });
+      out.innerHTML = state("Started — progress in Settings › Imported", "ok");
+    } catch (e) { out.innerHTML = state(esc(e.message), "bad"); }
+  };
   const up = el.querySelector("[data-upload]");
   if (up) up.onclick = async () => {
     const out = el.querySelector("[data-upload-msg]");
@@ -1527,7 +1692,7 @@ const STATUS_KIND = { error: "bad", missing: "warn", imported: "ok", skipped: "m
 
 function fileContent(f) {
   if (f.activity_id && f.status !== "duplicate") {
-    return `<a href="#/activity/${f.activity_id}">${esc(f.name || typeLabel(f.activity_type))}</a>
+    return `<a class="tb-activity-name" href="#/activity/${f.activity_id}">${typeIcon(f.activity_type)}<span>${esc(f.name || typeLabel(f.activity_type))}</span></a>
       <span class="hint">${esc(typeLabel(f.activity_type))}</span>`;
   }
   if (f.status === "duplicate" && f.activity_id) {
@@ -1548,20 +1713,28 @@ function fileActions(f) {
 
 function scanCard(st) {
   const p = st.progress;
+  const src = st.data_source || "folder";
   const last = st.running || p.state === "running"
-    ? state(`Scanning: ${esc(p.phase || "")} ${num(p.done ?? 0)} / ${p.total != null ? num(p.total) : "?"} files`, "warn")
+    ? (p.phase === "garmin"
+      ? state(`Downloading from Garmin: ${num(p.done ?? 0)} activities${p.current ? ` · ${esc(p.current)}` : ""}`, "warn")
+      : state(`Running: ${esc(p.phase || "")} ${num(p.done ?? 0)} / ${p.total != null ? num(p.total) : "?"} files`, "warn"))
     : p.state === "failed" ? state(`Last run failed: ${esc(p.error)}`, "bad")
     : p.state === "finished" ? state(`Last run ${browserTime(p.finished_at)} — ${num(p.scanned)} files checked, ${num(p.imported)} imported, ${num(p.skipped)} skipped, ${num(p.duplicates)} duplicates, ${num(p.errors)} errors, ${num(p.missing)} missing`)
     : state("No scan yet");
-  const next = st.scan_interval_min
-    ? state(`Automatic scan every ${st.scan_interval_min} min${st.next_scan_at ? ` · next at ${browserTime(st.next_scan_at)}` : ""}`)
-    : state("Automatic scan is off", "warn");
+  const next = src === "upload" ? ""
+    : st.scan_interval_min && st.next_scan_at
+      ? state(`Automatic ${src === "garmin" ? "download" : "scan"} every ${st.scan_interval_min} min · next at ${browserTime(st.next_scan_at)}`)
+      : state(`Automatic ${src === "garmin" ? "download" : "scan"} is off`, "warn");
+  const title = { folder: "Folder scan", garmin: "Garmin Connect download", upload: "Uploads" }[src];
+  const where = src === "folder" ? `<code>${esc(st.root || "No folder configured")}</code>`
+    : src === "garmin" ? `<span class="hint">Activities of every connected person</span>` : `<span class="hint">ZIP and FIT files uploaded in Settings › General</span>`;
+  const label = { folder: "Scan folder now", garmin: "Download now", upload: "Process queued uploads" }[src];
   return `<div class="card">
-    <h3>Folder scan</h3>
-    <div class="card-row"><code>${esc(st.root || "No folder configured")}</code><a href="#/settings/general">Change</a></div>
+    <h3>${title}</h3>
+    <div class="card-row">${where}<a href="#/settings/general">Change</a></div>
     <div class="card-row">${last}</div>
     <div class="card-row">
-      <button id="scan" class="primary" ${st.running || !st.root ? "disabled" : ""}>Scan folder now</button>
+      <button id="scan" class="primary" ${st.running || (src === "folder" && !st.root) ? "disabled" : ""}>${label}</button>
       ${next}
       ${st.missing_to_review ? state(`${num(st.missing_to_review)} missing file(s) to review`, "warn") : ""}
     </div>
@@ -1648,7 +1821,7 @@ function settingsTypes(el, params) {
     <div class="scroll"><table class="data">
       <thead><tr><th>Group</th><th>Type</th><th>Polish name</th><th>Indoor</th><th>FIT sport / sub-sport</th><th class="num">Your activities</th></tr></thead>
       <tbody>${rows.map((t) => `<tr>
-        <td>${esc(groupLabel(t.group))}</td><td><b>${esc(t.en)}</b> <code class="hint">${t.key}</code></td>
+        <td>${esc(groupLabel(t.group))}</td><td><span class="tb-activity-name">${typeIcon(t.key)}<b>${esc(t.en)}</b></span> <code class="hint">${t.key}</code></td>
         <td>${esc(t.pl)}</td><td>${t.indoor ? state("indoor", "muted") : ""}</td>
         <td class="wrap"><span class="hint">${t.fit.map(esc).join(" · ") || "–"}</span></td>
         <td class="num">${t.activities ? num(t.activities) : `<span class="hint">0</span>`}</td></tr>`).join("")

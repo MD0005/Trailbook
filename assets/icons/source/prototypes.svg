@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg"><defs><symbol id="b-walk" viewBox="0 0 24 24">
+ <circle cx="13.5" cy="3.5" r="2" fill="currentColor"/>
+ <path fill="currentColor" d="M11.8 6.5c1.5-.4 2.8.6 2.5 2.1l-1.4 6.2-3.3-.7 1-5.9c.1-.9.5-1.5 1.2-1.7Z"/>
+ <g fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m12.6 8 3.5 4H19M11.7 8.2 8 9.8 6 13.3M11 13.5l4 3.3 1 4.2M10.8 14.2 9.3 18 6.4 21"/></g>
+</symbol><symbol id="b-run" viewBox="0 0 24 24">
+ <circle cx="16.2" cy="3.5" r="2" fill="currentColor"/>
+ <path fill="currentColor" d="M13 6.5c1.4-.5 3 .8 2.3 2.2l-3.7 6.1-3-1.9 3.2-5.3c.3-.5.7-.9 1.2-1.1Z"/>
+ <g fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m14.1 8 2.5 3L20 9M13 7.7 9 7 6.6 10M10.3 13.2l4.7 3-1.5 4.8M10 13.5 6.5 17 3 15.5"/></g>
+</symbol><symbol id="b-yoga" viewBox="0 0 24 24">
+ <circle cx="12" cy="3.6" r="2" fill="currentColor"/>
+ <path fill="currentColor" d="M8.9 8.4C9 6.5 15 6.5 15.1 8.4L14 15h-4Z M10 15c-2.8-.8-6.7.8-7 3.2-.2 1.6 1 2.8 2.8 2.8h12.4c1.8 0 3-1.2 2.8-2.8-.3-2.4-4.2-4-7-3.2l-2 1.7Z"/>
+ <g fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><path d="m9.5 8.4-3 4.6H3M14.5 8.4l3 4.6H21"/></g>
+</symbol><symbol id="b-cycle" viewBox="0 0 24 24">
+ <circle cx="14" cy="3.5" r="2" fill="currentColor"/>
+ <g fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="5" cy="17" r="3.6"/><circle cx="19" cy="17" r="3.6"/></g>
+ <path fill="currentColor" d="M11 6.3c1.4-.9 3 .8 1.9 2.1L9.5 12l-2.2-1.8 3-3.2c.2-.3.4-.5.7-.7Z"/>
+ <g fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m12 7.5 4 2.5h3M8.5 10.8l5 3.2-1.5 4"/></g>
+</symbol><symbol id="b-climb" viewBox="0 0 24 24">
+ <circle cx="11.5" cy="4.2" r="2" fill="currentColor"/>
+ <path fill="currentColor" d="M10.4 7c1.4-.4 2.5.8 2.1 2.1L11 14l-3-.7 1.2-4.7c.2-.8.5-1.4 1.2-1.6Z"/>
+ <g fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m10.8 8 3.7-2L16 2M11 8l3 3 3-2M9.5 13.5l4.5 2-1 5M9.5 13.5l-4 2.5L4 21"/></g>
+ <path d="m21 2-1.5 5 1.5 5-1.5 5L21 22" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round"/>
+</symbol><symbol id="b-swim" viewBox="0 0 24 24">
+ <circle cx="18" cy="10.5" r="2.2" fill="currentColor"/>
+ <path fill="currentColor" d="m3.5 13 5.8-4c.8-.5 1.7-.4 2.3.1l3.7 3.1-2 2.1-3.2-2.2-4.9 2.8Z"/>
+ <path d="m10 10-3-4 4-3 4 2" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+ <path d="M2 17c1.7 0 1.7 1.5 3.3 1.5S7 17 8.7 17s1.6 1.5 3.3 1.5 1.7-1.5 3.3-1.5 1.7 1.5 3.4 1.5S20.3 17 22 17M2 21c1.7 0 1.7 1.5 3.3 1.5S7 21 8.7 21s1.6 1.5 3.3 1.5 1.7-1.5 3.3-1.5 1.7 1.5 3.4 1.5S20.3 21 22 21" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+</symbol></defs></svg>

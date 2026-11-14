@@ -1,0 +1,13 @@
+.tb-activity-icon {
+  display: inline-block;
+  width: var(--tb-icon-size, 20px);
+  height: var(--tb-icon-size, 20px);
+  flex: none;
+  vertical-align: -0.18em;
+  color: var(--accent, currentColor);
+}
+.tb-activity-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}

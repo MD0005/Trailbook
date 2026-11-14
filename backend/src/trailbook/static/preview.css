@@ -430,3 +430,66 @@ header .brand .logo { width: 24px; height: 24px; color: var(--accent); }
 .upload-row input[type=file] { border: 1px dashed var(--line); padding: 4px 8px; border-radius: 8px; }
 .watches[hidden] { display: none; }
 .panel-actions { display: flex; justify-content: flex-end; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
+
+/* ---- Page never jumps sideways when a vertical scrollbar appears ---- */
+html { scrollbar-gutter: stable; overflow-y: scroll; }
+@supports (scrollbar-gutter: stable) { html { overflow-y: auto; } }
+/* The full-screen map never scrolls, so it takes the whole width. */
+html:has(body.fullmap) { scrollbar-gutter: auto; overflow: hidden; }
+body.fullmap { overflow: hidden; }
+/* …but the header and the floating bar keep the same position as on scrolling pages
+   (--sbw = scrollbar width, measured in preview.js). */
+body.fullmap header { padding-right: calc(16px + var(--sbw, 0px)); }
+body.fullmap .heat-overlay { right: var(--sbw, 0px); }
+
+/* ---- Switches look like the main navigation: quiet, the selected one tinted ---- */
+.switch { background: transparent; border: 0; padding: 0; gap: 4px; }
+.switch button { height: 30px; padding: 0 10px; border-radius: 8px; font-weight: 500; color: var(--fg); background: transparent; }
+.switch button:hover { background: var(--surface-2); color: var(--fg); }
+.switch button.on { background: var(--surface-2); color: var(--accent); box-shadow: none; font-weight: 600; }
+.switch button.on svg { color: var(--accent); }
+.float-bar .switch { background: var(--surface); border-radius: 10px; padding: 2px; }
+
+/* ---- Activity type icons ---- */
+.tb-activity-icon { color: var(--accent); }
+.tb-activity-name { vertical-align: middle; }
+td .tb-activity-name, .tpick-item, .tpick-btn { gap: 7px; }
+h2.tb-activity-name { display: flex; gap: 10px; }
+.tile-head { display: flex; gap: 10px; align-items: flex-start; }
+.tile-head .tile-icon { flex: none; line-height: 0; padding-top: 2px; }
+.tile-head .tile-title { display: flex; flex-direction: column; min-width: 0; }
+
+/* ---- Type picker (dropdown with icons) ---- */
+.tpick { position: relative; display: inline-block; min-width: 180px; width: 100%; }
+.tpick-btn { width: 100%; height: 28px; padding: 0 8px; justify-content: flex-start; font-size: 12px; font-weight: 400;
+             background: var(--surface); border: 1px solid var(--line); color: var(--fg); border-radius: 6px; }
+.tpick-btn:hover { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); filter: none; }
+.tpick-btn .tpick-label { flex: 1; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tpick-btn > svg:last-child { width: 12px; height: 12px; color: var(--muted); flex: none; }
+:root[data-theme="dark"] .tpick-btn { background: var(--surface-2); border-color: transparent; }
+.tpick-menu { position: fixed; z-index: 60; display: flex; flex-direction: column; padding: 6px; border-radius: 10px;
+              background: var(--surface); border: 1px solid var(--line); box-shadow: 0 16px 40px rgba(0,0,0,.18); }
+.tpick-menu[hidden] { display: none; }
+.tpick-search { height: 28px; padding: 0 8px; font-size: 12px; margin-bottom: 6px; }
+.tpick-list { overflow: auto; }
+.tpick-item { display: flex; width: 100%; justify-content: flex-start; height: auto; min-height: 28px; padding: 3px 8px;
+              background: transparent; color: var(--fg); font-size: 12px; font-weight: 400; border-radius: 6px; text-align: left; }
+.tpick-item:hover { background: var(--surface-2); filter: none; }
+.tpick-item.on { background: var(--surface-2); color: var(--accent); font-weight: 600; }
+.tpick-item.grp { font-weight: 650; margin-top: 4px; }
+.tpick-item.sub { padding-left: 20px; }
+.tpick-item[hidden], .tpick-group[hidden] { display: none; }
+tr.filters-row .tpick { min-width: 150px; }
+
+/* ---- Garmin Connect accounts ---- */
+.steps { margin: 8px 0 12px; padding-left: 20px; font-size: 13px; line-height: 1.6; }
+.garmin-people { display: grid; gap: 10px; }
+.garmin-person { padding: 12px; border: 1px solid var(--line); border-radius: 8px; }
+.garmin-head { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; }
+.garmin-who { display: inline-flex; align-items: center; gap: 8px; }
+.garmin-err { margin-top: 6px; color: var(--bad, #b91c1c); }
+.garmin-form { display: grid; grid-template-columns: minmax(220px, 1fr) 170px auto; gap: 10px; align-items: end; margin-top: 10px; }
+.garmin-form label { display: flex; flex-direction: column; gap: 4px; }
+.garmin-form input { height: 30px; }
+.garmin-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+@media (max-width: 760px) { .garmin-form { grid-template-columns: 1fr; } }

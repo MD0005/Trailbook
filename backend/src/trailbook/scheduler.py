@@ -30,10 +30,14 @@ def interval_min(conn) -> int:
 
 
 def next_scan_at(conn) -> datetime | None:
-    """When the next automatic scan is due, or None if disabled / no folder configured."""
+    """When the next automatic run is due (folder scan or Garmin download), or None."""
     minutes = interval_min(conn)
     source = db.get_setting(conn, "data_source") or "folder"
-    if minutes == 0 or source != "folder" or not db.get_setting(conn, "root"):
+    if minutes == 0 or source == "upload":
+        return None
+    if source == "folder" and not db.get_setting(conn, "root"):
+        return None
+    if source == "garmin" and not conn.execute("SELECT 1 FROM garmin_accounts").fetchone():
         return None
     row = conn.execute(
         "SELECT finished_at FROM import_runs WHERE finished_at IS NOT NULL ORDER BY id DESC LIMIT 1"
@@ -83,7 +87,7 @@ class Scheduler:
             if self.job.running():
                 await asyncio.sleep(60)
                 continue
-            log.info("starting scheduled folder scan")
+            log.info("starting scheduled import run")
             self.job.start(trigger="schedule")
             # Wait for the run to finish so the next due time is based on it.
             while self.job.running():

@@ -8,7 +8,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import __version__, db, importer, jobs, sports
+from . import __version__, db, garmin, importer, jobs, sports
 
 
 def _set_low_priority() -> None:
@@ -60,6 +60,21 @@ def cmd_scan(conn, args) -> int:
             out(f"  new person: {person}")
         for name in scan.ignored:
             out(f"  ignored (not in a person folder or unreadable): {name}")
+
+        if source == "garmin" and not args.no_garmin:
+            jobs.write_progress(conn, state="running", phase="garmin", started_at=started, done=0)
+
+            def garmin_progress(person, downloaded, name):
+                jobs.write_progress(
+                    conn, state="running", phase="garmin", started_at=started,
+                    done=downloaded, current=f"{person}: {name or ''}",
+                )  # fmt: skip
+
+            synced = garmin.sync_all(conn, uploads_dir, progress=garmin_progress)
+            out(
+                f"Garmin: {synced.downloaded} activities downloaded, {synced.errors} errors"
+                + (f" (stopped: {synced.stopped})" if synced.stopped else "")
+            )
 
         result = importer.ImportResult()
         if not args.no_import:
@@ -281,6 +296,7 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("scan", help="scan the root folder and import new files")
     p.add_argument("root", nargs="?", help="root folder with one subfolder per person")
     p.add_argument("--no-import", action="store_true", help="only update file statuses")
+    p.add_argument("--no-garmin", action="store_true", help="skip Garmin Connect downloads")
     p.add_argument("--low-priority", action="store_true", help="run with the lowest CPU priority")
     p.add_argument("--limit", type=int, help="import at most N files")
     p.add_argument("-v", "--verbose", action="store_true", help="print every file")
