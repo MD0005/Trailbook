@@ -6,8 +6,10 @@ All URLs used by the frontend are relative, so the app works behind HA Ingress.
 
 from __future__ import annotations
 
+import os
+import re
 import sqlite3
-from contextlib import closing
+from contextlib import asynccontextmanager, closing
 from pathlib import Path
 
 from starlette.applications import Starlette
@@ -17,9 +19,20 @@ from starlette.responses import JSONResponse, Response
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
-from . import __version__, db, importer, jobs, sports, streams
+from . import __version__, db, fitfile, importer, jobs, scheduler, sports, streams
 
 STATIC_DIR = Path(__file__).parent / "static"
+
+
+class _RevalidatedStatic(StaticFiles):
+    """Static files that the browser re-checks on every load (ETag), so an updated
+    add-on never shows a stale UI."""
+
+    async def get_response(self, path, scope):
+        response = await super().get_response(path, scope)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
 
 ACTIVITY_LIST_FIELDS = (
     "id person_id start_time_utc utc_offset_s category activity_type indoor name "
@@ -27,11 +40,56 @@ ACTIVITY_LIST_FIELDS = (
     "has_gps"
 ).split()
 
-FILE_SORTS = {
-    "path": "f.rel_path, f.zip_member",
-    "processed": "f.imported_at DESC, f.id DESC",
-    "recorded": "COALESCE(a.start_time_utc, f.fit_created) DESC, f.id DESC",
+# Column key -> SQL expression, for ?sort=<key>&dir=asc|desc
+ACTIVITY_SORTS = {
+    "date": "start_time_utc",
+    "type": "activity_type",
+    "name": "name",
+    "distance": "distance_m",
+    "moving": "moving_s",
+    "pace": "avg_speed",
+    "hr": "avg_hr",
+    "ascent": "ascent_m",
+    "person": "person_id",
 }
+
+FILE_SORTS = {
+    "status": "f.status",
+    "file": "f.rel_path || '/' || f.zip_member",
+    "person": "f.person_id",
+    "content": "COALESCE(a.name, f.skip_reason, f.fit_type, f.error)",
+    "recorded": "COALESCE(a.start_time_utc, f.fit_created)",
+    "fit": "f.fit_uid",
+    "processed": "f.imported_at",
+}
+
+# Column key -> SQL expression matched with LIKE '%value%'
+FILE_TEXT_FILTERS = {
+    "file": "(f.rel_path || ' ' || f.zip_member)",
+    "content": (
+        "(COALESCE(a.name, '') || ' ' || COALESCE(a.activity_type, '') || ' ' || "
+        "COALESCE(f.skip_reason, '') || ' ' || COALESCE(f.fit_type, '') || ' ' || "
+        "COALESCE(f.error, ''))"
+    ),
+    "fit": "f.fit_uid",
+    "recorded": "COALESCE(a.start_time_utc, f.fit_created)",
+    "processed": "f.imported_at",
+}
+
+
+def _order(q, sorts: dict[str, str], default: str, tiebreak: str) -> str:
+    key = q.get("sort") if q.get("sort") in sorts else default
+    direction = "ASC" if q.get("dir") == "asc" else "DESC"
+    return f"{sorts[key]} {direction} NULLS LAST, {tiebreak} {direction}"
+
+
+def _allowed_root(path: Path) -> bool:
+    """In the add-on only mapped folders may be used (TRAILBOOK_ALLOWED_ROOTS)."""
+    allowed = os.environ.get("TRAILBOOK_ALLOWED_ROOTS")
+    if not allowed:
+        return True
+    return any(path == Path(a) or Path(a) in path.parents for a in allowed.split(os.pathsep))
+
 
 STREAM_CHANNELS = (
     "time",
@@ -52,6 +110,7 @@ def create_app(db_path: str | Path) -> Starlette:
     db_path = str(db_path)
     db.connect(db_path).close()  # apply migrations once
     job = jobs.ImportJob(db_path)
+    sched = scheduler.Scheduler(db_path, job)
 
     def conn() -> sqlite3.Connection:
         return db.connect(db_path, apply_migrations=False)
@@ -107,6 +166,100 @@ def create_app(db_path: str | Path) -> Starlette:
             ).fetchall()
             return JSONResponse([dict(r) for r in rows])
 
+    async def person_create(request: Request):
+        body = await request.json()
+        label = str(body.get("label", "")).strip()
+        if not label:
+            raise HTTPException(400, "label must not be empty")
+        base = re.sub(r"[^a-z0-9]+", "-", label.lower()).strip("-") or "person"
+        with closing(conn()) as c:
+            pid, n = base, 2
+            while c.execute("SELECT 1 FROM persons WHERE id = ?", (pid,)).fetchone():
+                pid, n = f"{base}-{n}", n + 1
+            c.execute("INSERT INTO persons (id, label) VALUES (?, ?)", (pid, label))
+            row = c.execute("SELECT * FROM persons WHERE id = ?", (pid,)).fetchone()
+        return JSONResponse(dict(row), status_code=201)
+
+    # ---- devices (watches) -----------------------------------------------------------
+
+    async def devices(request: Request):
+        with closing(conn()) as c:
+            rows = c.execute(
+                """SELECT d.*, p.label person_label,
+                          (SELECT COUNT(*) FROM activities a WHERE a.device_serial = d.serial)
+                              activities,
+                          (SELECT COUNT(*) FROM files f WHERE f.device_serial = d.serial) files
+                   FROM devices d LEFT JOIN persons p ON p.id = d.person_id
+                   ORDER BY d.last_seen DESC"""
+            ).fetchall()
+        items = []
+        for r in rows:
+            item = dict(r)
+            item["product_name"] = fitfile.product_name(r["product"])
+            items.append(item)
+        return JSONResponse(items)
+
+    async def device_update(request: Request):
+        serial = request.path_params["serial"]
+        body = await request.json()
+        with closing(conn()) as c:
+            if c.execute("SELECT 1 FROM devices WHERE serial = ?", (serial,)).fetchone() is None:
+                raise HTTPException(404, "device not found")
+            moved = None
+            if "person_id" in body:
+                pid = body["person_id"] or None
+                if pid and not c.execute("SELECT 1 FROM persons WHERE id = ?", (pid,)).fetchone():
+                    raise HTTPException(400, "unknown person")
+                moved = importer.assign_device(c, serial, pid)
+            if "label" in body:
+                c.execute("UPDATE devices SET label = ? WHERE serial = ?", (body["label"], serial))
+        return JSONResponse({"moved_activities": moved})
+
+    # ---- settings --------------------------------------------------------------------
+
+    def _settings(c: sqlite3.Connection) -> dict:
+        due = scheduler.next_scan_at(c)
+        return {
+            "root": db.get_setting(c, "root"),
+            "person_mode": importer.person_mode(c),
+            "scan_interval_min": scheduler.interval_min(c),
+            "scan_interval_choices": list(scheduler.INTERVAL_CHOICES_MIN),
+            "next_scan_at": due.strftime("%Y-%m-%dT%H:%M:%SZ") if due else None,
+            "allowed_roots": os.environ.get("TRAILBOOK_ALLOWED_ROOTS"),
+        }
+
+    async def settings_get(request: Request):
+        with closing(conn()) as c:
+            return JSONResponse(_settings(c))
+
+    async def settings_update(request: Request):
+        body = await request.json()
+        with closing(conn()) as c:
+            if "root" in body:
+                root = Path(str(body["root"]).strip()).expanduser()
+                if not root.is_absolute():
+                    raise HTTPException(400, "folder must be an absolute path")
+                if not root.is_dir():
+                    raise HTTPException(400, f"folder does not exist: {root}")
+                if not _allowed_root(root.resolve()):
+                    raise HTTPException(400, "folder is outside the folders shared with Trailbook")
+                db.set_setting(c, "root", str(root.resolve()))
+            if "person_mode" in body:
+                if body["person_mode"] not in importer.PERSON_MODES:
+                    raise HTTPException(400, "unknown person mode")
+                db.set_setting(c, "person_mode", body["person_mode"])
+            if "scan_interval_min" in body:
+                try:
+                    minutes = int(body["scan_interval_min"])
+                except (TypeError, ValueError) as exc:
+                    raise HTTPException(400, "invalid scan interval") from exc
+                if minutes < 0:
+                    raise HTTPException(400, "invalid scan interval")
+                db.set_setting(c, "scan_interval_min", str(minutes))
+            result = _settings(c)
+        sched.settings_changed()
+        return JSONResponse(result)
+
     async def person_update(request: Request):
         pid = request.path_params["id"]
         body = await request.json()
@@ -134,8 +287,13 @@ def create_app(db_path: str | Path) -> Starlette:
         ):
             if q.get(name):
                 values = q[name].split(",")
+                if name == "type" and len(values) == 1 and values[0].startswith("g:"):
+                    column, values = "category", [values[0][2:]]  # whole group
                 where.append(f"{column} IN ({','.join('?' for _ in values)})")
                 params += values
+        if q.get("date"):
+            where.append("start_time_utc LIKE ?")
+            params.append(f"{q['date']}%")
         if q.get("from"):
             where.append("start_time_utc >= ?")
             params.append(q["from"])
@@ -148,12 +306,12 @@ def create_app(db_path: str | Path) -> Starlette:
         clause = f"WHERE {' AND '.join(where)}" if where else ""
         limit = _int(request, "limit", 50, 1, 1000)
         offset = _int(request, "offset", 0, 0, 10**9)
-        order = "ASC" if q.get("order") == "asc" else "DESC"
+        order = _order(q, ACTIVITY_SORTS, "date", "id")
         with closing(conn()) as c:
             total = c.execute(f"SELECT COUNT(*) FROM activities {clause}", params).fetchone()[0]
             rows = c.execute(
                 f"""SELECT {", ".join(ACTIVITY_LIST_FIELDS)} FROM activities {clause}
-                    ORDER BY start_time_utc {order} LIMIT ? OFFSET ?""",
+                    ORDER BY {order} LIMIT ? OFFSET ?""",
                 [*params, limit, offset],
             ).fetchall()
             return JSONResponse({"total": total, "items": [dict(r) for r in rows]})
@@ -252,6 +410,8 @@ def create_app(db_path: str | Path) -> Starlette:
             last = c.execute("SELECT * FROM import_runs ORDER BY id DESC LIMIT 1").fetchone()
             progress = jobs.read_progress(c)
             root = db.get_setting(c, "root")
+            due = scheduler.next_scan_at(c)
+            interval = scheduler.interval_min(c)
         running = job.running()
         if not running and progress.get("state") == "running":
             # Started outside this server (CLI) or the process died; report what we know.
@@ -264,6 +424,8 @@ def create_app(db_path: str | Path) -> Starlette:
                 "files": counts,
                 "missing_to_review": undismissed_missing,
                 "last_run": dict(last) if last else None,
+                "scan_interval_min": interval,
+                "next_scan_at": due.strftime("%Y-%m-%dT%H:%M:%SZ") if due else None,
             }
         )
 
@@ -271,7 +433,7 @@ def create_app(db_path: str | Path) -> Starlette:
         with closing(conn()) as c:
             if not db.get_setting(c, "root"):
                 raise HTTPException(409, "root folder is not configured")
-        if not job.start(trigger="api"):
+        if not job.start(trigger="manual"):
             return JSONResponse({"started": False, "reason": "already running"}, status_code=409)
         return JSONResponse({"started": True}, status_code=202)
 
@@ -284,20 +446,25 @@ def create_app(db_path: str | Path) -> Starlette:
         if q.get("person"):
             where.append("f.person_id = ?")
             params.append(q["person"])
-        if q.get("q"):
-            where.append("(f.rel_path LIKE ? OR f.zip_member LIKE ? OR f.fit_uid LIKE ?)")
-            params += [f"%{q['q']}%"] * 3
+        for key, expr in FILE_TEXT_FILTERS.items():
+            if q.get(key):
+                where.append(f"{expr} LIKE ?")
+                params.append(f"%{q[key]}%")
         clause = f"WHERE {' AND '.join(where)}" if where else ""
         limit = _int(request, "limit", 100, 1, 1000)
         offset = _int(request, "offset", 0, 0, 10**9)
-        order = FILE_SORTS.get(q.get("sort", "path"), FILE_SORTS["path"])
+        order = _order(q, FILE_SORTS, "processed", "f.id")
         with closing(conn()) as c:
-            total = c.execute(f"SELECT COUNT(*) FROM files f {clause}", params).fetchone()[0]
+            total = c.execute(
+                f"""SELECT COUNT(*) FROM files f
+                    LEFT JOIN activities a ON a.id = f.activity_id {clause}""",
+                params,
+            ).fetchone()[0]
             rows = c.execute(
                 f"""SELECT f.id, f.person_id, f.rel_path, f.zip_member, f.size, f.status,
                            f.prev_status, f.skip_reason, f.error, f.activity_id, f.first_seen,
                            f.missing_since, f.dismissed, f.imported_at,
-                           f.fit_uid, f.fit_type, f.fit_created,
+                           f.fit_uid, f.fit_type, f.fit_created, f.device_serial,
                            a.start_time_utc, a.utc_offset_s, a.activity_type, a.name
                     FROM files f LEFT JOIN activities a ON a.id = f.activity_id
                     {clause} ORDER BY {order} LIMIT ? OFFSET ?""",
@@ -334,6 +501,11 @@ def create_app(db_path: str | Path) -> Starlette:
         Route("/api/info", info),
         Route("/api/types", types),
         Route("/api/persons", persons),
+        Route("/api/persons", person_create, methods=["POST"]),
+        Route("/api/devices", devices),
+        Route("/api/devices/{serial:int}", device_update, methods=["PATCH"]),
+        Route("/api/settings", settings_get),
+        Route("/api/settings", settings_update, methods=["PUT"]),
         Route("/api/persons/{id}", person_update, methods=["PATCH"]),
         Route("/api/activities", activities),
         Route("/api/activities/{id:int}", activity),
@@ -347,8 +519,18 @@ def create_app(db_path: str | Path) -> Starlette:
         Route("/api/import/files/{id:int}", import_file_forget, methods=["DELETE"]),
         Route("/api/import/files/{id:int}/dismiss", import_file_dismiss, methods=["POST"]),
         Route("/api/import/files/{id:int}/retry", import_file_retry, methods=["POST"]),
-        Mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static"),
+        Mount("/", _RevalidatedStatic(directory=STATIC_DIR, html=True), name="static"),
     ]
-    app = Starlette(routes=routes, exception_handlers={HTTPException: http_error})
+
+    @asynccontextmanager
+    async def lifespan(app):
+        sched.start()
+        yield
+        await sched.stop()
+
+    app = Starlette(
+        routes=routes, exception_handlers={HTTPException: http_error}, lifespan=lifespan
+    )
     app.state.import_job = job
+    app.state.scheduler = sched
     return app

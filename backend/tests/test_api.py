@@ -58,7 +58,7 @@ def test_scan_starts_background_importer(setup):
     st = client.get("/api/import/status").json()
     assert st["files"] == {"skipped": 2}
     assert st["progress"]["state"] == "finished"
-    assert st["last_run"]["trigger"] == "api"
+    assert st["last_run"]["trigger"] == "manual"
 
 
 def test_static_preview_served(setup):

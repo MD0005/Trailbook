@@ -153,6 +153,19 @@ def _peek_file_id(data: bytes) -> FileId | None:
     return None
 
 
+def product_name(product: int | str | None) -> str | None:
+    """Garmin product number -> model name (e.g. 4261 -> 'venu3s'), if known."""
+    if product is None:
+        return None
+    from garmin_fit_sdk import Profile
+
+    try:
+        number = int(product)
+    except (TypeError, ValueError):
+        return str(product)
+    return Profile["types"]["garmin_product"].get(number, str(product))
+
+
 def peek_file_type(data: bytes) -> int | None:
     """Return the FIT `file_id.type`, or None if it cannot be determined."""
     fid = peek_file_id(data)

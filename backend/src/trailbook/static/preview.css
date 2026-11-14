@@ -39,3 +39,20 @@ svg.track { width: 100%; max-width: 480px; height: 320px; border: 1px solid var(
             border-radius: 8px; }
 h2 { margin: 8px 0; font-size: 20px; }
 h3 { margin: 16px 0 4px; font-size: 15px; }
+
+/* data tables: sortable header + filter row */
+table.data thead th { position: sticky; top: 0; background: var(--bg); }
+a.sort { color: var(--fg); }
+a.sort .arrow { color: var(--muted); font-size: 11px; }
+a.sort.active .arrow { color: var(--accent); }
+tr.filters-row th { padding: 2px 4px 6px; border-bottom: 2px solid var(--line); }
+tr.filters-row input, tr.filters-row select { width: 100%; min-width: 70px; padding: 2px 4px;
+                                              font-size: 12px; }
+.tablebar { display: flex; gap: 12px; align-items: baseline; margin: 8px 0 0; }
+.form label { display: block; margin: 12px 0; }
+.form label > input, .form label > select { display: block; margin: 4px 0; max-width: 100%; }
+.form fieldset { border: 1px solid var(--line); border-radius: 8px; margin: 12px 0; }
+.form fieldset label { margin: 6px 0; }
+.form .muted { display: block; font-size: 12px; }
+.form label > input[type="radio"] { display: inline; margin: 0 6px 0 0; }
+.form fieldset .muted { display: inline; }

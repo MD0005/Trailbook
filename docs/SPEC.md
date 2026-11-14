@@ -93,6 +93,19 @@ Browser: static HTML/JS (MapLibre GL + ECharts) — all rendering client-side
 
 ## 4. Folders and people
 
+The watched folder is configurable in Settings (absolute path; in the add-on it must lie
+inside the folders shared with it, enforced via `TRAILBOOK_ALLOWED_ROOTS`).
+
+FIT files carry **no Garmin account id** (`user_profile.friendly_name` is empty), but every
+file — activities, sleep, monitoring — carries the **serial number of the watch**. Two
+person modes (setting `person_mode`):
+
+- **folders** (default): one subfolder per person, layout below. Watches are linked to the
+  folder's person automatically.
+- **devices**: one shared folder (any layout). Each file goes to the person linked to its
+  watch; files of unknown watches go to *Unassigned* until the user links the watch on the
+  People page, which moves its files and activities.
+
 ```
 /share/trailbook/            ← root folder (configurable; must be inside an HA-mapped dir)
 ├── alice/                   ← person id = folder name
@@ -117,7 +130,10 @@ Browser: static HTML/JS (MapLibre GL + ECharts) — all rendering client-side
 1. **HA automation** → `hassio.addon_stdin` with `{"action": "scan"}` (optionally `"person": "alice"`).
 2. **API** → `POST /api/import/scan`.
 3. **Button** in the Import page.
-4. **Optional interval** (off by default) for users without automations.
+4. **Automatic scan** every N minutes (setting `scan_interval_min`, default 60, 0 = off),
+   counted from the end of the last run. One sleeping asyncio task in the API process; no
+   CPU while waiting. The Import page shows the next scheduled scan and a *Scan folder now*
+   button.
 
 The very first import is started by the user from the Import page after choosing the root folder.
 

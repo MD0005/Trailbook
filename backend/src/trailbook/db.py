@@ -181,6 +181,30 @@ MIGRATIONS: list[str] = [
     ALTER TABLE files ADD COLUMN fit_created TEXT;
     CREATE INDEX ix_files_fit_uid ON files(fit_uid);
     """,
+    # v3 — watches (FIT serial numbers) linked to people, so one shared folder can hold
+    # files of several people.
+    """
+    CREATE TABLE devices (
+        serial      INTEGER PRIMARY KEY,
+        person_id   TEXT REFERENCES persons(id) ON DELETE SET NULL,
+        product     TEXT,
+        label       TEXT,
+        first_seen  TEXT NOT NULL,
+        last_seen   TEXT NOT NULL
+    );
+    ALTER TABLE files ADD COLUMN device_serial INTEGER;
+    ALTER TABLE activities ADD COLUMN device_serial INTEGER;
+    CREATE INDEX ix_files_device ON files(device_serial);
+    CREATE INDEX ix_activities_device ON activities(device_serial);
+    UPDATE files SET device_serial = CAST(substr(fit_uid, 3, instr(fit_uid, ':') - 3) AS INTEGER)
+        WHERE fit_uid LIKE 'sn%';
+    UPDATE activities
+        SET device_serial = CAST(substr(fit_uid, 3, instr(fit_uid, ':') - 3) AS INTEGER)
+        WHERE fit_uid LIKE 'sn%';
+    INSERT OR IGNORE INTO devices (serial, person_id, first_seen, last_seen)
+        SELECT device_serial, MIN(person_id), MIN(first_seen), MAX(first_seen) FROM files
+        WHERE device_serial IS NOT NULL GROUP BY device_serial;
+    """,
 ]
 
 SCHEMA_VERSION = len(MIGRATIONS)

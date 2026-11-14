@@ -56,6 +56,12 @@ def test_peek_file_id_fields():
     assert fitfile.peek_file_id(make_fit(49)).fit_uid is None
 
 
+def test_product_name():
+    assert fitfile.product_name(4261) == "venu3s"
+    assert fitfile.product_name("4261") == "venu3s"  # as stored in SQLite TEXT column
+    assert fitfile.product_name(None) is None
+
+
 def test_classify():
     assert sports.classify("running", "treadmill") == ("run", "treadmill_run", True)
     assert sports.classify("running", "generic") == ("run", "run", False)
