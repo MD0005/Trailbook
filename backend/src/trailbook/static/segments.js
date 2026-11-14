@@ -94,7 +94,7 @@ async function renderSegments(params) {
   const who = CURRENT === "all" ? "anyone" : esc(personLabel(CURRENT));
   view.innerHTML = `
     ${pageHead("Segments", `
-      ${badgeHtml("new", "＋ New segment", "", { panel: newSegmentPanel(), on: true })}
+      ${badgeHtml("new", "New segment", "", { panel: newSegmentPanel() })}
       ${badgeHtml("options", "Options", "", { panel: `<div class="opt-panel">${checkCtl("segments-empty", showEmpty, "Show segments without efforts")}</div>` })}`)}
     ${hidden ? hint(`${num(hidden)} segment(s) without efforts by ${who} are hidden (Options).`) : ""}
     ${shown.length ? `<div class="seg-grid">${shown.map(segmentCard).join("")}</div>`

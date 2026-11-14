@@ -510,7 +510,7 @@ async function renderActivities(params) {
     <a class="tile ${mode}" href="#/activity/${a.id}">
       ${mode === "large" ? `<div class="tile-map">${tileContent === "pace" ? paceSpark(a.speed_series) : a.polyline ? trackSvg(a.polyline, "tile-track") : `<span class="hint">${a.indoor ? "indoor" : "no route"}</span>`}</div>` : ""}
       <div class="tile-head">
-        <span class="tile-icon">${typeIcon(a.activity_type, mode === "large" ? 40 : 32)}</span>
+        <span class="tile-icon">${typeIcon(a.activity_type, 28)}</span>
         <span class="tile-title"><b>${esc(a.name || typeLabel(a.activity_type))}</b>
         <span class="hint">${esc(typeLabel(a.activity_type))} · ${localTime(a)}${isAll ? ` · ${esc(personLabel(a.person_id))}` : ""}</span></span>
       </div>

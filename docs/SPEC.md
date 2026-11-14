@@ -483,7 +483,7 @@ map the same frame floats over the map without the fade.
 - The heatmap / explorer tiles page is called **Map** in the navigation and its title.
 - **Activity type icons** (“Trailbook B” set, `assets/icons/`, served from `static/icons/`,
   `TrailbookIcons.render(key, {size})`, unknown → `other`): small (18 px) next to activity
-  names and types in every list and filter, larger (32–40 px) only in Activities › tiles.
+  names and types in every list and filter, larger (28 px, the same as the segment cards) only in Activities › tiles and Segments.
   The type filter is a custom dropdown with icons and search (a native select cannot show
   icons); it keeps its value in a hidden input, so staged filters work unchanged. It lists
   only types (and groups) with activities of the selected person, each with its count
