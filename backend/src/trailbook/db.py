@@ -259,6 +259,49 @@ MIGRATIONS: list[str] = [
     ALTER TABLE activities ADD COLUMN analysis_version INTEGER NOT NULL DEFAULT 0;
     CREATE INDEX ix_activities_analysis ON activities(analysis_version);
     """,
+    # v8 — segments (shared by the install) and the efforts found in activities.
+    """
+    CREATE TABLE segments (
+        id                  INTEGER PRIMARY KEY,
+        name                TEXT NOT NULL,
+        category            TEXT,               -- activity group matched, NULL = any
+        polyline            TEXT NOT NULL,      -- encoded, simplified to ~2 m
+        point_count         INTEGER NOT NULL,
+        distance_m          REAL NOT NULL,
+        ascent_m            REAL,
+        start_lat           REAL NOT NULL,
+        start_lon           REAL NOT NULL,
+        end_lat             REAL NOT NULL,
+        end_lon             REAL NOT NULL,
+        bbox_min_lat        REAL NOT NULL,
+        bbox_min_lon        REAL NOT NULL,
+        bbox_max_lat        REAL NOT NULL,
+        bbox_max_lon        REAL NOT NULL,
+        source              TEXT NOT NULL,      -- activity | map
+        source_activity_id  INTEGER REFERENCES activities(id) ON DELETE SET NULL,
+        match_version       INTEGER NOT NULL DEFAULT 0,  -- 0 = match against all activities
+        created_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+    );
+    CREATE TABLE segment_efforts (
+        id              INTEGER PRIMARY KEY,
+        segment_id      INTEGER NOT NULL REFERENCES segments(id) ON DELETE CASCADE,
+        activity_id     INTEGER NOT NULL REFERENCES activities(id) ON DELETE CASCADE,
+        start_time_utc  TEXT NOT NULL,
+        start_s         REAL NOT NULL,          -- offsets in the activity time stream
+        end_s           REAL NOT NULL,
+        elapsed_s       REAL NOT NULL,
+        moving_s        REAL,
+        avg_speed       REAL,                   -- m/s, segment length / elapsed
+        avg_hr          REAL,
+        max_hr          REAL,
+        avg_power       REAL,
+        avg_cadence     REAL
+    );
+    CREATE INDEX ix_segment_efforts_seg ON segment_efforts(segment_id, elapsed_s);
+    CREATE INDEX ix_segment_efforts_act ON segment_efforts(activity_id);
+    ALTER TABLE activities ADD COLUMN segments_version INTEGER NOT NULL DEFAULT 0;
+    CREATE INDEX ix_activities_segments ON activities(segments_version);
+    """,
 ]
 
 SCHEMA_VERSION = len(MIGRATIONS)

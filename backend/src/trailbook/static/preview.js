@@ -1836,6 +1836,12 @@ function settingsTypes(el, params) {
 
 // ---- Router ------------------------------------------------------------------------
 
+// The page header frame sticks right below the top bar, whose height changes when it wraps.
+function setHeaderHeight() {
+  document.documentElement.style.setProperty("--header-h", document.querySelector("header").offsetHeight + "px");
+}
+window.addEventListener("resize", setHeaderHeight, { passive: true });
+
 async function route() {
   clearTimeout(timer);
   stopObservers();
@@ -1854,7 +1860,7 @@ async function route() {
     if (CURRENT !== "all" && section === "compare") { location.hash = "#/activities"; return; }
     TYPE_COUNTS = await api("types/counts" + (CURRENT && CURRENT !== "all" ? "?" + new URLSearchParams({ person: CURRENT }) : ""));
     renderHeader(section);
-    document.documentElement.style.setProperty("--header-h", document.querySelector("header").offsetHeight + "px");
+    setHeaderHeight();
     if (parts[0] === "activity") await renderActivity(parts[1]);
     else if (section === "settings") await renderSettings(parts[1], params);
     else if (section === "compare") await renderCompare(params);

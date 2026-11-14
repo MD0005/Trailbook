@@ -540,6 +540,12 @@ _ACTIVITY_COLUMNS = (
 ).split()
 
 
+# Rows rebuilt on reimport (activities themselves are updated in place).
+_PER_ACTIVITY_TABLES = (
+    "tracks", "streams", "laps", "best_efforts", "activity_tiles", "segment_efforts",
+)  # fmt: skip
+
+
 def _store_activity(
     conn: sqlite3.Connection,
     person_id: str,
@@ -562,6 +568,7 @@ def _store_activity(
         "device": p.device,
         "importer_version": IMPORTER_VERSION,
         "analysis_version": 0,  # load and best efforts are computed after import
+        "segments_version": 0,  # segment efforts too
         **{c: p.summary.get(c) for c in _ACTIVITY_COLUMNS},
     }
 
@@ -587,7 +594,7 @@ def _store_activity(
         conn.execute(
             f"UPDATE activities SET {assignments} WHERE id = ?", [*values.values(), activity_id]
         )
-        for table in ("tracks", "streams", "laps", "best_efforts", "activity_tiles"):
+        for table in _PER_ACTIVITY_TABLES:
             conn.execute(f"DELETE FROM {table} WHERE activity_id = ?", (activity_id,))
 
     if p.track:
@@ -714,7 +721,7 @@ def set_activity_type(conn: sqlite3.Connection, activity_id: int, type_key: str)
     t = sports.TYPES[type_key]
     conn.execute(
         """UPDATE activities SET activity_type = ?, category = ?, type_overridden = 1,
-                  analysis_version = 0
+                  analysis_version = 0, segments_version = 0
            WHERE id = ?""",
         (t.key, t.group, activity_id),
     )

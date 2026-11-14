@@ -34,7 +34,7 @@ class ImportJob:
             return self._proc is not None and self._proc.poll() is None
 
     def running_kind(self) -> str | None:
-        """'scan', 'export' or 'restore' while a process runs, else None."""
+        """'scan', 'match-segments', 'export' or 'restore' while a process runs, else None."""
         with self._lock:
             alive = self._proc is not None and self._proc.poll() is None
             return self._kind if alive else None
@@ -42,6 +42,10 @@ class ImportJob:
     def start(self, trigger: str = "api") -> bool:
         """Start scan + import of the stored root folder. False if a job is already running."""
         return self._spawn("scan", ["--trigger", trigger])
+
+    def start_segments(self) -> bool:
+        """Match new segments / activities only (no scan, no downloads)."""
+        return self._spawn("match-segments", [])
 
     def start_export(self, include_files: bool = True, include_secrets: bool = False) -> bool:
         args = [] if include_files else ["--no-files"]

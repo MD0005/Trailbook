@@ -36,6 +36,7 @@ from . import (
     importer,
     jobs,
     scheduler,
+    segments,
     sports,
     streams,
 )
@@ -459,6 +460,8 @@ def create_app(db_path: str | Path) -> Starlette:
         if q.get("to"):
             where.append("start_time_utc < ?")
             params.append(q["to"])
+        if q.get("gps") == "1":
+            where.append("has_gps = 1")
         if q.get("q"):
             where.append("name LIKE ?")
             params.append(f"%{q['q']}%")
@@ -951,6 +954,281 @@ def create_app(db_path: str | Path) -> Starlette:
             ]
         return JSONResponse({"kind": kind, "records": [dict(r) for r in rows], "years": years})
 
+    # ---- segments ----------------------------------------------------------------------
+
+    EFFORT_COLS = """e.id, e.segment_id, e.activity_id, e.start_time_utc, e.start_s, e.end_s,
+        e.elapsed_s, e.moving_s, e.avg_speed, e.avg_hr, e.max_hr, e.avg_power, e.avg_cadence,
+        a.person_id, a.utc_offset_s, a.name AS activity_name, a.activity_type"""
+
+    def _segment_or_404(c: sqlite3.Connection, sid: int) -> sqlite3.Row:
+        row = c.execute("SELECT * FROM segments WHERE id = ?", (sid,)).fetchone()
+        if row is None:
+            raise HTTPException(404, "segment not found")
+        return row
+
+    def _segment_dict(s: sqlite3.Row) -> dict:
+        d = dict(s)
+        d["pending"] = s["match_version"] < segments.MATCH_VERSION
+        return d
+
+    def _person_filter(request: Request) -> tuple[str, list]:
+        pid = request.query_params.get("person")
+        if pid and pid != "all":
+            return " AND a.person_id = ?", [pid]
+        return "", []
+
+    def _kick_matching(c: sqlite3.Connection) -> None:
+        """Pending segment work and no job running: start the matcher (self-healing when a
+        segment was created while another job ran)."""
+        if segments.pending(c) and not job.running():
+            job.start_segments()
+
+    async def segments_list(request: Request):
+        pf, pp = _person_filter(request)
+        with closing(conn()) as c:
+            segs = c.execute("SELECT * FROM segments ORDER BY name COLLATE NOCASE").fetchall()
+            rows = c.execute(
+                f"""WITH e AS (
+                        SELECT {EFFORT_COLS},
+                          ROW_NUMBER() OVER (PARTITION BY e.segment_id
+                                             ORDER BY e.elapsed_s, e.start_time_utc) AS rb,
+                          ROW_NUMBER() OVER (PARTITION BY e.segment_id
+                                             ORDER BY e.start_time_utc DESC) AS rl,
+                          COUNT(*) OVER (PARTITION BY e.segment_id) AS n,
+                          AVG(e.elapsed_s) OVER (PARTITION BY e.segment_id) AS avg_elapsed
+                        FROM segment_efforts e JOIN activities a ON a.id = e.activity_id
+                        WHERE 1 = 1 {pf})
+                    SELECT * FROM e WHERE rb = 1 OR rl = 1""",
+                pp,
+            ).fetchall()
+            people = dict(
+                c.execute(
+                    f"""SELECT e.segment_id, COUNT(DISTINCT a.person_id)
+                        FROM segment_efforts e JOIN activities a ON a.id = e.activity_id
+                        WHERE 1 = 1 {pf} GROUP BY e.segment_id""",
+                    pp,
+                ).fetchall()
+            )
+            _kick_matching(c)
+            matching = segments.pending(c)
+        by_seg: dict[int, dict] = {}
+        for r in rows:
+            d = by_seg.setdefault(r["segment_id"], {})
+            effort = {k: r[k] for k in r.keys() if k not in ("rb", "rl", "n", "avg_elapsed")}
+            d["efforts"], d["avg_elapsed_s"] = r["n"], r["avg_elapsed"]
+            if r["rb"] == 1:
+                d["best"] = effort
+            if r["rl"] == 1:
+                d["last"] = effort
+        items = []
+        for s in segs:
+            item = _segment_dict(s)
+            item.update({"efforts": 0, "best": None, "last": None, "avg_elapsed_s": None})
+            item.update(by_seg.get(s["id"], {}))
+            item["people"] = people.get(s["id"], 0)
+            items.append(item)
+        return JSONResponse({"items": items, "matching": matching})
+
+    def _local_day(e: dict) -> str:
+        t = datetime.strptime(e["start_time_utc"][:19], "%Y-%m-%dT%H:%M:%S")
+        return (t + timedelta(seconds=e["utc_offset_s"] or 0)).date().isoformat()
+
+    def _period_stats(efforts: list[dict]) -> dict:
+        times = sorted(e["elapsed_s"] for e in efforts)
+        if not times:
+            return {"count": 0, "best_s": None, "avg_s": None, "median_s": None}
+        mid = len(times) // 2
+        median = times[mid] if len(times) % 2 else (times[mid - 1] + times[mid]) / 2
+        return {
+            "count": len(times),
+            "best_s": times[0],
+            "avg_s": round(sum(times) / len(times), 1),
+            "median_s": round(median, 1),
+        }
+
+    def _trend(efforts: list[dict]) -> dict:
+        today = datetime.now(UTC).date()
+        monday = today - timedelta(days=today.weekday())
+        weeks = [(monday - timedelta(weeks=k)).isoformat() for k in range(11, -1, -1)]
+        months, y, m = [], today.year, today.month
+        for _ in range(12):
+            months.insert(0, f"{y:04d}-{m:02d}")
+            y, m = (y, m - 1) if m > 1 else (y - 1, 12)
+        by_week: dict[str, list] = {w: [] for w in weeks}
+        by_month: dict[str, list] = {mo: [] for mo in months}
+        for e in efforts:
+            day = datetime.strptime(e["day"], "%Y-%m-%d").date()
+            wk = (day - timedelta(days=day.weekday())).isoformat()
+            if wk in by_week:
+                by_week[wk].append(e)
+            if e["day"][:7] in by_month:
+                by_month[e["day"][:7]].append(e)
+        return {
+            "weeks": [{"period": w, **_period_stats(v)} for w, v in by_week.items()],
+            "months": [{"period": mo, **_period_stats(v)} for mo, v in by_month.items()],
+        }
+
+    async def segment_detail(request: Request):
+        sid = request.path_params["id"]
+        pf, pp = _person_filter(request)
+        with closing(conn()) as c:
+            s = _segment_or_404(c, sid)
+            rows = c.execute(
+                f"""SELECT {EFFORT_COLS} FROM segment_efforts e
+                    JOIN activities a ON a.id = e.activity_id
+                    WHERE e.segment_id = ? {pf} ORDER BY e.elapsed_s, e.start_time_utc""",
+                [sid, *pp],
+            ).fetchall()
+            source = None
+            if s["source_activity_id"]:
+                src = c.execute(
+                    "SELECT id, name, activity_type, start_time_utc, utc_offset_s, person_id"
+                    " FROM activities WHERE id = ?",
+                    (s["source_activity_id"],),
+                ).fetchone()
+                source = dict(src) if src else None
+            _kick_matching(c)
+        efforts = [dict(r) for r in rows]
+        for i, e in enumerate(efforts, 1):
+            e["rank"] = i
+            e["day"] = _local_day(e)
+        last = max(efforts, key=lambda e: e["start_time_utc"]) if efforts else None
+        per_person = {}
+        for e in efforts:  # efforts are fastest first, so the first one is the best
+            p = per_person.setdefault(e["person_id"], {"person_id": e["person_id"], "list": []})
+            p["list"].append(e)
+        people = []
+        for p in per_person.values():
+            lst = p.pop("list")
+            p.update(_period_stats(lst))
+            p["best"] = lst[0]
+            p["last"] = max(lst, key=lambda e: e["start_time_utc"])
+            people.append(p)
+        people.sort(key=lambda p: p["best_s"])
+        return JSONResponse(
+            {
+                "segment": _segment_dict(s),
+                "source": source,
+                "summary": _period_stats(efforts),
+                "best": efforts[0] if efforts else None,
+                "last": last,
+                "top": efforts[:10],
+                "trend": _trend(efforts),
+                "people": people,
+            }
+        )
+
+    async def segment_efforts(request: Request):
+        sid = request.path_params["id"]
+        pf, pp = _person_filter(request)
+        order = (
+            "e.start_time_utc DESC"
+            if request.query_params.get("sort") == "date"
+            else "e.elapsed_s, e.start_time_utc"
+        )
+        limit = _int(request, "limit", 50, 1, 500)
+        offset = _int(request, "offset", 0, 0, 10**9)
+        with closing(conn()) as c:
+            _segment_or_404(c, sid)
+            total = c.execute(
+                f"""SELECT COUNT(*) FROM segment_efforts e JOIN activities a
+                    ON a.id = e.activity_id WHERE e.segment_id = ? {pf}""",
+                [sid, *pp],
+            ).fetchone()[0]
+            rows = c.execute(
+                f"""SELECT {EFFORT_COLS},
+                           (SELECT COUNT(*) + 1 FROM segment_efforts e2
+                            JOIN activities a2 ON a2.id = e2.activity_id
+                            WHERE e2.segment_id = e.segment_id {pf.replace("a.", "a2.")}
+                              AND e2.elapsed_s < e.elapsed_s) AS rank
+                    FROM segment_efforts e JOIN activities a ON a.id = e.activity_id
+                    WHERE e.segment_id = ? {pf} ORDER BY {order} LIMIT ? OFFSET ?""",
+                [*pp, sid, *pp, limit, offset],
+            ).fetchall()
+        return JSONResponse({"total": total, "items": [dict(r) for r in rows]})
+
+    def _float(body: dict, key: str) -> float:
+        try:
+            return float(body[key])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise HTTPException(400, f"invalid {key}") from exc
+
+    async def segment_create(request: Request):
+        body = await request.json()
+        try:
+            aid = int(body.get("activity_id"))
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(400, "choose an activity") from exc
+        source = "map" if body.get("source") == "map" else "activity"
+        with closing(conn()) as c:
+            try:
+                sid = segments.create_from_activity(
+                    c, aid, _float(body, "start_s"), _float(body, "end_s"),
+                    str(body.get("name") or ""), any_type=bool(body.get("any_type")),
+                    source=source,
+                )  # fmt: skip
+            except segments.SegmentError as exc:
+                raise HTTPException(400, str(exc)) from exc
+            row = _segment_or_404(c, sid)
+        job.start_segments()
+        return JSONResponse(_segment_dict(row), status_code=201)
+
+    async def segment_snap(request: Request):
+        body = await request.json()
+        raw = body.get("pins")
+        try:
+            pins = [(float(p[0]), float(p[1])) for p in raw]
+        except (TypeError, ValueError, IndexError) as exc:
+            raise HTTPException(400, "pins must be [lat, lon] pairs") from exc
+        if len(pins) > 50:
+            raise HTTPException(400, "at most 50 pins")
+        category = body.get("category") or None
+        if category and category not in sports.GROUPS:
+            raise HTTPException(400, "unknown activity group")
+
+        def run():
+            with closing(conn()) as c:
+                return segments.snap(c, pins, category)
+
+        try:
+            result = await run_in_threadpool(run)
+        except segments.SegmentError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        if result is None:
+            raise HTTPException(
+                404, "none of your activities passes all pins in this order (within 50 m)"
+            )
+        return JSONResponse(result)
+
+    async def segment_update(request: Request):
+        sid = request.path_params["id"]
+        body = await request.json()
+        with closing(conn()) as c:
+            s = _segment_or_404(c, sid)
+            if "name" in body:
+                name = str(body["name"] or "").strip()
+                if not name:
+                    raise HTTPException(400, "name must not be empty")
+                c.execute("UPDATE segments SET name = ? WHERE id = ?", (name[:120], sid))
+            if "any_type" in body:
+                category = None
+                if not body["any_type"]:
+                    src = c.execute(
+                        "SELECT category FROM activities WHERE id = ?", (s["source_activity_id"],)
+                    ).fetchone()
+                    category = src["category"] if src else s["category"]
+                if category != s["category"]:
+                    c.execute("UPDATE segments SET category = ? WHERE id = ?", (category, sid))
+                    segments.reset_segment(c, sid)
+                    job.start_segments()
+            return JSONResponse(_segment_dict(_segment_or_404(c, sid)))
+
+    async def segment_delete(request: Request):
+        with closing(conn()) as c:
+            _segment_or_404(c, request.path_params["id"])
+            c.execute("DELETE FROM segments WHERE id = ?", (request.path_params["id"],))
+        return Response(status_code=204)
+
     # ---- Garmin Connect ----------------------------------------------------------------
 
     def _person_or_400(c: sqlite3.Connection, pid: str) -> None:
@@ -1208,6 +1486,13 @@ def create_app(db_path: str | Path) -> Starlette:
         Route("/api/heatmap/tiles", heatmap_tiles),
         Route("/api/basemaps", basemaps),
         Route("/api/basemap/{source}/{z:int}/{x:int}/{y:int}.png", basemap_tile),
+        Route("/api/segments", segments_list),
+        Route("/api/segments", segment_create, methods=["POST"]),
+        Route("/api/segments/snap", segment_snap, methods=["POST"]),
+        Route("/api/segments/{id:int}", segment_detail),
+        Route("/api/segments/{id:int}", segment_update, methods=["PATCH"]),
+        Route("/api/segments/{id:int}", segment_delete, methods=["DELETE"]),
+        Route("/api/segments/{id:int}/efforts", segment_efforts),
         Route("/api/thresholds/{id}", thresholds_get),
         Route("/api/thresholds/{id}", thresholds_put, methods=["PUT"]),
         Route("/api/thresholds/{id}/{valid_from}", thresholds_delete, methods=["DELETE"]),

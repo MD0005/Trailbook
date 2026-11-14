@@ -369,6 +369,11 @@ daily_load(person_id, date, load, ctl, atl, tsb, PK(person_id, date))
 import_runs(id, started_at, finished_at, trigger, scanned, new, imported,
             skipped, duplicates, errors, missing)
 settings(key PK, value)
+segments(id PK, name, category /* NULL = any */, polyline, point_count, distance_m, ascent_m,
+         start_lat, start_lon, end_lat, end_lon, bbox_*, source, source_activity_id,
+         match_version, created_at)
+segment_efforts(id PK, segment_id, activity_id, start_time_utc, start_s, end_s, elapsed_s,
+                moving_s, avg_speed, avg_hr, max_hr, avg_power, avg_cadence)
 ```
 
 Indexes on `activities(person_id, start_time_utc)`, `activities(person_id, category)`,
@@ -397,6 +402,11 @@ All JSON, prefix `/api`. Read endpoints accept `person`, `from`, `to`, `category
 | GET | `/stats/records?person&kind&range&type` | Best effort per distance / duration. |
 | GET/PUT | `/thresholds/{person}` | Threshold rows, values in use (set / auto / default). |
 | DELETE | `/thresholds/{person}/{valid_from}` | Delete a threshold row. |
+| GET | `/segments?person` | Segments with effort count, best and last effort (for a person or everyone). |
+| POST | `/segments` | Create from an activity slice (`activity_id`, `start_s`, `end_s`, `name`, `any_type`). |
+| POST | `/segments/snap` | Pins → slice of the best matching own activity (preview, nothing stored). |
+| GET/PATCH/DELETE | `/segments/{id}` | Detail with stats, top 10, trend, per person / rename / delete. |
+| GET | `/segments/{id}/efforts?person&offset` | All efforts, fastest first. |
 | GET | `/import/status` | Queue progress, last run. |
 | POST | `/import/scan` | Start scan + import. |
 | GET | `/garmin` | Garmin account state per person (key hint, status, counts; never the key). |
@@ -419,7 +429,7 @@ All JSON, prefix `/api`. Read endpoints accept `person`, `from`, `to`, `category
 The visual design is defined by the project owner; the technical preview follows these rules.
 
 ### Navigation
-- Main header: **Activities · Calendar · Heatmap · Fitness · Statistics**, then on the right
+- Main header: **Activities · Calendar · Map · Segments · Fitness · Statistics**, then on the right
   the **person picker** (the only coloured icon), the light/dark switch and a **gear** for
   Settings.
 - Person picker: one person or **Everyone**. The first person in the configured order is the
@@ -451,6 +461,11 @@ rounded, clearly interactive). A badge either toggles something (e.g. KPIs) or o
 with settings; panels stay open while settings change. A main switch (e.g. Heatmap | Explorer
 tiles) is slightly larger than the other badges. Tab-specific tools (e.g. list/tile view) sit
 at the right end of the row.
+
+The header row is a **frame** (translucent surface, thin border, soft shadow) in exactly the
+same place on every tab, the map included. It stays below the top bar while the page scrolls;
+content scrolling up to it fades out over a short strip (~18 px) just below the frame. On the
+map the same frame floats over the map without the fade.
 
 ### Style rules
 - Light theme by default, dark theme via a toggle (remembered per browser).
@@ -516,6 +531,54 @@ at the right end of the row.
 - Tiles, max square and cluster on this page are computed **in the browser** from the route
   polylines for the chosen tile size; the server stores zoom-14 tiles per activity for
   statistics. MapLibre has no blend modes, so overlapping people are not colour-mixed.
+
+---
+
+## 11a. Segments
+
+A segment is a piece of route (a climb, a sprint, a lap of the park). Every activity that
+covers it gets an *effort* with its time; the Segments tab ranks and tracks them.
+
+- **Shared by the install.** Segments belong to no person; everyone's activities are matched.
+  With one person selected, only segments that person has ridden appear (with their efforts);
+  with **Everyone**, all segments with any effort and leaderboards across people. Segments
+  still being matched always show (state *matching…*), so a new one gives feedback at once.
+- **Two creators**, both ending in a slice of one recorded activity (full-resolution
+  `lat`/`lon` from `streams`, simplified to 2 m, at least 100 m long):
+  1. *From an activity* — choose an activity, pick start and end with two sliders over the
+     elevation profile; the map highlights the slice.
+  2. *From the map* — place pins in riding order on a map that shows your routes; the server
+     snaps them to **your own tracks**: the activity that passes all pins in order (within
+     50 m) is cut between the first and the last pin (closest match wins, then the newest).
+     No routing engine and no external service.
+  A segment matches activities of its group (the source activity's group) unless *any type*
+  is chosen.
+- **Matching** (`segments.py`, phase `segments` of the importer process, after analysis):
+  1. Prefilter in SQL: activity bbox contains the segment start and end (+ ~50 m), group fits.
+  2. Checkpoints every 25 m along the segment. An effort starts where the track crosses the
+     start (within 25 m, interpolated along the segment direction, so waiting before the
+     start does not count), passes **every checkpoint in order** within 30 m (edge distance,
+     so sparse GPS works; at most 200 m of track between two checkpoints, so detours and the
+     opposite direction fail) and ends at the first crossing of the end (within 25 m).
+  3. Travelled distance must be 0.8–1.3× the segment length (+100 m). One activity can have
+     several efforts (laps); the search continues after each end.
+  4. Effort values: elapsed time (the ranking), moving time, average speed, average / max HR,
+     average power and cadence over the slice, start time.
+  `segments.match_version` / `activities.segments_version` (0 = to do) say what is done; a new
+  or changed segment is matched against all activities, a new or reimported activity (or a
+  type change) against all segments. ~ms per candidate on the CM4.
+- **List** (`#/segments`): *New segment* (from map / from activity), cards in two columns
+  (one on a phone). A card has a small static map (OSM tiles from the tile cache as
+  `<image>` elements + the line in SVG — never one WebGL map per card, browsers allow ~16),
+  name, distance, ascent, number of efforts, the best effort with its date and the last
+  effort with its time, pace/speed, average and max HR, power. Options: show segments
+  without efforts of the selected person.
+- **Detail** (`#/segment/{id}`): map, summary (distance, ascent, grade, efforts, best,
+  average, median), last effort, top 10, trend of the best and average time per week (last
+  12 weeks) and per month (last 12 months), all efforts (50 at a time), rename, delete. With
+  Everyone also a table per person (best, average, efforts, last).
+- **VO2 max** of the period is shown only once it is stored (Garmin API, Wellbeing stage);
+  until then nothing is shown.
 
 ---
 
@@ -596,6 +659,7 @@ API: `GET /api/backup`, `POST /api/export`, `GET/DELETE /api/export/{name}`, `PO
 5. **Add-on** — packaging, Ingress, stdin trigger, multi-arch CI, install on HA Yellow.
 6. **Export / restore** *(done; the move to HA Yellow is tested with milestone 5)* — migration ZIP
    (section 13), Settings › Backup, CLI `export` / `restore`.
+6a. **Segments** *(done)* — two creators, matching in the importer, list and detail (11a).
 7. **UI design pass** — owner's design, i18n EN/PL, docs and screenshots, first public release.
 
 ---

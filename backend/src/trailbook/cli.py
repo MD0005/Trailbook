@@ -9,7 +9,7 @@ import time
 from contextlib import closing
 from pathlib import Path
 
-from . import __version__, analysis, backup, db, garmin, importer, jobs, sports
+from . import __version__, analysis, backup, db, garmin, importer, jobs, segments, sports
 
 
 def _set_low_priority() -> None:
@@ -112,6 +112,15 @@ def cmd_scan(conn, args) -> int:
                 )
 
             analysed = analysis.backfill(conn, progress=analysis_progress)
+
+            def segment_progress(i, total):
+                jobs.write_progress(
+                    conn, state="running", phase="segments", started_at=started, done=i, total=total
+                )
+
+            matched = segments.backfill(conn, progress=segment_progress)
+            if matched:
+                out(f"Segments matched for {matched} segments / activities.")
             if analysed:
                 out(f"Training load and best efforts computed for {analysed} activities.")
             if tiled:
@@ -167,6 +176,15 @@ def _job(db_path, kind: str, fn, quiet: bool):
             print(f"{kind} failed: {msg}", file=sys.stderr)
         return None
     return started, result
+
+
+def cmd_match_segments(conn, args) -> int:
+    if args.low_priority:
+        _set_low_priority()
+    n = segments.backfill(conn)
+    if not args.quiet:
+        print(f"Segments matched for {n} segments / activities.")
+    return 0
 
 
 def cmd_export(conn, args) -> int:
@@ -431,6 +449,11 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("forget", help="remove a file from the import history (re-import on scan)")
     p.add_argument("id", type=int, help="file id from `trailbook files`")
     p.set_defaults(func=cmd_forget)
+
+    p = sub.add_parser("match-segments", help="match new segments and activities")
+    p.add_argument("--low-priority", action="store_true", help="run with the lowest CPU priority")
+    p.add_argument("-q", "--quiet", action="store_true", help="print nothing")
+    p.set_defaults(func=cmd_match_segments)
 
     p = sub.add_parser("export", help="write a migration archive (database + files)")
     p.add_argument("--out", help="folder for the archive (default: exports next to the db)")
