@@ -1331,6 +1331,7 @@ const SETTINGS_TABS = [
   ["people", "People", svg(`<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.8-3.6 3.4-5.5 6.5-5.5s5.7 1.9 6.5 5.5"/><path d="M16 4.5a3.5 3.5 0 0 1 0 7M18 14.8c2 .7 3.2 2.5 3.6 5.2"/>`)],
   ["import", "Imported", svg(`<path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 17v3h16v-3"/>`)],
   ["types", "Activity types", svg(`<path d="M3 12V4h8l9 9-8 8z"/><circle cx="7.5" cy="8.5" r="1.5"/>`)],
+  ["backup", "Backup", svg(`<path d="M4 7h16v13H4z"/><path d="M2 4h20v3H2z"/><path d="M10 11h4"/>`)],
 ];
 
 async function renderSettings(tab, params) {
@@ -1341,6 +1342,7 @@ async function renderSettings(tab, params) {
   if (tab === "people") await settingsPeople(el);
   else if (tab === "import") await settingsImport(el, params);
   else if (tab === "types") settingsTypes(el, params);
+  else if (tab === "backup") await settingsBackup(el);
   else await settingsGeneral(el);
 }
 

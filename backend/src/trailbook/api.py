@@ -20,13 +20,14 @@ from starlette.exceptions import HTTPException
 from starlette.middleware import Middleware
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.requests import Request
-from starlette.responses import JSONResponse, Response
+from starlette.responses import FileResponse, JSONResponse, Response
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
 from . import (
     __version__,
     analysis,
+    backup,
     basemap,
     db,
     explorer,
@@ -675,7 +676,7 @@ def create_app(db_path: str | Path) -> Starlette:
             source = db.get_setting(c, "data_source") or "folder"
             due = scheduler.next_scan_at(c)
             interval = scheduler.interval_min(c)
-        running = job.running()
+        running = job.running_kind() in ("scan", "restore")
         if not running and progress.get("state") == "running":
             # Started outside this server (CLI) or the process died; report what we know.
             progress["state"] = "running?"
@@ -1009,13 +1010,118 @@ def create_app(db_path: str | Path) -> Starlette:
         sched.settings_changed()
         return JSONResponse({"deleted": True})
 
+    # ---- export / restore --------------------------------------------------------------
+
+    def _job_progress(kind: str) -> dict:
+        p = backup.read_progress(db_path, kind)
+        if p.get("state") == "running" and job.running_kind() != kind:
+            p["state"] = "running?"  # started outside this server, or the process died
+        return p
+
+    async def backup_status(request: Request):
+        def collect():
+            return {
+                "running": job.running_kind(),
+                "export": _job_progress("export"),
+                "restore": _job_progress("restore"),
+                "exports": backup.list_exports(db_path),
+                "exports_dir": str(backup.exports_dir(db_path)),
+                "empty": backup.is_empty_install(db_path),
+                "default_root": str(backup.default_restore_root(db_path)),
+            }
+
+        return JSONResponse(await run_in_threadpool(collect))
+
+    async def export_start(request: Request):
+        try:
+            body = await request.json()
+        except ValueError:
+            body = {}
+        if not isinstance(body, dict):
+            body = {}
+        files = bool(body.get("files", True))
+        if not job.start_export(include_files=files, include_secrets=bool(body.get("secrets"))):
+            return JSONResponse({"started": False, "reason": "another job is running"}, 409)
+        backup.write_progress(db_path, "export", state="running", phase="start",
+                              started_at=backup.now_iso())  # fmt: skip
+        return JSONResponse({"started": True}, status_code=202)
+
+    def _export_file(request: Request) -> Path:
+        try:
+            path = backup.export_path(db_path, request.path_params["name"])
+        except backup.BackupError as exc:
+            raise HTTPException(404, "export not found") from exc
+        if not path.is_file():
+            raise HTTPException(404, "export not found")
+        return path
+
+    async def export_download(request: Request):
+        path = _export_file(request)
+        return FileResponse(path, media_type="application/zip", filename=path.name)
+
+    async def export_delete(request: Request):
+        if job.running_kind() in ("export", "restore"):
+            raise HTTPException(409, "wait until the running export or restore has finished")
+        _export_file(request).unlink()
+        return JSONResponse({"deleted": True})
+
+    async def restore_start(request: Request):
+        """Restore an archive from the exports folder (`name`) or from the request body."""
+        q = request.query_params
+        if job.running():
+            raise HTTPException(409, "another job is running")
+        root = (q.get("root") or "").strip() or None
+        if root:
+            rp = Path(root).expanduser()
+            if not rp.is_absolute() or not _allowed_root(rp.resolve()):
+                raise HTTPException(400, "the files folder must be an allowed absolute path")
+            root = str(rp.resolve())
+        if not q.get("confirm") and not await run_in_threadpool(backup.is_empty_install, db_path):
+            raise HTTPException(409, "this install already has data: confirm replacing it")
+        uploaded = False
+        if q.get("name"):
+            try:
+                archive = backup.export_path(db_path, q["name"])
+            except backup.BackupError as exc:
+                raise HTTPException(400, str(exc)) from exc
+            if not archive.is_file():
+                raise HTTPException(404, "export not found")
+        else:
+            folder = backup.exports_dir(db_path)
+            folder.mkdir(parents=True, exist_ok=True)
+            stamp = backup.now_iso().replace(":", "").replace("-", "")
+            archive = folder / f".restore-upload-{stamp}.zip"
+            size = 0
+            with archive.open("wb") as fh:
+                async for chunk in request.stream():
+                    size += len(chunk)
+                    fh.write(chunk)
+            if size == 0:
+                archive.unlink(missing_ok=True)
+                raise HTTPException(400, "empty file")
+            uploaded = True
+        try:
+            manifest = await run_in_threadpool(backup.read_manifest, archive)
+        except backup.BackupError as exc:
+            if uploaded:
+                archive.unlink(missing_ok=True)
+            raise HTTPException(400, str(exc)) from exc
+        if not job.start_restore(archive, root, delete_archive=uploaded):
+            if uploaded:
+                archive.unlink(missing_ok=True)
+            raise HTTPException(409, "another job is running")
+        backup.write_progress(db_path, "restore", state="running", phase="start",
+                              started_at=backup.now_iso())  # fmt: skip
+        return JSONResponse({"started": True, "manifest": backup.summary(manifest)}, 202)
+
     async def import_scan(request: Request):
         with closing(conn()) as c:
             source = db.get_setting(c, "data_source") or "folder"
             if source == "folder" and not db.get_setting(c, "root"):
                 raise HTTPException(409, "root folder is not configured")
         if not job.start(trigger="manual"):
-            return JSONResponse({"started": False, "reason": "already running"}, status_code=409)
+            reason = "already running" if job.running_kind() == "scan" else "another job is running"
+            return JSONResponse({"started": False, "reason": reason}, status_code=409)
         return JSONResponse({"started": True}, status_code=202)
 
     async def import_files(request: Request):
@@ -1113,6 +1219,11 @@ def create_app(db_path: str | Path) -> Starlette:
         Route("/api/garmin/{id}", garmin_account_set, methods=["PUT"]),
         Route("/api/garmin/{id}", garmin_account_delete, methods=["DELETE"]),
         Route("/api/garmin/{id}/test", garmin_account_test, methods=["POST"]),
+        Route("/api/backup", backup_status),
+        Route("/api/export", export_start, methods=["POST"]),
+        Route("/api/export/{name}", export_download),
+        Route("/api/export/{name}", export_delete, methods=["DELETE"]),
+        Route("/api/restore", restore_start, methods=["POST"]),
         Route("/api/import/status", import_status),
         Route("/api/import/scan", import_scan, methods=["POST"]),
         Route("/api/import/files", import_files),

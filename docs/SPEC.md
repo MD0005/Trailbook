@@ -398,6 +398,10 @@ All JSON, prefix `/api`. Read endpoints accept `person`, `from`, `to`, `category
 | POST | `/garmin/{person}/test` | Get a token and read the newest activity. |
 | DELETE | `/garmin/{person}` | Disconnect (delete the key; imported activities stay). |
 | GET | `/import/files?status=…` | Import manager list. |
+| GET | `/backup` | Running job, export / restore progress, exports list (with manifest summary), exports folder, whether the install is empty, default folder for restored files. |
+| POST | `/export` | Start an export (`files`, `secrets`). |
+| GET/DELETE | `/export/{name}` | Download / delete an export. |
+| POST | `/restore?name|confirm&root` | Restore an export from the exports folder (`name`) or from the request body (upload); `confirm=1` needed when the install has data. |
 | POST | `/import/files/{id}/retry` | Retry an errored file. |
 | POST | `/import/files/{id}/dismiss` | Acknowledge a missing file, keep data. |
 | GET | `/tiles/...` | Map tile / style / glyph proxy with disk cache. |
@@ -431,6 +435,7 @@ The visual design is defined by the project owner; the technical preview follows
 | Wellbeing | Sleep, stress, heart rate (mostly charts), from the Garmin API; some daily values also in the Calendar. Later stage. |
 | Statistics | *Totals*: filter (type, year, group by year/month/week, chart metric), bar chart, table per period (years link to their months), moving time by group. *Records*: running pace / power / heart rate, range all / 90 days / year, curve + table with links to activities. |
 | Compare | Everyone side by side (only with “Everyone” selected). |
+| Settings › Backup | Export (with / without FIT files, optionally with Garmin keys), list of exports (download, restore, delete), restore from an uploaded export into a chosen folder; progress while a job runs, page reloads after a restore. |
 
 ### Page structure
 Every tab has the same header: the **title**, then **badges** in one row (order: Filter,
@@ -525,28 +530,41 @@ Moving Trailbook to a new server (new HA box, different architecture, fresh inst
 a single, documented operation.
 
 ### Export
-- One ZIP archive containing:
+- One ZIP archive (`backup.py`):
   ```
-  trailbook-export-2026-11-13.zip
-  ├── manifest.json        ← Trailbook version, schema version, export date, people, file count, checksums
+  trailbook-export-2026-11-13-201500.zip
+  ├── manifest.json        ← format version, Trailbook + schema version, date, people, counts,
+  │                          size + sha256 + mtime of every entry, source folder and data source
   ├── trailbook.db         ← consistent snapshot (SQLite online backup API, not a raw file copy)
-  ├── app/                 ← add-on settings, people config, map style config, translations overrides
-  └── files/               ← all FIT/ZIP files from the root folder, same structure
-      ├── alice/...
-      └── bob/...
+  └── files/
+      ├── root/...         ← FIT/ZIP files of the watched folder, same structure
+      └── uploads/...      ← uploaded files and Garmin downloads
   ```
-- Started from Settings or `POST /api/export`; runs in the background at low priority
-  (same as the importer) and streams to disk (ZIP64, no full archive in RAM).
-- Written to a chosen folder inside an HA-mapped dir (e.g. `/share/trailbook-exports/`)
-  and downloadable from the UI.
+- Settings (people, watches, thresholds, accent, data source...) live in the database, so there
+  is no separate `app/` folder. Transient state (import progress) is removed from the snapshot.
+- **Secrets:** Garmin access tokens are never exported. API keys only with *Include Garmin API
+  keys*; otherwise the restored accounts show *key refused* until the key is entered again.
+- Started from Settings › Backup, `POST /api/export` or `trailbook export [--no-files]
+  [--include-secrets] [--out DIR]`. Runs as the low-priority job process (only one job — import,
+  export or restore — at a time) and streams to disk in 1 MB chunks (ZIP64; FIT deflated, ZIP
+  members stored); written as `.part` and renamed when complete.
+- Saved in `TRAILBOOK_EXPORT_DIR` (add-on: a folder in `/share`, e.g. `/share/trailbook-exports`),
+  default `exports/` next to the database; downloadable and deletable in the UI.
 - Option to export without the FIT files (database + settings only) for a small archive.
+- Progress goes to `export-progress.json` / `restore-progress.json` next to the database (a
+  restore replaces the database itself, so it cannot hold the progress).
 
 ### Restore
-- On a fresh install: Import page → "Restore from export" (upload or pick a ZIP from a mapped folder).
-- Steps: validate `manifest.json` and checksums → refuse if export comes from a newer schema
-  than the running version → restore FIT files into the root folder (keeping structure) →
-  restore database and settings → run schema migrations if the export is older → run a scan
-  so file paths and statuses match the new disk.
+- Settings › Backup: upload an export or pick one from the list; `trailbook restore ZIP
+  [--root DIR] [--yes]` from the CLI.
+- Steps: validate `manifest.json` → refuse an export from a newer format or schema → refuse an
+  install with data unless confirmed → restore files (root files into the chosen folder, default
+  the current folder or `library/` next to the database; uploads into `uploads/`), each checked
+  against its size + sha256 and given back its mtime, unsafe paths rejected → check the database
+  copy (`PRAGMA integrity_check`) and copy it into the live database with the backup API → run
+  migrations if the export is older → set the folder setting → scan (Garmin downloads wait for
+  the next run). Because paths, sizes and mtimes match, the scan finds nothing to re-import.
+- A damaged archive stops before the database is touched; files already written stay.
 - Restoring onto a non-empty install requires explicit confirmation and replaces the database.
 - SQLite files and FIT files are architecture-independent, so `amd64` ↔ `aarch64` moves are fine.
 
@@ -555,8 +573,8 @@ The database lives in the add-on `/data` dir and is part of HA backups of the ad
 folder in `/share` is only included if the HA backup includes the share folder. The Trailbook
 export is the self-contained way to move everything at once.
 
-API: `POST /api/export`, `GET /api/export/status`, `GET /api/export/{name}` (download),
-`POST /api/restore`, `GET /api/restore/status`.
+API: `GET /api/backup`, `POST /api/export`, `GET/DELETE /api/export/{name}`, `POST /api/restore`
+(see section 9).
 
 ---
 
@@ -570,7 +588,8 @@ API: `POST /api/export`, `GET /api/export/status`, `GET /api/export/{name}` (dow
 4. **Statistics** *(done)* — thresholds, training load, CTL/ATL/TSB (Fitness), best efforts and
    record curves, totals (Statistics), Calendar.
 5. **Add-on** — packaging, Ingress, stdin trigger, multi-arch CI, install on HA Yellow.
-6. **Export / restore** — migration ZIP (section 13), tested by moving a PC install to HA Yellow.
+6. **Export / restore** *(done; the move to HA Yellow is tested with milestone 5)* — migration ZIP
+   (section 13), Settings › Backup, CLI `export` / `restore`.
 7. **UI design pass** — owner's design, i18n EN/PL, docs and screenshots, first public release.
 
 ---

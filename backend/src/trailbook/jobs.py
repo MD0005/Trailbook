@@ -1,4 +1,4 @@
-"""Background import: run the importer as a separate low-priority process.
+"""Background jobs: run the importer (or export / restore) as a low-priority process.
 
 The importer is not resident. The API starts it when there is work; it scans, imports and
 exits, so its memory is released. Progress is written to the `settings` table under
@@ -21,25 +21,49 @@ PROGRESS_KEY = "import_progress"
 
 
 class ImportJob:
-    """Starts at most one importer process at a time."""
+    """Starts at most one background process at a time: import, export or restore."""
 
     def __init__(self, db_path: str | Path):
         self.db_path = str(db_path)
         self._proc: subprocess.Popen | None = None
+        self._kind: str | None = None
         self._lock = threading.Lock()
 
     def running(self) -> bool:
         with self._lock:
             return self._proc is not None and self._proc.poll() is None
 
+    def running_kind(self) -> str | None:
+        """'scan', 'export' or 'restore' while a process runs, else None."""
+        with self._lock:
+            alive = self._proc is not None and self._proc.poll() is None
+            return self._kind if alive else None
+
     def start(self, trigger: str = "api") -> bool:
-        """Start scan + import of the stored root folder. False if one is already running."""
+        """Start scan + import of the stored root folder. False if a job is already running."""
+        return self._spawn("scan", ["--trigger", trigger])
+
+    def start_export(self, include_files: bool = True, include_secrets: bool = False) -> bool:
+        args = [] if include_files else ["--no-files"]
+        if include_secrets:
+            args.append("--include-secrets")
+        return self._spawn("export", args)
+
+    def start_restore(self, archive: str | Path, root: str | None, delete_archive: bool) -> bool:
+        args = [str(archive), "--yes"]
+        if root:
+            args += ["--root", root]
+        if delete_archive:
+            args.append("--delete-archive")
+        return self._spawn("restore", args)
+
+    def _spawn(self, command: str, args: list[str]) -> bool:
         with self._lock:
             if self._proc is not None and self._proc.poll() is None:
                 return False
             cmd = [
                 sys.executable, "-m", "trailbook.cli", "--db", self.db_path,
-                "scan", "--low-priority", "--trigger", trigger, "--quiet",
+                command, *args, "--low-priority", "--quiet",
             ]  # fmt: skip
             kwargs: dict = {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
             if os.name == "nt":
@@ -49,6 +73,7 @@ class ImportJob:
                 if ionice:
                     cmd = [ionice, "-c3", *cmd]  # idle I/O class
             self._proc = subprocess.Popen(cmd, **kwargs)
+            self._kind = command
             return True
 
     def wait(self, timeout: float | None = None) -> int | None:

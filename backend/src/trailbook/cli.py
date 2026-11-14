@@ -6,9 +6,10 @@ import argparse
 import os
 import sys
 import time
+from contextlib import closing
 from pathlib import Path
 
-from . import __version__, analysis, db, garmin, importer, jobs, sports
+from . import __version__, analysis, backup, db, garmin, importer, jobs, sports
 
 
 def _set_low_priority() -> None:
@@ -144,6 +145,88 @@ def cmd_scan(conn, args) -> int:
     )  # fmt: skip
     jobs.write_progress(conn, state="finished", started_at=started, finished_at=finished, **counts)
     return 0
+
+
+def _job(db_path, kind: str, fn, quiet: bool):
+    """Run an export/restore step with progress in `<kind>-progress.json`."""
+    started = backup.now_iso()
+
+    def progress(**p):
+        backup.write_progress(db_path, kind, state="running", started_at=started, **p)
+
+    progress(phase="start")
+    try:
+        result = fn(progress)
+    except Exception as exc:
+        msg = str(exc) if isinstance(exc, backup.BackupError) else f"{type(exc).__name__}: {exc}"
+        backup.write_progress(
+            db_path, kind, state="failed", error=msg, started_at=started,
+            finished_at=backup.now_iso(),
+        )  # fmt: skip
+        if not quiet:
+            print(f"{kind} failed: {msg}", file=sys.stderr)
+        return None
+    return started, result
+
+
+def cmd_export(conn, args) -> int:
+    conn.close()
+    if args.low_priority:
+        _set_low_priority()
+    done = _job(
+        args.db, "export",
+        lambda progress: backup.export(
+            args.db, args.out, include_files=not args.no_files,
+            include_secrets=args.include_secrets, progress=progress,
+        ),
+        args.quiet,
+    )  # fmt: skip
+    if done is None:
+        return 1
+    started, r = done
+    backup.write_progress(
+        args.db, "export", state="finished", started_at=started, finished_at=backup.now_iso(),
+        name=r.path.name, files=r.files, bytes=r.bytes,
+    )  # fmt: skip
+    if not args.quiet:
+        print(f"Exported {r.files} files ({r.bytes / 1e6:.1f} MB of files) to {r.path}")
+    return 0
+
+
+def cmd_restore(conn, args) -> int:
+    conn.close()
+    if args.low_priority:
+        _set_low_priority()
+    done = _job(
+        args.db, "restore",
+        lambda progress: backup.restore(
+            args.db, args.archive, root=args.root, replace=args.yes, progress=progress
+        ),
+        args.quiet,
+    )  # fmt: skip
+    if args.delete_archive:
+        Path(args.archive).unlink(missing_ok=True)
+    if done is None:
+        return 1
+    started, r = done
+    if not args.quiet:
+        print(f"Restored {r.activities} activities and {r.files} files"
+              + (f" (folder: {r.root})" if r.root else ""))  # fmt: skip
+    status = 0
+    if not args.no_scan:
+        backup.write_progress(args.db, "restore", state="running", started_at=started, phase="scan")
+        # Match file rows to the restored disk; Garmin downloads wait for the next run.
+        scan_args = argparse.Namespace(
+            db=args.db, root=None, no_import=False, no_garmin=True, low_priority=False,
+            limit=None, verbose=False, quiet=args.quiet, trigger="restore",
+        )  # fmt: skip
+        with closing(db.connect(args.db)) as c2:
+            status = cmd_scan(c2, scan_args)
+    backup.write_progress(
+        args.db, "restore", state="finished", started_at=started, finished_at=backup.now_iso(),
+        files=r.files, activities=r.activities, root=r.root,
+    )  # fmt: skip
+    return status
 
 
 def cmd_status(conn, args) -> int:
@@ -348,6 +431,24 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("forget", help="remove a file from the import history (re-import on scan)")
     p.add_argument("id", type=int, help="file id from `trailbook files`")
     p.set_defaults(func=cmd_forget)
+
+    p = sub.add_parser("export", help="write a migration archive (database + files)")
+    p.add_argument("--out", help="folder for the archive (default: exports next to the db)")
+    p.add_argument("--no-files", action="store_true", help="database and settings only")
+    p.add_argument("--include-secrets", action="store_true", help="include Garmin API keys")
+    p.add_argument("--low-priority", action="store_true", help="run with the lowest CPU priority")
+    p.add_argument("-q", "--quiet", action="store_true", help="print nothing")
+    p.set_defaults(func=cmd_export)
+
+    p = sub.add_parser("restore", help="restore a migration archive (replaces the database)")
+    p.add_argument("archive", help="trailbook-export-*.zip")
+    p.add_argument("--root", help="folder for the restored FIT files (default: current folder)")
+    p.add_argument("--yes", action="store_true", help="replace an install that has data")
+    p.add_argument("--no-scan", action="store_true", help="do not scan after restoring")
+    p.add_argument("--low-priority", action="store_true", help="run with the lowest CPU priority")
+    p.add_argument("-q", "--quiet", action="store_true", help="print nothing")
+    p.add_argument("--delete-archive", action="store_true", help=argparse.SUPPRESS)
+    p.set_defaults(func=cmd_restore)
 
     p = sub.add_parser("serve", help="run the web server (API + preview UI)")
     p.add_argument("--host", default="127.0.0.1")

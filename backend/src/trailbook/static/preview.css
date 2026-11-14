@@ -567,3 +567,17 @@ table.kv td:first-child { color: var(--muted); }
 .th-form input { height: 30px; }
 .th-actions { display: flex; gap: 8px; align-items: center; }
 .fit-tip[hidden] { display: none; }
+
+/* ---- Backup ---- */
+.check-list { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+.check-list label { display: flex; gap: 8px; align-items: baseline; }
+.check-list .hint { display: inline; }
+.restore-form { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; margin-top: 10px; }
+.restore-form label { display: flex; flex-direction: column; gap: 4px; }
+.note.warn-note { border-color: var(--warn, #c77700); }
+.note.warn-note label { display: flex; gap: 8px; align-items: baseline; }
+td.actions { white-space: nowrap; text-align: right; }
+a.btn.small { font-size: 12px; padding: 3px 8px; }
+a.btn:hover { text-decoration: none; filter: brightness(1.15); }
+table.exports td:first-child code { word-break: break-all; }
+table.exports td:first-child, table.exports td:nth-child(4) { white-space: normal; min-width: 140px; }
