@@ -31,7 +31,7 @@ function worldPx(lat, lon, z) {
   return [((lon + 180) / 360) * s, ((1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2) * s];
 }
 
-function staticMap(polyline, { W = 560, H = 230, cls = "seg-map" } = {}) {
+function staticMap(polyline, { W = 560, H = 230, cls = "seg-map", tiles: tileCls = "seg-tiles" } = {}) {
   const pts = decodePolyline(polyline);
   if (pts.length < 2) return "";
   const source = loadMapSettings().map.source;
@@ -60,7 +60,7 @@ function staticMap(polyline, { W = 560, H = 230, cls = "seg-map" } = {}) {
   const d = px.map(([x, y], i) => `${i ? "L" : "M"}${(x - x0).toFixed(1)},${(y - y0).toFixed(1)}`).join("");
   const [sx, sy] = px[0], [ex, ey] = px[px.length - 1];
   return `<svg class="${cls}" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
-    <g class="seg-tiles">${tiles}</g>
+    <g class="${tileCls}">${tiles}</g>
     <path d="${d}" fill="none" stroke="#fff" stroke-width="7" stroke-linejoin="round" stroke-linecap="round" opacity=".8"/>
     <path d="${d}" fill="none" stroke="var(--accent)" stroke-width="4" stroke-linejoin="round" stroke-linecap="round"/>
     <circle cx="${sx - x0}" cy="${sy - y0}" r="5" fill="#3ecf8e" stroke="#fff" stroke-width="2"/>
@@ -75,36 +75,38 @@ function newSegmentPanel() {
     <a class="seg-new-item" href="#/segments/new/activity">${ICON_SLICE}<span><b>From an activity</b><span class="hint">Choose an activity and cut a part of it.</span></span></a></div>`;
 }
 
-function segmentCard(s) {
+function segmentCard(s, fqs = "") {
   const head = `<div class="seg-card-head"><span class="tile-icon">${s.category ? groupIcon(s.category, 28) : typeIcon("other", 28)}</span>
     <span class="tile-title"><b>${esc(s.name)}</b><span class="hint">${km(s.distance_m)} · ${meters(s.ascent_m)} up · ${s.category ? esc(groupLabel(s.category)) : "any type"}${s.efforts ? ` · ${num(s.efforts)} effort${s.efforts === 1 ? "" : "s"}${CURRENT === "all" && s.people > 1 ? ` · ${num(s.people)} people` : ""}` : ""}</span></span>
     ${s.pending ? state("matching…", "warn") : ""}</div>`;
   const block = (label, e) => (e ? `<div class="seg-effort"><span class="hint">${label}</span><b>${mmss(e.elapsed_s)}</b>
       <span class="hint">${effortDay(e)}${personBit(e)}</span><span class="hint">${effortDetails(e, s.category)}</span></div>` : "");
-  return `<a class="card seg-card" href="#/segment/${s.id}">
+  return `<a class="card seg-card" href="#/segment/${s.id}${fqs ? "?" + fqs : ""}">
     ${staticMap(s.polyline)}${head}
     ${s.efforts ? `<div class="seg-efforts">${block("Best", s.best)}${block("Last", s.last)}</div>` : hint(s.pending ? "Looking for efforts in all activities…" : "No efforts yet.")}</a>`;
 }
 
 async function renderSegments(params) {
-  const [data] = await Promise.all([api("segments?" + new URLSearchParams(personParam())), (async () => { BASEMAPS ??= await api("basemaps"); })()]);
+  const [data] = await Promise.all([api("segments?" + new URLSearchParams({ ...personParam(), ...filterQuery(params) })), (async () => { BASEMAPS ??= await api("basemaps"); })()]);
   const showEmpty = store.get("segments-empty") === "1";
   const shown = data.items.filter((s) => s.efforts || s.pending || showEmpty);
   const hidden = data.items.length - shown.length;
   const who = CURRENT === "all" ? "anyone" : esc(personLabel(CURRENT));
   view.innerHTML = `
     ${pageHead("Segments", `
+      ${timeBadge(params)}${typeBadge(params)}
       ${badgeHtml("new", "New segment", "", { panel: newSegmentPanel() })}
       ${badgeHtml("options", "Options", "", { panel: `<div class="opt-panel">${checkCtl("segments-empty", showEmpty, "Show segments without efforts")}</div>` })}`)}
     ${hidden ? hint(`${num(hidden)} segment(s) without efforts by ${who} are hidden (Options).`) : ""}
-    ${shown.length ? `<div class="seg-grid">${shown.map(segmentCard).join("")}</div>`
+    ${shown.length ? `<div class="seg-grid">${shown.map((s) => segmentCard(s, new URLSearchParams(filterQuery(params)).toString())).join("")}</div>`
       : `<div class="card">${hint(data.items.length ? `No segment has an effort by ${who} yet.` : "No segments yet. A segment is a piece of route — a climb, a sprint, a lap — and every activity that covers it gets a time. Create one with <b>New segment</b>.")}</div>`}`;
   bindBadges(view.querySelector(".page-head"));
+  bindFilterBadges(view.querySelector(".page-head"), "#/segments", params);
   view.querySelector("input[name=segments-empty]").onchange = (e) => { store.set("segments-empty", e.target.checked ? "1" : "0"); renderSegments(params); };
   if (data.matching) {
     // Matching runs in the background; refresh once it is done.
     const poll = async () => {
-      const d = await api("segments?" + new URLSearchParams(personParam())).catch(() => null);
+      const d = await api("segments?" + new URLSearchParams({ ...personParam(), ...filterQuery(params) })).catch(() => null);
       if (!location.hash.startsWith("#/segments") || location.hash.includes("/new")) return;
       if (d && !d.matching) renderSegments(params); else timer = setTimeout(poll, 4000);
     };
@@ -165,18 +167,18 @@ function effortCard(title, e, group) {
 }
 
 async function renderSegment(id, params) {
-  const pq = new URLSearchParams(personParam());
+  const pq = new URLSearchParams({ ...personParam(), ...filterQuery(params) });
   const d = await api(`segments/${id}?${pq}`);
   const s = d.segment, g = s.category, sum = d.summary;
   const trendKind = store.get("segment-trend") === "months" ? "months" : "weeks";
   const effortSort = params.sort === "date" ? "date" : "time";
-  const allQ = { ...personParam(), sort: effortSort, limit: 50 };
+  const allQ = { ...personParam(), ...filterQuery(params), sort: effortSort, limit: 50 };
   const first = await api(`segments/${id}/efforts?${new URLSearchParams(allQ)}`);
   const grade = s.ascent_m != null && s.distance_m ? ` · ${num((s.ascent_m / s.distance_m) * 100, 1)} % avg climb` : "";
   view.innerHTML = `
-    <a class="back" href="#/segments">← Segments</a>
+    ${backLink(`#/segments${new URLSearchParams(filterQuery(params)).toString() ? "?" + new URLSearchParams(filterQuery(params)) : ""}`, "Segments")}
     <div class="page-head"><h2 class="tb-activity-name">${s.category ? groupIcon(s.category, 24) : typeIcon("other", 24)}<span>${esc(s.name)}</span></h2>
-      <div class="badges">${s.pending ? state("matching…", "warn") : ""}</div><span class="spacer"></span>
+      <div class="badges">${timeBadge(params)}${typeBadge(params)}${s.pending ? state("matching…", "warn") : ""}</div><span class="spacer"></span>
       <button data-rename>Rename</button><button class="danger" data-del>${ICON.trash} Delete</button></div>
     <div class="card"><div id="seg-map" class="map"></div>
       ${hint(`${s.category ? `Matches ${esc(groupLabel(s.category).toLowerCase())} activities` : "Matches activities of any type"} · created ${s.source === "map" ? "from map pins" : "from an activity"}${d.source ? ` (<a href="#/activity/${d.source.id}">${esc(d.source.name || typeLabel(d.source.activity_type))}</a>, ${localTime(d.source).slice(0, 10)})` : ""}.`)}
@@ -206,8 +208,10 @@ async function renderSegment(id, params) {
       ${first.items.length < first.total ? `<div class="sentinel" data-sentinel><span class="hint">Loading…</span></div>` : ""}</div>`
     : `<div class="card">${hint(s.pending ? "Looking for efforts in all activities…" : CURRENT === "all" ? "No activity covers this segment yet." : `${esc(personLabel(CURRENT))} has no effort on this segment yet.`)}</div>`}`;
 
+  bindBadges(view.querySelector(".page-head"));
+  bindFilterBadges(view.querySelector(".page-head"), `#/segment/${id}`, params);
   view.querySelectorAll("[data-switch=trend]").forEach((b) => b.onclick = () => { store.set("segment-trend", b.dataset.value); renderSegment(id, params); });
-  view.querySelectorAll("[data-switch=esort]").forEach((b) => b.onclick = () => { location.hash = `#/segment/${id}${b.dataset.value === "date" ? "?sort=date" : ""}`; });
+  view.querySelectorAll("[data-switch=esort]").forEach((b) => b.onclick = () => { location.hash = `#/segment/${id}?${new URLSearchParams({ ...filterQuery(params), ...(b.dataset.value === "date" ? { sort: "date" } : {}) })}`; });
   const all = view.querySelector("[data-all]");
   if (all) infinite(all, first.items.length, first.total,
     async (offset) => (await api(`segments/${id}/efforts?${new URLSearchParams({ ...allQ, offset })}`)).items,
@@ -245,7 +249,7 @@ function haversine(a, b) {
 }
 
 async function renderSegmentFromActivity(params) {
-  if (params.id) return segmentSlicer(params.id);
+  if (params.id) return segmentSlicer(params.id, params);
   const q = { gps: 1, limit: PAGE_SIZE, sort: "date", dir: "desc", ...personParam() };
   if (params.q) q.q = params.q;
   const fetchPage = (offset) => api("activities?" + new URLSearchParams({ ...q, offset }));
@@ -254,7 +258,7 @@ async function renderSegmentFromActivity(params) {
     <td><a href="#/segments/new/activity?id=${a.id}">${esc(a.name || typeLabel(a.activity_type))}</a></td><td class="num">${km(a.distance_m)}</td>
     <td class="num">${dur(a.moving_s)}</td>${CURRENT === "all" ? `<td>${avatar(person(a.person_id), 18)} ${esc(personLabel(a.person_id))}</td>` : ""}</tr>`;
   view.innerHTML = `
-    <a class="back" href="#/segments">← Segments</a>
+    ${backLink(`#/segments`, "Segments")}
     ${pageHead("New segment from an activity")}
     <div class="card">${hint("Step 1 of 2 — choose an activity with GPS. Next you cut the part that becomes the segment.")}
       <form class="card-row" data-search><input name="q" placeholder="Search by name…" value="${esc(params.q || "")}" style="min-width:240px"><button class="primary">Search</button></form>
@@ -270,7 +274,7 @@ async function renderSegmentFromActivity(params) {
     (items) => view.querySelector("[data-rows]").insertAdjacentHTML("beforeend", items.map(row).join("")));
 }
 
-async function segmentSlicer(id) {
+async function segmentSlicer(id, params = {}) {
   const [a, s] = await Promise.all([api("activities/" + id), api(`activities/${id}/streams?channels=time,lat,lon,altitude&max_points=3000`)]);
   const st = s.streams;
   const idx = [];
@@ -292,32 +296,50 @@ async function segmentSlicer(id) {
   const prof = alts.length ? A.map((v, i) => (v == null ? "" : `${i ? "L" : "M"}${px(i).toFixed(1)},${py(v).toFixed(1)}`)).join("") : "";
 
   view.innerHTML = `
-    <a class="back" href="#/segments/new/activity">← Choose another activity</a>
+    ${params.from === "activity" ? backLink(`#/activity/${params.id}`, "Activity") : backLink(`#/segments/new/activity`, "Choose another activity")}
     ${pageHead("New segment from an activity")}
-    <div class="card">${hint(`Step 2 of 2 — move the start and end. You can also click the map: the nearer end jumps there. Activity: ${typeName(a.activity_type, a.name || typeLabel(a.activity_type))} · ${localTime(a)} · ${km(a.distance_m)}`)}
+    <div class="card">
       <div id="slice-map" class="map seg-big-map"></div>
       <svg class="seg-profile" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
         <rect data-win y="0" height="${H}" class="seg-window"/>
         ${prof ? `<path d="${prof}" class="seg-profile-line" vector-effect="non-scaling-stroke"/>` : ""}</svg>
-      <div class="seg-range"><label>Start <input type="range" min="0" max="${n}" value="${lo}" data-lo></label>
-        <label>End <input type="range" min="0" max="${n}" value="${hi}" data-hi></label></div>
-      <div class="card-row"><b data-info></b></div>
-      <div class="card-row"><input name="seg-name" placeholder="Segment name" style="min-width:260px" maxlength="120">
-        ${checkCtl("any-type", false, `Match any activity type (otherwise ${esc(groupLabel(a.category).toLowerCase())} only)`)}
-        <span class="spacer"></span><span data-msg></span><button class="primary" data-save>Create segment</button></div></div>`;
-  const loIn = view.querySelector("[data-lo]"), hiIn = view.querySelector("[data-hi]");
-  const win = view.querySelector("[data-win]"), info = view.querySelector("[data-info]");
+      <div class="tf-slider seg-slider"><div class="tf-track"><div class="tf-fill" data-fill></div></div>
+        <input type="range" class="tf-thumb" min="0" max="${Math.round(D[n])}" data-end="lo" aria-label="Start">
+        <input type="range" class="tf-thumb" min="0" max="${Math.round(D[n])}" data-end="hi" aria-label="End"></div>
+      <div class="tf-values"><span data-at="lo"></span><span data-at="hi"></span></div>
+      <div class="stat-strip seg-slice-stats">
+        <div class="stat-item"><span class="stat-label">Length</span><span class="stat-value" data-len></span><span class="stat-note" data-len-note></span></div>
+        <div class="stat-item"><span class="stat-label">Time</span><span class="stat-value" data-time></span></div>
+        ${alts.length ? `<div class="stat-item"><span class="stat-label">Climb</span><span class="stat-value" data-up></span></div>` : ""}</div>
+      <div class="seg-slice-form">
+        <input name="seg-name" placeholder="Segment name" maxlength="120">
+        ${checkCtl("any-type", false, `Any activity type, not only ${esc(groupLabel(a.category).toLowerCase())}`)}</div>
+      <div class="panel-actions"><span data-msg></span><button class="primary" data-save>Create segment</button></div></div>`;
+  const inputs = { lo: view.querySelector('[data-end="lo"]'), hi: view.querySelector('[data-end="hi"]') };
+  const win = view.querySelector("[data-win]"), fill = view.querySelector("[data-fill]");
+  const at = (m) => { // index of the point nearest to a distance along the track
+    let a0 = 0, b0 = n;
+    while (b0 - a0 > 1) { const mid = (a0 + b0) >> 1; if (D[mid] < m) a0 = mid; else b0 = mid; }
+    return m - D[a0] <= D[b0] - m ? a0 : b0;
+  };
   let map = null, raf = 0;
   const update = () => {
     raf = 0;
     if (lo > hi) [lo, hi] = [hi, lo];
-    loIn.value = lo; hiIn.value = hi;
+    inputs.lo.value = Math.round(D[lo]); inputs.hi.value = Math.round(D[hi]);
     win.setAttribute("x", px(lo).toFixed(1));
     win.setAttribute("width", Math.max(1, px(hi) - px(lo)).toFixed(1));
+    fill.style.left = `${(px(lo) / W) * 100}%`;
+    fill.style.width = `${((px(hi) - px(lo)) / W) * 100}%`;
+    view.querySelector('[data-at="lo"]').textContent = `Start ${km(D[lo])}`;
+    view.querySelector('[data-at="hi"]').textContent = `End ${km(D[hi])}`;
     const len = D[hi] - D[lo];
     let up = 0;
     for (let i = lo + 1; i <= hi; i++) if (A[i] != null && A[i - 1] != null && A[i] > A[i - 1]) up += A[i] - A[i - 1];
-    info.innerHTML = `${km(len)} · ${dur(T[hi] - T[lo])} in this activity${alts.length ? ` · ~${meters(up)} up` : ""}${len < 100 ? ` ${state("at least 100 m", "bad")}` : ""}`;
+    view.querySelector("[data-len]").textContent = km(len);
+    view.querySelector("[data-len-note]").innerHTML = len < 100 ? state("at least 100 m", "bad") : "";
+    view.querySelector("[data-time]").textContent = dur(T[hi] - T[lo]);
+    if (alts.length) view.querySelector("[data-up]").textContent = `${meters(up)}`;
     if (map?.getSource("slice")) {
       map.getSource("slice").setData(lineFeature(coords.slice(lo, hi + 1)));
       map.getSource("ends").setData({ type: "FeatureCollection", features: [
@@ -326,8 +348,16 @@ async function segmentSlicer(id) {
     }
   };
   const schedule = () => { if (!raf) raf = requestAnimationFrame(update); };
-  loIn.oninput = () => { lo = +loIn.value; schedule(); };
-  hiIn.oninput = () => { hi = +hiIn.value; schedule(); };
+  // One slider, two thumbs: a thumb pushes the other one along instead of crossing it.
+  inputs.lo.oninput = () => { lo = at(+inputs.lo.value); if (lo > hi) hi = lo; schedule(); };
+  inputs.hi.oninput = () => { hi = at(+inputs.hi.value); if (hi < lo) lo = hi; schedule(); };
+  view.querySelector(".seg-slider").addEventListener("pointerdown", (e) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    const m = ((e.clientX - r.left) / r.width) * D[n];
+    const lower = Math.abs(m - D[lo]) <= Math.abs(m - D[hi]) && !(lo === hi && m > D[hi]);
+    inputs.lo.style.zIndex = lower ? 3 : 2;
+    inputs.hi.style.zIndex = lower ? 2 : 3;
+  });
   update();
   view.querySelector("[data-save]").onclick = async (e) => {
     const msg = view.querySelector("[data-msg]");
@@ -369,7 +399,7 @@ async function renderSegmentFromMap(params) {
   const [tracks] = await Promise.all([api("heatmap/tracks?" + new URLSearchParams(q)), (async () => { BASEMAPS ??= await api("basemaps"); })()]);
   const groups = [...new Set(tracks.items.map((t) => t.category))];
   view.innerHTML = `
-    <a class="back" href="#/segments">← Segments</a>
+    ${backLink(`#/segments`, "Segments")}
     ${pageHead("New segment from the map")}
     <div class="card">${hint("Click the map to place pins along the route, in riding order (drag a pin to move it). Grey lines are your routes; the segment follows the activity that passes every pin (within 50 m), cut between the first and the last pin.")}
       <div class="card-row">${row("Group", selectCtl("snap-group", [["", "Any group"], ...groups.map((g) => [g, groupLabel(g)])], ""))}

@@ -28,9 +28,8 @@ small ARM boards such as the Home Assistant Yellow (Raspberry Pi CM4).
 ### Non-goals (for now)
 - Syncing with Strava or other cloud services (Garmin Connect only through each person's
   own personal API key, see §3a).
-- Archiving original FIT files. The folder is the source of truth for files;
-  the database keeps the derived data.
-- Sleep, daily monitoring, HRV and other non-activity FIT data (skipped on import).
+- Sleep, daily monitoring, HRV and other non-activity FIT data (skipped on import for now;
+  the files are archived, so the Wellbeing stage can read them later).
 - Editing activities beyond category, name and deletion.
 
 ---
@@ -123,6 +122,18 @@ with the Wellbeing stage, the full set of lifestyle data (steps, sleep, stress, 
      the FIT id dedup applies (activities already imported from a folder become `duplicate`).
      `garmin_activities` remembers every downloaded id → nothing is downloaded twice.
    - Optional *Download from* date per person limits the history.
+   - The Garmin card says up front that downloading is slow on purpose and estimates the
+     history time (`GET /garmin` → `estimate`, `garmin.history_estimate`): the pace is measured
+     from what was downloaded (once it covers ≥ 30 days and ≥ 10 activities), otherwise assumed
+     as 5 years with an activity every 3 days (≈ 608 activities); the history ends at
+     *Download from* or 5 years back. Runs = remaining ÷ 60 (shared by all people), time = runs
+     × (~3 min per run) + the interval between runs. With the default 1 hour: a typical
+     history ≈ 11 runs ≈ 11 h. Each person row shows the activities left; *Automatic download*
+     shows the total left or "history complete".
+   - What starts a download: the automatic run every `scan_interval_min` (default 1 h,
+     counted from the end of the last run; 0 = off), *Download now*, and later the HA stdin
+     trigger of the add-on. After the history is complete each run only reads the first page of
+     the activity list until it meets known activities (1–2 requests when nothing is new).
    - The key is stored in the database (never returned by the API, only `…last4`).
    - Later: sleep, HRV, stress, resting HR, steps, weight for the Wellbeing tab. Stored with
      the key person + day (+ metric), written as upserts, so a day fetched again (or the same
@@ -137,6 +148,18 @@ with the Wellbeing stage, the full set of lifestyle data (steps, sleep, stress, 
 3. **Watch a folder** — watched folder, assigning files to people (with the watch table when
    "assign by watch" is chosen), automatic folder scan. Scheduled runs happen in folder and
    Garmin mode (never for uploads).
+
+**One archive for every source** (unified on the Garmin API model): every file Trailbook
+reads is kept in `uploads/` next to the database. Garmin downloads and uploads are saved there
+directly; files of the watched folder are copied there after the scan (phase `archive` of the
+import process, `uploads/_folder/<path in the folder>`, mtime kept, written as `.part` and
+renamed) — activities and also sleep, monitoring and other files skipped today. So every file
+can be read again by a later importer version (more fields, wellness), even after it was
+deleted from the folder or the folder was changed. `files.source_rel` is the path in the
+watched folder, `files.rel_path` where the bytes are read (`@uploads/_folder/…` once archived).
+A changed folder file is copied again. Cost: folder files take disk space twice (the folder
+may be cleaned up at any time). Existing installs archive their folder files on the next run,
+also when the data source is no longer the folder (as long as the folder exists).
 
 ## 4. Folders and people
 
@@ -200,7 +223,8 @@ The very first import is started by the user from the Import page after choosing
   - unknown path → `new`;
   - known path, same size and mtime → unchanged, nothing to do;
   - known path, changed size or mtime → re-hash, re-check;
-  - path in DB but not on disk → `missing` (data kept).
+  - path in DB but not on disk → `missing` (data kept) — only for files not archived yet;
+    an archived file deleted from the folder needs nothing.
   - missing path that appears again → back to its previous status.
 - A scan of several thousand files must take well under a few seconds on a CM4.
   Measured on a PC: 5 000 files 0.25 s, 20 000 files 1 s (first and repeated scan).
@@ -221,7 +245,7 @@ Three keys, from cheap to strong:
 | `skipped` | Not an activity (sleep, monitoring, settings, …). Reason stored. |
 | `duplicate` | Activity already exists from another file. |
 | `error` | Could not be parsed. Error message stored; can be retried. |
-| `missing` | File gone from disk. **Activity data stays** until the user deletes it. |
+| `missing` | File gone from disk before it was archived. **Activity data stays** until the user deletes it. |
 | `removed` | The user deleted the activity. The file is not imported again by later scans. |
 
 For every processed file the manager stores the FIT `file_id` (`fit_uid` = device serial +
@@ -259,6 +283,11 @@ Each file goes through stages. Each stage writes its own table.
 | 6 | Laps | Rows in `laps`. |
 | 7 | Best efforts | Power / pace / HR bests in `best_efforts`. |
 | 8 | Load | Training load on the activity; `daily_load` recomputed from that date on. |
+
+**Activity name** = the Garmin Connect title (`activityName`, kept in `garmin_activities`).
+FIT files carry no title, so an activity from a folder or upload has no name and the UI
+shows its type. When Garmin later delivers the same activity (imported or duplicate), its
+title replaces the empty name. A name the user set (`name_overridden`) is never replaced.
 
 Every activity stores `importer_version`. When a later version adds a metric, activities
 whose file still exists can be reprocessed in the background; others keep their data and
@@ -301,11 +330,35 @@ activities from files still on disk.
 `hr_max`, `hr_rest`, `lthr` (lactate threshold HR), `ftp` (W), `threshold_pace` (s/km),
 `swim_css` (s/100 m), `weight` (kg). All optional.
 
-Set in Settings › People › *Training thresholds* as rows with a *valid from* date; each
-field comes from the latest row that sets it, so older activities keep older values. Empty
-fields are estimated: HR max = highest plausible max HR recorded (100–230 bpm), resting HR
-= 60 bpm, threshold HR = 90 % of HR max. Saving or deleting a row recomputes the load of
-that person's activities in the background.
+Each field, in this order:
+1. **Own value** — set with the pencil in the People table (Settings › People), as rows with
+   a *valid from* date; each field comes from the latest row that sets it, so older
+   activities keep older values. An own value replaces the watch value.
+2. **Watch** — what the watch had set when the activity was recorded, read from each
+   activity FIT file: HR max, threshold HR, FTP (`zones_target`), resting HR, weight
+   (`user_profile`), with the session's `time_in_zone` as a fallback; 0 / out-of-range
+   values are ignored. Stored per activity (`activities.watch_*`); an activity uses its own
+   values, otherwise those of the person's nearest activity (latest before, else first
+   after). Activities imported before this are read once more in the `thresholds` phase
+   (`watch_version`). Garmin API values (lactate threshold pace, FTP history) may follow.
+3. **Estimate** — HR max = highest plausible max HR recorded (100–230 bpm), resting HR
+   = 60 bpm, threshold HR = 90 % of HR max.
+
+An activity whose load used an estimated or default value is flagged
+(`activities.load_estimated`). Estimates are normal (threshold HR = 90 % of the watch HR max
+is no warning), so the Fitness page warns only about what can really distort the load of
+the period's activities — one ⚠ icon after the page title, a short list on click, link to
+Settings › People:
+- a value the load method needs has no basis in the person's data: resting HR default, or
+  HR max from the highest recorded HR (no watch value, none set);
+- a year whose activities borrow a watch value more than a year away (no watch data that
+  year).
+In the editor, a field with such an estimate has *Use estimate*: accepting it stops the
+warning for that field (stored per person in settings, `accepted_estimates:<person>`;
+clicking again turns the warning back on). Saving or deleting an own value recomputes the
+load of that person's activities in the background. The People table shows the values in
+use (estimated ones marked); the pencil opens an editor under the row with the value in
+use, its source (Watch / Set / Estimated) and the watch value per field.
 
 ### 7.3 Training load
 Computed after import by `analysis.py` from the stored streams (phase `analysis` of the
@@ -333,7 +386,9 @@ Form zones: > 25 transition, 5…25 fresh, −10…5 grey zone, −30…−10 op
 - HR: max average over 1, 5, 20, 60 min.
 Streams are resampled to 1 s; gaps > 10 s break a window. Stored in `best_efforts`; shown on
 the activity page and as records + curve in Statistics (all time, last 90 days, per year,
-with the all-time curve dashed for comparison).
+with the all-time curve dashed for comparison). On the activity page each effort is compared
+with the person's best **in the same category** (running power is no record for a ride), and
+the power curve tooltip shows the date that best was set.
 
 ---
 
@@ -346,7 +401,8 @@ persons(id TEXT PK /* folder name */, label, color, created_at, archived)
 person_thresholds(person_id, valid_from DATE, hr_max, hr_rest, lthr, ftp,
                   threshold_pace, swim_css, weight)
 
-files(id PK, person_id, rel_path, zip_member, size, mtime, sha256,
+files(id PK, person_id, rel_path /* read from */, source_rel /* path in folder */,
+      zip_member, size, mtime, sha256,
       status, skip_reason, error, activity_id,
       first_seen, last_seen, missing_since, imported_at)
 
@@ -363,8 +419,10 @@ activities(id PK, person_id, fit_uid UNIQUE, start_time_utc, utc_offset_s,
 tracks(activity_id PK, polyline, point_count)
 streams(activity_id, channel, encoding, data BLOB, PK(activity_id, channel))
 laps(activity_id, idx, start_offset_s, elapsed_s, moving_s, distance_m,
-     avg_hr, max_hr, avg_speed, avg_power, avg_cadence, ascent_m)
-best_efforts(activity_id, kind /* power|pace|hr */, key /* seconds or metres */, value)
+     avg_hr, max_hr, avg_speed, avg_power, avg_cadence, ascent_m,
+     target /* hr|power|speed|cadence: workout step target */, target_low, target_high)
+best_efforts(activity_id, kind /* power|pace|ride|hr */, key /* seconds or metres */, value,
+             start_s, end_s /* where: seconds from the start */)
 daily_load(person_id, date, load, ctl, atl, tsb, PK(person_id, date))
 import_runs(id, started_at, finished_at, trigger, scanned, new, imported,
             skipped, duplicates, errors, missing)
@@ -396,12 +454,13 @@ All JSON, prefix `/api`. Read endpoints accept `person`, `from`, `to`, `category
 | PATCH | `/activities/{id}` | Name, category override. |
 | DELETE | `/activities/{id}` | Delete activity (used for missing files). |
 | GET | `/tracks` | All simplified tracks for a filter, as compact binary/GeoJSON, cacheable (ETag). |
-| GET | `/fitness?person&from` | Daily load, CTL, ATL, TSB; methods; thresholds in use. |
+| GET | `/fitness?person&from&to` | Daily load, CTL, ATL, TSB, ramp rate (CTL change in 7 days); methods; thresholds in use; threshold warnings of the period. |
 | GET | `/calendar?from&to&person` | Activities by local day. |
 | GET | `/stats/totals?person&by&type&year` | Totals per year / month / week and per group. |
 | GET | `/stats/records?person&kind&range&type` | Best effort per distance / duration. |
 | GET/PUT | `/thresholds/{person}` | Threshold rows, values in use (set / auto / default). |
 | DELETE | `/thresholds/{person}/{valid_from}` | Delete a threshold row. |
+| PUT | `/thresholds/{person}/accept` | Accept (or not) the estimate of HR max / resting HR: `{field, accepted}`. |
 | GET | `/segments?person` | Segments with effort count, best and last effort (for a person or everyone). |
 | POST | `/segments` | Create from an activity slice (`activity_id`, `start_s`, `end_s`, `name`, `any_type`). |
 | POST | `/segments/snap` | Pins → slice of the best matching own activity (preview, nothing stored). |
@@ -428,6 +487,36 @@ All JSON, prefix `/api`. Read endpoints accept `person`, `from`, `to`, `category
 
 The visual design is defined by the project owner; the technical preview follows these rules.
 
+### UI rules (apply everywhere)
+- **One button style: the badge** (`button.badge`) — every button (Reset, Delete activity as
+  `badge danger`, Create segment, Summary, Options). A button with nothing to do is hidden.
+- **One control style.** Choices in a page or card header are badges like the Map filters
+  ("Colour: None", "Markers: Every 1 km", "Group: 1 lap"), with a panel of radio items
+  (`pickList`) — metric choices show their icon. Option/edit panels look like Map › Options
+  (`opt-panel` rows). Badge labels are text only; buttons inside panels are plain text buttons
+  (`button.small`, `.danger`), no decorative icons. No plain `<select>` in headers.
+- **Maps**: zoom buttons bottom right; distance scale bottom left on every map (a plain line
+  with a label, no box); the small attribution bottom right under the buttons; a full-screen
+  button top right (maps that are not already full screen); the colour legend of the activity route stays top left on a
+  semi-transparent block.
+- **One level below a tab** (an activity, a segment, the segment creator): a square back button
+  with a left arrow, separate from the page header but framed like it and sticky with it, in
+  the left margin. When the screen is too narrow for the margin it folds above the header as
+  the text link "← Activities", scrolling away as before. Use `backLink(href, label)`.
+- **Charts** follow `docs/CHARTS.md`. Distance is always shown with two decimals.
+- **Numbers**: decimal comma and a space between thousands (`1 234,56`) everywhere (`num()`).
+- **Defaults vs user settings.** Two kinds, decided per setting with the owner:
+  - *Fixed every visit* — reset whenever the tab is entered (`TAB` state in `preview.js`):
+    first view of a tab (Activities → Tiles, Map → Heatmap), Summary off, filters Time: All /
+    Type: All, activity route Colour: None and km markers on (1 km, 5 km for rides and
+    activities ≥ 40 km), lap grouping 1 / 5, chart x axis Distance. Options panels open on
+    their first section.
+  - *Remembered user settings* — saved on the server per person (`ui_settings`, 'all' =
+    Everyone; `GET /api/ui-settings?person=`, `PUT /api/ui-settings/{key}?person=`), so they
+    follow the person to every device: Map › Options (base map, tone, heatmap and tiles style).
+  - When a new default comes up, ask the owner which kind it is.
+- Turning Summary on scrolls the page to the top, where the summary appears.
+
 ### Navigation
 - Main header: **Activities · Calendar · Map · Segments · Fitness · Statistics**, then on the right
   the **person picker** (the only coloured icon), the light/dark switch and a **gear** for
@@ -436,22 +525,32 @@ The visual design is defined by the project owner; the technical preview follows
   default (never Everyone). The choice is remembered per browser.
 - With **Everyone** selected, Fitness and Statistics are hidden (they are per person) and a
   **Compare** tab appears: people side by side (activities, distance, time, ascent; per group).
-- Settings has tabs: **General** (folder, person mode, automatic scan), **People** (label,
-  icon, colour, drag & drop order, watches), **Import** (scan card + file table),
-  **Activity types** (read-only list with the FIT sport/sub-sport behind every type).
+- Settings has tabs: **General** (appearance, data connection and its options), **People**
+  (label, icon, colour, drag & drop order, watches, thresholds via the pencil), **Imported** (status card +
+  file table), **Backup**. Read-only lists are not shown (the activity type list was removed;
+  types are changed per activity).
+- Settings rules: different settings one below the other, the options of one setting side by
+  side; selects and radio choices save on change (only free text such as the folder path has a
+  *Save* button); a card that cannot be used yet is hidden, not shown with a warning; short
+  notes go into the title (grey, in brackets) or into a numbered step, never as a loose line.
+- Imported status card: *Current setting* (data connection, folder) with a *Change* link,
+  *Automatic* (interval, next run), *Last run* (time and only the non-zero counts), *To review*
+  when there are missing files. The button appears only when running it can change something:
+  *Scan now* with a folder set, *Download now* with a connected Garmin account (or queued
+  files), *Import N queued files* for uploads with files waiting.
 
 ### Views
 | View | Content |
 |---|---|
-| Activities | KPI row (count, distance, time, ascent, calories for the current filters); list / small tiles / large tiles (with route) switch at the right of the page title; sortable columns with a filter row. |
-| Activity | Route, stream charts, laps, best efforts; change type; delete. |
+| Activities | KPI row (count, distance, time, ascent, calories for the current filters); Tiles (route on a static map, always the Faded light tone) / List switch (Tiles first) at the right of the page title; sortable columns with a filter row. |
+| Activity | Back button; header with type icon, name, start date (smaller, lighter), Charts and Options badges (Options: X axis, power averaging), an **Edit** badge (panel like Map › Options: name — empty = back to the Connect title or the type —, type, delete) and **Create segment** (activities with a route; opens the segment creator on this activity). FIT activity files carry no surface type, so the route has no surface colouring. Tiles at the top, each its own card, side by side (flex, wrapping on narrow screens, as low and as even as possible; columns have different widths — power widest, best efforts narrow): first column four small tiles one under another — **Distance**, **Moving time**, **Elapsed time**, **Calories** (active / total; active = total − the resting share the watch writes) — each with a title like a chart title (same font, 18 px icon) and the value below; **Gear** (icon in the title; small pictures; from the FIT `device_info`: the watch or bike computer and the sensors — HR strap, power meter, radar, lights…; a drawing per kind, or the owner's own photo from `<data>/device-images/<product>.png|jpg|webp`, e.g. `edge_850.png`; unknown or older devices show a generic picture; no battery status); **Heart rate in zones** and under it, in the same column, **Surface** (its own tile: a stacked bar in the surface hatching and the share of paved / gravel / dirt / unknown); heart rate zones: (Garmin's time in HR zones from the FIT `time_in_zone` message — one bar per zone with its share; time and zone range on hover; a grey row for the time below zone 1); **Power** (rides only, i.e. a power meter, not running power) as a sliding tile: first the **power curve** (a chart of the standard filling the tile: best average power 5 s … 5 h on a log axis — every duration labelled, a stop counts as 0 W —, this activity filled, the comparison dashed and lightly filled, crosshair with the values; hovering a point highlights that effort on the charts and the map), then **Power in zones**; dots under it switch; **Best efforts** (laurel icon; fastest time per distance — runs 400 m … marathon, rides 5, 10, 20, 30, 40, 50, 100 km and the best 20 min and 1 h power — in columns: distance, time, average speed (rides) or pace (runs) and the best of the comparison under a short header (ATH, Year, 12 mo…), a laurel there when this activity is the best; hovering highlights the stretch on the charts and the map). Best efforts columns: This activity | This year | the comparison. Options › **Compare with** (the last column): All time (default, ATH) | Last 12 months | Last 3 months | Last 30 days, saved per person (`ui_settings` key `activity-compare`); used by the power curve and the best efforts. Zone colours are fixed: HR zones green → red and power zones yellow → violet, the same scales as the route colouring. Titles of all tiles and of the Route card use the chart title font with an icon; the route map is 414 px high. No training load card on this page. Options › **Route lines**: where the route runs twice (out and back) the lines are drawn side by side (default) or on top; saved per person (`ui_settings` key `activity-route-offset`). FIT activity files (Edge included) carry no road surface and no gear (bike, shoes: those live in Garmin Connect only); it comes from OpenStreetMap (`surface.py`): the route is cut into ~1 km boxes, the ways with a highway tag in them are fetched from an Overpass server (`overpass_url` setting, default overpass-api.de; only these boxes are sent), each track point (every 20 m) takes the surface of the nearest way within 25 m (surface tag; without it roads count as paved, tracks by their grade, paths unknown) and the result is cached in `activities.surface` as runs along the distance with shares. Runs shorter than 80 m join their neighbours (no flicker when a few points catch a road beside a gravel path; the stored runs stay point by point, the page gets them smoothed). Settings › General › Road surface: when an activity is opened (default) or all activities slowly in the background (newest first, one at a time with a 15 s pause, 10 min after a server error; setting `surface_mode`). Shown for every activity with a route for now (later maybe only wheeled sports). Hovering a surface kind in its tile highlights all its stretches on the charts and the map. With at most one device the Surface tile shares the Devices column and heart rate zones take a full column. When there is no power tile, a **Heart rate curve** tile (same chart as the power curve: best average HR for 10 s … 1 h, this activity and the comparison) takes its place. Tiles without a value are hidden, and values that belong to a chart (HR, pace, power, cadence, ascent…) live only next to it, even when it is hidden. Route card: Data badge (single colour, speed, heart rate, power / cadence / altitude when recorded, surface — one colour per kind with a legend of the kinds; 5–95 % range, legend with the scale on the map; HR green → red, power → violet, altitude green → brown like a relief map) and Markers badge (numbered dot in the accent colour every 1 km, every 5 km for rides and activities ≥ 40 km); a distance scale is always on the map; a reset view button (refresh pictogram, in a block like Fullscreen, under it) appears only after the map was moved, zoomed or rotated. Charts right below the map (docs/CHARTS.md), laps (Group badge), best efforts. |
 | Calendar | Month view (Mon–Sun, activity chips with type icon and distance or time, week totals: time, distance, load, count) and year view (12 small month grids coloured by moving time per day); ‹ › and Today; summary strip for the shown month/year. With Everyone: a person dot on each chip. |
 | Heatmap | All routes as low-opacity lines; explorer tiles, max square, cluster. |
-| Fitness | Summary (fitness, fatigue, form with zone, ramp rate, 7-day load); chart of fitness / fatigue lines over daily load bars and a form chart with zone bands, shared hover tooltip; range 3 / 6 / 12 months / all; card explaining methods with counts and the thresholds in use. |
+| Fitness | Header: Time filter, Options (activity icons under the fitness chart, fitness filled / line, fatigue, form zones; saved per person) and a Summary toggle (off when the tab is entered); on the right two toggles with icons (Fitness, Form), each shows or hides its chart, any number may be on (remembered in the browser). A ⚠ icon after the title only when thresholds can distort the load (§7.2). Summary (fitness, fatigue, form with zone, ramp rate, 7-day load) at the end of the period; charts per docs/CHARTS.md (Fitness page): fitness and fatigue lines, and form with the axis turned (more tired = higher), zone bands and the line coloured by its zone; ramp rate (fitness change in 7 days; above 8 too fast, below 0 losing fitness) is only a summary value, as it is the slope of the fitness line; card explaining the calculation: four steps (load, fitness, fatigue, form), the load methods in the order they are tried with counts, and the thresholds in use as tiles with their source. |
 | Wellbeing | Sleep, stress, heart rate (mostly charts), from the Garmin API; some daily values also in the Calendar. Later stage. |
 | Statistics | *Totals*: filter (type, year, group by year/month/week, chart metric), bar chart, table per period (years link to their months), moving time by group. *Records*: running pace / power / heart rate, range all / 90 days / year, curve + table with links to activities. |
 | Compare | Everyone side by side (only with “Everyone” selected). |
-| Settings › Backup | Export (with / without FIT files, optionally with Garmin keys), list of exports (download, restore, delete), restore from an uploaded export into a chosen folder; progress while a job runs, page reloads after a restore. |
+| Settings › Backup | Export (with / without FIT files, optionally with Garmin keys), list of exports (download, restore, delete), restore from an uploaded export (one file picker, no folder choice: every file goes into the archive); progress while a job runs, page reloads after a restore. |
 
 ### Page structure
 Every tab has the same header: the **title**, then **badges** in one row (order: Filter,
@@ -472,8 +571,30 @@ map the same frame floats over the map without the fade.
 - Accent colour: sky by default; Settings › General offers sky, teal, indigo, violet, rose,
   amber, green, graphite (saved per browser, applied before first paint). Logo icon before
   “Trailbook” uses the accent.
-- Filters inside a badge panel are applied with **Apply** (or Enter), so several can be set
-  first; a **Clear** badge appears right after *Filter* while filters are active.
+- **Filters are the same on every tab** that has them (Activities, Map, Segments and a
+  segment, Statistics › Totals and Records, Compare): first **Time**, then **Type**, then the
+  tab's own badges (Options, Summary, …). Each opens its own panel; nothing changes until
+  **Apply**, and **Clear filter** (next to Apply, only while that filter is set) removes just
+  that filter (Clear filter and Apply side by side on the right, the same outlined button like
+  the badges). URL parameters `from` / `to` (local days, inclusive; left out at the ends of
+  the data) and `types` (comma list of type keys; `g:<group>` = a whole group), handled by
+  one function on the server (`activity_filters`) for every endpoint.
+  - *Time*: a range slider with a dot at each end, from the first activity (`GET
+    /api/time-range?person=`) to today; under the dots the two dates in small muted numbers
+    (no dash between them) — a click on the year, month or day makes that number editable in
+    place, without a box (digits only, Enter keeps it, Escape cancels, the day is clipped to
+    the month); under that one chip per year (and *All time*) to pick a whole year. The badge shows *All time*, the year, or `from – to`.
+  - *Type*: the panel is the list itself — a checkbox per type with its icon and count,
+    under a small heading per group; the heading of a group with more than one type is itself
+    a checkbox that selects the whole group (half-checked when only some types are); only types with
+    activities of the selected person. The badge shows *All*, the group, one or two type
+    names, or *n types*. In Records › Running pace the type is fixed (running) and the badge
+    is hidden.
+  Action buttons in Settings have the same size (30 px high, 13 px semibold): the primary ones
+  stay blue, the others are outlined like the filter buttons; selects and the file picker
+  line up at 30 px.
+  Calendar and Fitness have no filters: their time is the page navigation (month / year,
+  range switch). Name and person stay as column filters in the Activities list.
 - The main switch (e.g. Heatmap | Explorer tiles, List | Tiles | Large tiles, settings tabs)
   looks like the main navigation: no box, the selected option on a light tint in the accent
   colour.
@@ -481,13 +602,19 @@ map the same frame floats over the map without the fade.
   when a page gets long and the header ends at the scrollbar; the full-screen map has no
   scrollbar and shifts header and bar by the measured scrollbar width to line up.
 - The heatmap / explorer tiles page is called **Map** in the navigation and its title.
+- Map start view: fit all routes, then zoom out 4 levels — but never further than a view of
+  central Europe (lon 2…24°, lat 40…52°: about zoom 5 on a laptop
+  screen, where Malta gets its label) on the current screen. If the routes do not fit even
+  there (activities on several continents), the map starts at that level centred on the 10°
+  area with most activities.
 - **Activity type icons** (“Trailbook B” set, `assets/icons/`, served from `static/icons/`,
   `TrailbookIcons.render(key, {size})`, unknown → `other`): small (18 px) next to activity
-  names and types in every list and filter, larger (28 px, the same as the segment cards) only in Activities › tiles and Segments.
-  The type filter is a custom dropdown with icons and search (a native select cannot show
-  icons); it keeps its value in a hidden input, so staged filters work unchanged. It lists
-  only types (and groups) with activities of the selected person, each with its count
-  (`GET /api/types/counts?person=`).
+  names and types in every list and filter, larger (28 px) only on Segments cards; Activities › tiles use the standard size too.
+  The Type filter (see *Filters* above) lists only types with activities of the selected
+  person, each with its count (`GET /api/types/counts?person=`).
+- **Metric icons** (`assets/metric-icons/`, served from `static/icons/`, 20 or 32 px) coloured
+  by metric group — sets, colours and usage in `docs/ICONS.md`. Used so far in
+  Settings › Imported in front of FIT files that are not activities.
 - Lists load **50 rows at a time** while scrolling (no page buttons) — the rule for every
   list (activities, tiles, import files, later calendar lists).
 - Summary instead of big KPI cards: one compact strip (label, value, small note), e.g.
@@ -606,8 +733,8 @@ a single, documented operation.
   │                          size + sha256 + mtime of every entry, source folder and data source
   ├── trailbook.db         ← consistent snapshot (SQLite online backup API, not a raw file copy)
   └── files/
-      ├── root/...         ← FIT/ZIP files of the watched folder, same structure
-      └── uploads/...      ← uploaded files and Garmin downloads
+      ├── root/...         ← watched-folder files not archived yet, same structure
+      └── uploads/...      ← the archive: uploads, Garmin downloads, folder copies (_folder/)
   ```
 - Settings (people, watches, thresholds, accent, data source...) live in the database, so there
   is no separate `app/` folder. Transient state (import progress) is removed from the snapshot.
@@ -625,14 +752,16 @@ a single, documented operation.
 
 ### Restore
 - Settings › Backup: upload an export or pick one from the list; `trailbook restore ZIP
-  [--root DIR] [--yes]` from the CLI.
+  [--yes]` from the CLI.
 - Steps: validate `manifest.json` → refuse an export from a newer format or schema → refuse an
-  install with data unless confirmed → restore files (root files into the chosen folder, default
-  the current folder or `library/` next to the database; uploads into `uploads/`), each checked
-  against its size + sha256 and given back its mtime, unsafe paths rejected → check the database
-  copy (`PRAGMA integrity_check`) and copy it into the live database with the backup API → run
-  migrations if the export is older → set the folder setting → scan (Garmin downloads wait for
-  the next run). Because paths, sizes and mtimes match, the scan finds nothing to re-import.
+  install with data unless confirmed → restore every file into the archive (`files/uploads/…`
+  into `uploads/`, watched-folder files not archived on the old install `files/root/…` into
+  `uploads/_folder/…`), each checked against its size + sha256 and given back its mtime, unsafe
+  paths rejected → check the database copy (`PRAGMA integrity_check`) and copy it into the live
+  database with the backup API → run migrations if the export is older → point the restored
+  folder rows at the archive; keep the watched-folder setting only if that folder exists on
+  this device (otherwise it is cleared and chosen in Settings › General) → scan (Garmin
+  downloads wait for the next run). Nothing depends on a folder of the old device.
 - A damaged archive stops before the database is touched; files already written stay.
 - Restoring onto a non-empty install requires explicit confirmation and replaces the database.
 - SQLite files and FIT files are architecture-independent, so `amd64` ↔ `aarch64` moves are fine.
@@ -687,3 +816,18 @@ API: `GET /api/backup`, `POST /api/export`, `GET/DELETE /api/export/{name}`, `PO
 
 Training-load concepts follow publicly documented models
 (TSS, TRIMP, CTL/ATL/TSB).
+
+
+### Garmin Connect data beyond the FIT file
+
+Activities already here (e.g. from a folder) are matched to Connect activities by start time
+(±90 s) and not downloaded again; their activity-list entry is kept (`garmin_activities.summary`):
+title (becomes the name unless the user set one), location, training effect (aerobic /
+anaerobic, label), Garmin's training load, Body Battery change, elevation-corrected flag,
+BMR calories, intensity minutes. Activity details (one request per activity, within the
+download budget) give extra streams kept in `connect_streams` (not dropped on a FIT
+reimport): Body Battery, grade adjusted speed and Garmin's elevation, which replaces the
+altitude chart when Garmin corrected the elevation. The page shows location after the date,
+Training effect and Body Battery as small cards (two columns when there are more than four).
+Gear (bike, shoes) is not available through the personal API key (gear-service: 404) and is
+not in FIT files.

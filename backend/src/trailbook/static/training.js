@@ -129,157 +129,227 @@ async function renderCalendar(params) {
 
 // ---- Fitness ----------------------------------------------------------------------------
 
-const FITNESS_RANGES = [["90", "3 months"], ["180", "6 months"], ["365", "1 year"], ["all", "All"]];
+// Sections of the Fitness page, each shown or hidden by its toggle in the header.
+const ICON_FITNESS = svg(`<path d="M3 20h18"/><path d="M4 16l5-5 4 3 7-7"/><path d="M15 7h5v5"/>`);
+const ICON_FORM = svg(`<path d="M4 18a8 8 0 1 1 16 0"/><path d="M12 18l4-5"/><circle cx="12" cy="18" r="1"/>`);
+const FITNESS_SECTIONS = [["fitness", "Fitness", ICON_FITNESS], ["form", "Form", ICON_FORM]];
+// Pastel zone colours (docs/CHARTS.md): the form line, its bands and the summary use them.
 const FORM_ZONES = [
-  [25, Infinity, "Transition", "#8b92a3"],
-  [5, 25, "Fresh", "#0ea5e9"],
-  [-10, 5, "Grey zone", "#a3a3a3"],
-  [-30, -10, "Optimal", "#16a34a"],
-  [-Infinity, -30, "High risk", "#dc2626"],
+  [25, Infinity, "Transition", "#9aa3b5"],
+  [5, 25, "Fresh", "#5fb0e6"],
+  [-10, 5, "Grey zone", "#a9adb5"],
+  [-30, -10, "Optimal", "#4fb67c"],
+  [-Infinity, -30, "High risk", "#e8716f"],
 ];
 const formZone = (tsb) => FORM_ZONES.find(([lo, hi]) => tsb >= lo && tsb < hi) || FORM_ZONES[2];
-const COLORS = { ctl: "var(--accent)", atl: "#e5487a", load: "var(--line)" };
+// Ramp rate (fitness change in 7 days): above 8 builds too fast, below 0 fitness is lost.
+const RAMP_ZONES = [
+  [8, Infinity, "Too fast", "#e8716f"],
+  [0, 8, "Building", "#4fb67c"],
+  [-Infinity, 0, "Losing fitness", "#9aa3b5"],
+];
+const rampZone = (r) => RAMP_ZONES.find(([lo, hi]) => r >= lo && r < hi) || RAMP_ZONES[1];
+// Pastel series colours (docs/CHARTS.md); the form and ramp lines take their zone colour.
+const COLORS = { ctl: "#6f8fbf", atl: "#e08aa3", neutral: "#7c8494" }; // muted steel blue, dusty pink
+const zonesOf = (zones) => zones.map(([lo, hi, label, color]) => ({ lo, hi, label, color }));
+let FITNESS_CHARTS = null; // chart group of the page (destroyed on the next render)
+
+function fitnessShown() {
+  const raw = store.get("fitness-sections");
+  const keys = FITNESS_SECTIONS.map(([k]) => k);
+  return new Set(raw == null ? keys : raw.split(",").filter((k) => keys.includes(k)));
+}
+
+// Fitness › Options, saved per person on the server (like the Map options).
+const FITNESS_OPTIONS = { activities: "on", fill: "fill", fatigue: "on", zones: "on" };
+const fitnessOptions = () => ({ ...FITNESS_OPTIONS, ...(UI.data["fitness-options"] || {}) });
 
 async function renderFitness(params) {
-  const range = FITNESS_RANGES.some(([k]) => k === params.range) ? params.range : (store.get("fitness-range") || "180");
-  store.set("fitness-range", range);
-  const from = range === "all" ? "" : addDays(todayIso(), -Number(range));
-  const data = await api("fitness?" + new URLSearchParams({ person: CURRENT, ...(from ? { from } : {}) }));
+  const shown = fitnessShown();
+  const opt = fitnessOptions();
+  const q = { person: CURRENT };
+  if (params.from) q.from = params.from;
+  if (params.to) q.to = params.to;
+  const data = await api("fitness?" + new URLSearchParams(q));
   const s = data.series;
-  const sw = switchHtml("frange", FITNESS_RANGES, range);
+  const toggles = `<div class="switch" role="group">${FITNESS_SECTIONS.map(([k, l, icon]) =>
+    `<button class="${shown.has(k) ? "on" : ""}" data-fsec="${k}" aria-pressed="${shown.has(k)}">${icon}<span>${l}</span></button>`).join("")}</div>`;
+  const showSummary = TAB.kpis ?? false;
+  const optionsPanel = `<div class="opt-panel">
+      ${row("Activities", pickList("f-activities", [["on", "Shown"], ["off", "Hidden"]], opt.activities))}
+      ${row("Fitness", pickList("f-fill", [["fill", "Filled"], ["line", "Line"]], opt.fill))}
+      ${row("Fatigue", pickList("f-fatigue", [["on", "Shown"], ["off", "Hidden"]], opt.fatigue))}
+      ${row("Form zones", pickList("f-zones", [["on", "Shown"], ["off", "Hidden"]], opt.zones))}</div>`;
+  const head = pageHead(`Fitness${thresholdWarning(data.warnings)}`, `${timeBadge(params)}${badgeHtml("f-options", "Options", "", { panel: optionsPanel })}<button class="badge ${showSummary ? "on" : ""}" data-fkpis>Summary</button>`, toggles);
   if (!s.length) {
-    view.innerHTML = `${pageHead("Fitness", "", sw)}<div class="card">${hint(data.pending
+    view.innerHTML = `${head}<div class="card">${hint(data.pending
       ? `Training load is being computed for ${num(data.pending)} activities — refresh in a moment.`
+      : data.first ? "No training data in this period."
       : "No activity has a training load yet. Load needs heart rate (or power + FTP, or pace + threshold pace for runs).")}</div>${methodsCard(data)}`;
-    bindFitnessSwitch();
+    bindFitnessHead(params);
     return;
   }
   const last = s[s.length - 1];
-  const weekAgo = s[Math.max(0, s.length - 8)];
   const load7 = s.slice(-7).reduce((a, d) => a + d.load, 0);
   const zone = formZone(last.tsb);
+  const ramp = last.ramp ?? 0;
   const strip = statStrip([
     ["Fitness (CTL)", num(last.ctl), "42-day load average"],
     ["Fatigue (ATL)", num(last.atl), "7-day load average"],
     ["Form (TSB)", `<span style="color:${zone[3]}">${num(last.tsb)}</span>`, zone[2]],
-    ["Ramp rate", `${last.ctl - weekAgo.ctl >= 0 ? "+" : ""}${num(last.ctl - weekAgo.ctl, 1)}`, "fitness change in 7 days"],
+    ["Ramp rate", `<span style="color:${rampZone(ramp)[3]}">${ramp >= 0 ? "+" : ""}${num(ramp, 1)}</span>`, "fitness change in 7 days"],
     ["Load, 7 days", loadUnit(load7)],
   ]);
-  view.innerHTML = `${pageHead("Fitness", "", sw)}${strip}
-    <div class="card"><h3>Fitness and fatigue</h3>
-      <div class="legend"><span><i style="background:${COLORS.ctl}"></i>Fitness (CTL)</span><span><i style="background:${COLORS.atl}"></i>Fatigue (ATL)</span><span><i style="background:var(--muted);opacity:.35"></i>Daily load</span></div>
-      <div class="fit-chart" data-chart="main">${fitnessChart(s)}</div>
-      <h3 style="margin-top:18px">Form</h3>
-      <div class="legend">${FORM_ZONES.map(([, , n, c]) => `<span><i style="background:${c}"></i>${n}</span>`).join("")}</div>
-      <div class="fit-chart" data-chart="form">${formChart(s)}</div>
-      <div class="fit-tip" hidden></div>
-    </div>
+  view.innerHTML = `${head}<div data-fsummary ${showSummary ? "" : "hidden"}>${strip}</div>
+    <div class="charts" data-fcharts></div>
     ${data.pending ? `<div class="card">${state(`Computing training load for ${num(data.pending)} activities…`, "warn")}</div>` : ""}
     ${methodsCard(data)}`;
-  bindFitnessSwitch();
-  bindFitnessHover(s);
+  // Charts (docs/CHARTS.md): one group over the days, each section toggled in the header.
+  // Activities of the period for the icon strip under the x axis.
+  const acts = (await api("calendar?" + new URLSearchParams({ from: s[0].date, to: s[s.length - 1].date, ...personParam() })).catch(() => null))?.activities || [];
+  const marks = acts.map((a) => ({
+    x: Date.parse(a.day + "T00:00:00Z") / 1000, icon: typeIcon(a.activity_type, 16), href: `#/activity/${a.id}`,
+    tip: [a.name || typeLabel(a.activity_type), `${typeLabel(a.activity_type)} · ${a.day}`, [shortDur(a.moving_s), a.distance_m >= 50 ? km(a.distance_m) : ""].filter(Boolean).join(" · ")].join("\n"),
+  })).sort((p, q) => p.x - q.x);
+  const all = fitnessSeries(s, { marks, opt });
+  const order = UI.data["fitness-chart-order"] || [];
+  all.sort((p, q) => (order.indexOf(p.key) + 1 || 99) - (order.indexOf(q.key) + 1 || 99));
+  FITNESS_CHARTS?.destroy();
+  FITNESS_CHARTS = chartGroup(view.querySelector("[data-fcharts]"), {
+    x: { date: s.map((d) => Date.parse(d.date + "T00:00:00Z") / 1000) }, kind: "date", series: all,
+    hidden: all.map((x) => x.key).filter((k) => !shown.has(k)),
+    onOrder: (keys) => {
+      const full = [...keys, ...all.map((x) => x.key).filter((k) => !keys.includes(k))];
+      all.sort((p, q) => full.indexOf(p.key) - full.indexOf(q.key));
+      saveUi("fitness-chart-order", full);
+    },
+  });
+  bindFitnessHead(params, (key, on) => FITNESS_CHARTS.show(key, on));
+  // Options: pick, save, apply (the panel stays open).
+  const setOpt = (key, v) => { opt[key] = v; saveUi("fitness-options", { ...opt }); };
+  const pick = (name, apply) => view.querySelectorAll(`[data-pick="${name}"]`).forEach((b) => b.onclick = () => {
+    view.querySelectorAll(`[data-pick="${name}"]`).forEach((x) => { x.classList.toggle("on", x === b); x.setAttribute("aria-checked", x === b); });
+    apply(b.dataset.value);
+  });
+  pick("f-activities", (v) => { setOpt("activities", v); FITNESS_CHARTS.showMarks(v === "on"); });
+  const redraw = (key) => (v) => { setOpt(key, v); FITNESS_CHARTS.setSeries(fitnessSeries(s, { marks, opt })); };
+  pick("f-fill", redraw("fill"));
+  pick("f-fatigue", redraw("fatigue"));
+  pick("f-zones", redraw("zones"));
 }
 
-function bindFitnessSwitch() {
-  view.querySelectorAll("[data-switch=frange]").forEach((b) => b.onclick = () => { location.hash = "#/fitness?range=" + b.dataset.value; });
+// The two charts: fitness with fatigue, and form (axis turned: more fatigue higher; the line
+// takes the colour of its zone, the zones are bands behind it). Ramp rate is only a number in
+// the summary: it is the slope of the fitness line.
+// The pills on the right: the value at the end of the period, at its height (label = series).
+function fitnessSeries(s, { marks = [], opt = FITNESS_OPTIONS } = {}) {
+  const vals = (k) => s.map((d) => d[k] ?? null);
+  const last = s.length - 1;
+  const signed = (v, d = 0) => { const r = Number(v.toFixed(d)) || 0; return `${r > 0 ? "+" : ""}${num(r, d)}`; };
+  const extreme = (v, max) => v.reduce((b, x, i) => (x != null && (b < 0 || (max ? x > v[b] : x < v[b])) ? i : b), -1);
+  const ctl = vals("ctl"), atl = vals("atl"), tsb = vals("tsb");
+  const zc = (zones, v) => zones.find(([lo, hi]) => v >= lo && v < hi)?.[3] || COLORS.neutral;
+  const tag = (label, values, i, color, d = 0, sign = true, tip = "") =>
+    ({ label, value: values[i], i, values, color, text: sign ? signed(values[i], d) : num(values[i], d), tip });
+  const fresh = extreme(tsb, true), tired = extreme(tsb, false);
+  return [
+    { key: "fitness", label: "Fitness", title: opt.fatigue === "off" ? "Fitness" : "Fitness and fatigue", yTitle: "Training load", unit: "TSS/d", dec: 0, height: 330,
+      color: COLORS.ctl, iconHtml: ICON_FITNESS, values: ctl, lines: opt.fatigue === "off" ? [] : [{ label: "Fatigue", color: COLORS.atl, values: atl }],
+      fill: opt.fill === "fill", marks, marksHidden: opt.activities === "off",
+      tip: "Fitness: 42-day average of the daily training load. Fatigue: the same over 7 days.",
+      tags: [tag("Fitness", ctl, last, COLORS.ctl, 0, false), ...(opt.fatigue === "off" ? [] : [tag("Fatigue", atl, last, COLORS.atl, 0, false)])] },
+    { key: "form", label: "Form", title: "Form", yTitle: "Form", unit: "", dec: 0, height: 216, color: COLORS.neutral, iconHtml: ICON_FORM,
+      values: tsb, zones: zonesOf(FORM_ZONES), bands: opt.zones !== "off", invert: true, yMin: -40, yMax: 30, ySplits: [-40, -30, -10, 5, 25],
+      tip: "Yesterday's fitness minus fatigue. The axis is turned: higher = more tired; the optimal training zone sits above the grey zone.",
+      tags: [tag("Form", tsb, last, zc(FORM_ZONES, tsb[last])), tag("Freshest", tsb, fresh, zc(FORM_ZONES, tsb[fresh])), tag("Most tired", tsb, tired, zc(FORM_ZONES, tsb[tired]))] },
+  ];
 }
 
-const FW = 1000, FH = 260, FP = { l: 40, r: 10, t: 10, b: 24 };
-function axisDates(s, w, h) {
-  const n = s.length, out = [];
-  const step = Math.max(1, Math.ceil(n / 8));
-  for (let i = 0; i < n; i += step) {
-    const x = FP.l + (i / Math.max(1, n - 1)) * (w - FP.l - FP.r);
-    out.push(`<text x="${x.toFixed(1)}" y="${h - 6}" class="ax" text-anchor="middle">${s[i].date.slice(2)}</text>`);
-  }
-  return out.join("");
+const ICON_WARN = svg(`<path d="M12 3l9.5 17h-19z"/><path d="M12 10v4M12 17.5v.01"/>`);
+const FIELD_LABEL = { hr_max: "HR max", hr_rest: "Resting HR", lthr: "Threshold HR", ftp: "FTP", threshold_pace: "Threshold pace" };
+
+// Warning icon next to the page title, with a short list and a link to the editor.
+function thresholdWarning(warnings) {
+  if (!warnings || !warnings.length) return "";
+  const line = (w) => (w.kind === "missing"
+    ? (w.source === "default" ? `${FIELD_LABEL[w.field]}: default ${num(w.value)} bpm, not from your data.` : `${FIELD_LABEL[w.field]}: highest recorded HR, not from the watch.`)
+    : `${w.year}: no watch data, values from ${w.from.slice(0, 4)} used.`);
+  return `<span class="badge-wrap title-warn"><button class="icon warn" data-badge="thwarn" title="Load may be off" aria-label="Load may be off">${ICON_WARN}</button>
+    <div class="badge-panel" data-panel="thwarn" hidden><div class="warn-panel">
+      <b>Load may be off</b><ul>${warnings.map((w) => `<li>${line(w)}</li>`).join("")}</ul>
+      <a href="#/settings/people">Set or accept in Settings › People</a></div></div></span>`;
 }
-function yTicks(lo, hi, y, w) {
-  const span = hi - lo || 1;
-  const step = [1, 2, 5, 10, 20, 25, 50, 100, 200].find((v) => span / v <= 6) || 500;
-  const out = [];
-  for (let v = Math.ceil(lo / step) * step; v <= hi; v += step) {
-    out.push(`<line x1="${FP.l}" x2="${w - FP.r}" y1="${y(v).toFixed(1)}" y2="${y(v).toFixed(1)}" class="grid${v === 0 ? " zero" : ""}"/><text x="${FP.l - 6}" y="${(y(v) + 4).toFixed(1)}" class="ax" text-anchor="end">${v}</text>`);
-  }
-  return out.join("");
-}
-function fitnessChart(s) {
-  const n = s.length;
-  const hi = Math.max(10, ...s.map((d) => Math.max(d.ctl, d.atl, d.load)));
-  const x = (i) => FP.l + (i / Math.max(1, n - 1)) * (FW - FP.l - FP.r);
-  const y = (v) => FH - FP.b - (v / hi) * (FH - FP.t - FP.b);
-  const bw = Math.max(1, (FW - FP.l - FP.r) / n - 1);
-  const line = (k) => s.map((d, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(d[k]).toFixed(1)}`).join("");
-  return `<svg viewBox="0 0 ${FW} ${FH}" preserveAspectRatio="none">
-    ${yTicks(0, hi, y, FW)}
-    ${s.map((d, i) => (d.load ? `<rect x="${(x(i) - bw / 2).toFixed(1)}" y="${y(d.load).toFixed(1)}" width="${bw.toFixed(1)}" height="${(FH - FP.b - y(d.load)).toFixed(1)}" class="loadbar"/>` : "")).join("")}
-    <path d="${line("atl")}" fill="none" stroke="${COLORS.atl}" stroke-width="1.6" vector-effect="non-scaling-stroke"/>
-    <path d="${line("ctl")}" fill="none" stroke="${COLORS.ctl}" stroke-width="2.4" vector-effect="non-scaling-stroke"/>
-    ${axisDates(s, FW, FH)}
-    <line class="cursor" x1="0" x2="0" y1="${FP.t}" y2="${FH - FP.b}" visibility="hidden"/>
-  </svg>`;
-}
-function formChart(s) {
-  const n = s.length, H = 170;
-  const lo = Math.min(-35, ...s.map((d) => d.tsb)), hi = Math.max(30, ...s.map((d) => d.tsb));
-  const x = (i) => FP.l + (i / Math.max(1, n - 1)) * (FW - FP.l - FP.r);
-  const y = (v) => H - FP.b - ((v - lo) / (hi - lo)) * (H - FP.t - FP.b);
-  const bands = FORM_ZONES.map(([a, b, , c]) => {
-    const top = y(Math.min(hi, b)), bottom = y(Math.max(lo, a));
-    return bottom > top ? `<rect x="${FP.l}" width="${FW - FP.l - FP.r}" y="${top.toFixed(1)}" height="${(bottom - top).toFixed(1)}" fill="${c}" opacity=".08"/>` : "";
-  }).join("");
-  const line = s.map((d, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(d.tsb).toFixed(1)}`).join("");
-  return `<svg viewBox="0 0 ${FW} ${H}" preserveAspectRatio="none">
-    ${bands}${yTicks(lo, hi, y, FW)}
-    <path d="${line}" fill="none" stroke="var(--fg)" stroke-width="1.6" vector-effect="non-scaling-stroke"/>
-    ${axisDates(s, FW, H)}
-    <line class="cursor" x1="0" x2="0" y1="${FP.t}" y2="${H - FP.b}" visibility="hidden"/>
-  </svg>`;
-}
-function bindFitnessHover(s) {
-  const tip = view.querySelector(".fit-tip");
-  view.querySelectorAll(".fit-chart svg").forEach((svgEl) => {
-    svgEl.onmousemove = (e) => {
-      const r = svgEl.getBoundingClientRect();
-      const fx = ((e.clientX - r.left) / r.width) * FW;
-      const i = Math.max(0, Math.min(s.length - 1, Math.round(((fx - FP.l) / (FW - FP.l - FP.r)) * (s.length - 1))));
-      const cx = FP.l + (i / Math.max(1, s.length - 1)) * (FW - FP.l - FP.r);
-      view.querySelectorAll(".fit-chart .cursor").forEach((c) => { c.setAttribute("x1", cx); c.setAttribute("x2", cx); c.setAttribute("visibility", "visible"); });
-      const d = s[i], z = formZone(d.tsb);
-      tip.hidden = false;
-      tip.innerHTML = `<b>${d.date}</b><span>Load ${num(d.load)}</span><span style="color:${COLORS.ctl}">Fitness ${num(d.ctl)}</span><span style="color:${COLORS.atl}">Fatigue ${num(d.atl)}</span><span style="color:${z[3]}">Form ${num(d.tsb)} · ${z[2]}</span>`;
-      const card = svgEl.closest(".card").getBoundingClientRect();
-      tip.style.left = `${Math.min(e.clientX - card.left + 14, card.width - 190)}px`;
-      tip.style.top = `${e.clientY - card.top + 14}px`;
-    };
-    svgEl.onmouseleave = () => {
-      tip.hidden = true;
-      view.querySelectorAll(".fit-chart .cursor").forEach((c) => c.setAttribute("visibility", "hidden"));
-    };
+
+function bindFitnessHead(params, onToggle = () => {}) {
+  const head = view.querySelector(".page-head");
+  bindBadges(head);
+  bindFilterBadges(head, "#/fitness", params);
+  const kpis = head.querySelector("[data-fkpis]");
+  kpis.onclick = () => {
+    const on = !kpis.classList.contains("on");
+    TAB.kpis = on;
+    kpis.classList.toggle("on", on);
+    if (on) window.scrollTo({ top: 0, behavior: "smooth" });
+    const box = view.querySelector("[data-fsummary]");
+    if (box) box.hidden = !on;
+  };
+  head.querySelectorAll("[data-fsec]").forEach((b) => b.onclick = () => {
+    const on = !b.classList.contains("on");
+    b.classList.toggle("on", on);
+    b.setAttribute("aria-pressed", on);
+    const keys = [...head.querySelectorAll("[data-fsec].on")].map((x) => x.dataset.fsec);
+    store.set("fitness-sections", keys.join(","));
+    onToggle(b.dataset.fsec, on);
   });
 }
 
 const METHOD_LABELS = { power: "Power (TSS)", pace: "Running pace (rTSS)", hr: "Heart rate (hrTSS)", none: "No load (no data)" };
-const SOURCE_LABEL = { set: "", auto: " (estimated)", default: " (default)" };
+// Load methods in the order they are tried, with what each one needs.
+const LOAD_METHODS = [
+  ["power", "Power", "power meter + FTP"],
+  ["pace", "Running pace", "runs + threshold pace"],
+  ["hr", "Heart rate", "HR + HR max, resting, threshold"],
+  ["none", "No load", "none of the above"],
+];
+const SOURCE_LABEL = { set: "", watch: " (watch)", auto: " (estimated)", default: " (default)" };
+const SOURCE_CHIP = { set: ["Set", "set"], watch: ["Watch", "watch"], auto: ["Estimated", "est"], default: ["Default", "est"] };
+const THRESHOLD_ITEMS = [
+  ["hr_max", "HR max", (v) => bpm(v)],
+  ["hr_rest", "Resting HR", (v) => bpm(v)],
+  ["lthr", "Threshold HR", (v) => bpm(v)],
+  ["ftp", "FTP", (v) => watts(v)],
+  ["threshold_pace", "Threshold pace", (v) => fmtPace(v)],
+];
+const sourceChip = (src) => {
+  const [label, cls] = SOURCE_CHIP[src] || ["Not set", "none"];
+  return `<span class="src-chip ${cls}">${label}</span>`;
+};
+
 function methodsCard(data) {
   const th = data.thresholds || {}, src = th.sources || {};
-  const val = (k, fmt) => (th[k] == null ? `<span class="hint">not set</span>` : fmt(th[k]) + `<span class="hint">${SOURCE_LABEL[src[k]] || ""}</span>`);
-  const total = Object.values(data.methods || {}).reduce((a, b) => a + b, 0);
-  return `<div class="card"><h3>How training load is calculated</h3>
-    ${hint("Each activity gets a load (TSS-like: one hour at threshold = 100) from the best data it has: power with FTP, running pace with threshold pace, otherwise heart rate. Fitness is the 42-day and fatigue the 7-day exponential average of the daily load; form is yesterday's fitness minus fatigue.")}
-    <div class="two-col">
-      <div><div class="panel-title">Activities by method</div>
-        ${Object.entries(METHOD_LABELS).map(([k, l]) => (data.methods?.[k] ? `<div class="bar-row"><span class="bar-label">${l}</span><span class="bar"><span style="width:${(data.methods[k] / total) * 100}%;background:var(--accent)"></span></span><span class="bar-value">${num(data.methods[k])}</span></div>` : "")).join("")}
+  const m = data.methods || {};
+  const total = Object.values(m).reduce((a, b) => a + b, 0) || 1;
+  const steps = [
+    ["Load", "per activity, 1 h at threshold = 100", "var(--muted)"],
+    ["Fitness", "42-day average of daily load", COLORS.ctl],
+    ["Fatigue", "7-day average of daily load", COLORS.atl],
+    ["Form", "yesterday's fitness − fatigue", "var(--fg)"],
+  ];
+  return `<div class="card method-card"><h3>How training load is calculated</h3>
+    <div class="method-steps">${steps.map(([t, d, c]) => `<div class="method-step"><b><span class="method-dot" style="background:${c}"></span>${t}</b><span>${d}</span></div>`).join("")}</div>
+    <div class="method-cols">
+      <div><div class="panel-title">Method per activity, first that fits</div>
+        <div class="method-list">${LOAD_METHODS.map(([k, l, needs], i) => {
+          const n = m[k] || 0;
+          return `<div class="method-row ${n ? "" : "off"}"><span class="method-rank">${k === "none" ? "–" : i + 1}</span>
+            <span class="method-name"><b>${l}</b><span>${needs}</span></span>
+            <span class="bar"><span style="width:${(n / total) * 100}%"></span></span><span class="method-n">${num(n)}</span></div>`;
+        }).join("")}</div>
       </div>
       <div><div class="panel-title">Thresholds in use today</div>
-        <table class="kv"><tbody>
-          <tr><td>HR max</td><td>${val("hr_max", bpm)}</td></tr>
-          <tr><td>Resting HR</td><td>${val("hr_rest", bpm)}</td></tr>
-          <tr><td>Threshold HR</td><td>${val("lthr", bpm)}</td></tr>
-          <tr><td>FTP</td><td>${val("ftp", watts)}</td></tr>
-          <tr><td>Threshold pace</td><td>${val("threshold_pace", (v) => fmtPace(v))}</td></tr>
-        </tbody></table>
-        <a href="#/settings/people">Change thresholds in Settings › People</a>
+        <div class="th-tiles">${THRESHOLD_ITEMS.map(([k, l, fmt]) => `<div class="th-tile ${th[k] == null ? "off" : ""}">
+          <span class="th-label">${l}</span><span class="th-value">${th[k] == null ? "–" : fmt(th[k])}</span>${sourceChip(th[k] == null ? null : src[k])}</div>`).join("")}</div>
+        <a class="th-link" href="#/settings/people">Edit in Settings › People</a>
       </div>
     </div></div>`;
 }
@@ -308,19 +378,17 @@ async function renderStats(params) {
 }
 
 async function renderTotals(params, sw) {
-  const by = ["year", "month", "week"].includes(params.by) ? params.by : (params.year ? "month" : "year");
+  const oneYear = params.from && params.to && params.from.slice(0, 4) === params.to.slice(0, 4);
+  const by = ["year", "month", "week"].includes(params.by) ? params.by : (oneYear ? "month" : "year");
   const metric = STAT_METRICS.some(([k]) => k === params.metric) ? params.metric : "moving_s";
-  const q = { person: CURRENT, by, ...(params.type ? { type: params.type } : {}), ...(params.year ? { year: params.year } : {}) };
+  const q = { person: CURRENT, by, ...filterQuery(params) };
   const data = await api("stats/totals?" + new URLSearchParams(q));
   const route = "#/stats";
-  const typeText = !params.type ? "All" : params.type.startsWith("g:") ? groupLabel(params.type.slice(2)) : typeLabel(params.type);
-  const filterPanel = `<div class="panel-grid">${section("Activity type", typePicker("data-pfilter", "type", params.type || ""))}
-      ${section("Year", `<select data-pfilter="year"><option value="">All years</option>${data.years.map((y) => `<option ${y === params.year ? "selected" : ""}>${y}</option>`).join("")}</select>`)}
+  const optionsPanel = `<div class="panel-grid">
       ${section("Group by", `<select data-pfilter="by">${[["year", "Year"], ["month", "Month"], ["week", "Week"]].map(([v, l]) => `<option value="${v}" ${v === by ? "selected" : ""}>${l}</option>`).join("")}</select>`)}
       ${section("Chart", `<select data-pfilter="metric">${STAT_METRICS.map(([v, l]) => `<option value="${v}" ${v === metric ? "selected" : ""}>${l}</option>`).join("")}</select>`)}
-    </div><div class="panel-actions">${params.type || params.year ? `<button class="primary small" data-clear-stats title="Remove all filters">Clear filters</button>` : ""}<button class="primary small" data-apply>Apply</button></div>`;
-  const active = params.type || params.year;
-  const badges = badgeHtml("filter", "Filter", [typeText !== "All" ? typeText : "", params.year || ""].filter(Boolean).join(" · ") || "All", { panel: filterPanel, on: !!active });
+    </div><div class="panel-actions"><button class="primary small" data-apply>Apply</button></div>`;
+  const badges = timeBadge(params) + typeBadge(params) + badgeHtml("options", "Options", "", { panel: optionsPanel });
   const rows = data.rows;
   const t = (k) => rows.reduce((s, r) => s + (r[k] || 0), 0);
   const strip = statStrip([
@@ -343,7 +411,7 @@ async function renderTotals(params, sw) {
     <div class="two-col wide-first">
       <div class="card"><h3>Totals per ${by}</h3><div class="scroll"><table class="data">
         <thead><tr><th>${by[0].toUpperCase() + by.slice(1)}</th><th class="num">Activities</th><th class="num">Active days</th><th class="num">Distance</th><th class="num">Moving time</th><th class="num">Elevation gain</th><th class="num">Load</th></tr></thead>
-        <tbody>${[...rows].reverse().map((r) => `<tr><td>${by === "year" ? `<a href="#/stats?${new URLSearchParams({ ...(params.type ? { type: params.type } : {}), year: r.period, by: "month", metric })}">${r.period}</a>` : esc(periodLabel(r.period))}</td>
+        <tbody>${[...rows].reverse().map((r) => `<tr><td>${by === "year" ? `<a href="#/stats?${new URLSearchParams({ ...filterQuery(params), from: r.period + "-01-01", to: r.period + "-12-31", by: "month", metric })}">${r.period}</a>` : esc(periodLabel(r.period))}</td>
           <td class="num">${num(r.count)}</td><td class="num">${num(r.active_days)}</td><td class="num">${km(r.distance_m)}</td><td class="num">${hours(r.moving_s)}</td><td class="num">${meters(r.ascent_m)}</td><td class="num">${loadUnit(r.load)}</td></tr>`).join("")}</tbody></table></div></div>
       <div class="card"><h3>By activity group</h3>${hint("Moving time")}
         ${data.groups.map((g) => `<div class="bar-row"><span class="bar-label tb-activity-name">${groupIcon(g.category)}<span>${esc(groupLabel(g.category))}</span></span><span class="bar"><span style="width:${((g.moving_s || 0) / gmax) * 100}%;background:var(--accent)"></span></span><span class="bar-value">${hours(g.moving_s)}</span></div>`).join("") || hint("–")}
@@ -351,26 +419,22 @@ async function renderTotals(params, sw) {
     </div>`;
   bindBadges(view.querySelector(".page-head"));
   bindStagedFilter(view.querySelector(".page-head"), route, { tab: "totals", ...params });
-  const clear = view.querySelector("[data-clear-stats]");
-  if (clear) clear.onclick = () => { location.hash = "#/stats?tab=totals"; };
+  bindFilterBadges(view.querySelector(".page-head"), route, { tab: "totals", ...params }, { drop: ["by"] });
 }
 
 async function renderRecords(params, sw) {
   const kind = ["pace", "power", "hr"].includes(params.kind) ? params.kind : "pace";
-  const range = params.range || "all";
-  const type = kind === "pace" ? "g:run" : params.type ?? (kind === "power" ? "g:ride" : "");
-  const q = (r) => api("stats/records?" + new URLSearchParams({ person: CURRENT, kind, range: r, ...(type ? { type } : {}) }));
-  const [data, all] = await Promise.all([q(range), range === "all" ? null : q("all")]);
-  const go = (p) => { location.hash = "#/stats?" + new URLSearchParams({ tab: "records", kind, range, ...(params.type != null && kind !== "pace" ? { type: params.type } : {}), ...p }); };
+  const fq = filterQuery(params);
+  if (kind === "pace") fq.types = "g:run";
+  const filtered = Boolean(params.from || params.to);
+  const q = (f) => api("stats/records?" + new URLSearchParams({ person: CURRENT, kind, ...f }));
+  const [data, all] = await Promise.all([q(fq), filtered ? q({ ...fq, from: "", to: "" }) : null]);
   const labels = RECORD_LABELS[kind];
   const fmt = (r) => (kind === "pace"
     ? `${dur(r.value)} <span class="hint">${pace(r.key / r.value)}</span>`
     : kind === "power" ? watts(r.value) : bpm(r.value));
-  const rangeLabel = range === "all" ? "All time" : range === "90d" ? "Last 90 days" : range;
-  const typeOptions = kind === "power" ? [["g:ride", "Cycling"], ["g:run", "Running"], ["", "All activities"]] : [["", "All activities"], ["g:run", "Running"], ["g:ride", "Cycling"]];
-  const controls = `<div class="seg">${[["pace", "Running pace"], ["power", "Power"], ["hr", "Heart rate"]].map(([k, l]) => `<button class="${k === kind ? "on" : ""}" data-kind="${k}">${l}</button>`).join("")}</div>
-    <select data-range><option value="all">All time</option><option value="90d" ${range === "90d" ? "selected" : ""}>Last 90 days</option>${data.years.map((y) => `<option ${y === range ? "selected" : ""}>${y}</option>`).join("")}</select>
-    ${kind !== "pace" ? `<select data-rtype>${typeOptions.map(([v, l]) => `<option value="${v}" ${v === type ? "selected" : ""}>${l}</option>`).join("")}</select>` : ""}`;
+  const rangeLabel = timeLabel(params);
+  const controls = `<div class="seg">${[["pace", "Running pace"], ["power", "Power"], ["hr", "Heart rate"]].map(([k, l]) => `<button class="${k === kind ? "on" : ""}" data-kind="${k}">${l}</button>`).join("")}</div>`;
   const best = Object.fromEntries((all?.records || []).map((r) => [r.key, r.value]));
   const table = data.records.length ? `<div class="scroll"><table class="data">
       <thead><tr><th>${kind === "pace" ? "Distance" : "Duration"}</th><th class="num">${kind === "pace" ? "Time" : kind === "power" ? "Avg power" : "Avg HR"}</th>${all ? `<th class="num">All-time best</th>` : ""}<th>Date</th><th>Activity</th></tr></thead>
@@ -378,17 +442,18 @@ async function renderRecords(params, sw) {
         ${all ? `<td class="num">${best[r.key] != null ? fmt({ key: r.key, value: best[r.key] }) : "–"}</td>` : ""}
         <td>${localTime(r).slice(0, 10)}</td><td><a class="tb-activity-name" href="#/activity/${r.id}">${typeIcon(r.activity_type)}<span>${esc(r.name || typeLabel(r.activity_type))}</span></a></td></tr>`).join("")}</tbody></table></div>`
     : hint(kind === "pace" ? "No runs with distance data in this period." : kind === "power" ? "No activities with power data in this period." : "No activities with heart rate in this period.");
-  view.innerHTML = `${pageHead("Statistics", "", sw)}
+  view.innerHTML = `${pageHead("Statistics", timeBadge(params) + (kind === "pace" ? "" : typeBadge(params)), sw)}
     <div class="card"><div class="card-row records-bar">${controls}</div></div>
     <div class="card"><h3>${kind === "pace" ? "Fastest times" : kind === "power" ? "Best average power" : "Highest average heart rate"} · ${esc(rangeLabel)}</h3>
       ${data.records.length > 1 ? recordsCurve(data.records, all?.records, kind) : ""}
       ${table}
       ${hint(kind === "pace" ? "Fastest time over each distance within any run (from the distance stream), not only whole races." : "Best average over each duration within any activity, with pauses of more than 10 s breaking a window.")}
     </div>`;
-  view.querySelectorAll("[data-kind]").forEach((b) => b.onclick = () => { location.hash = "#/stats?" + new URLSearchParams({ tab: "records", kind: b.dataset.kind, range }); });
-  view.querySelector("[data-range]").onchange = (e) => go({ range: e.target.value });
-  const rt = view.querySelector("[data-rtype]");
-  if (rt) rt.onchange = (e) => go({ type: e.target.value });
+  view.querySelectorAll("[data-kind]").forEach((b) => b.onclick = () => {
+    location.hash = "#/stats?" + new URLSearchParams({ tab: "records", kind: b.dataset.kind, ...filterQuery(params) });
+  });
+  bindBadges(view.querySelector(".page-head"));
+  bindFilterBadges(view.querySelector(".page-head"), "#/stats", { tab: "records", kind, ...params });
 }
 
 // Duration / distance curve on a log x axis. Pace is shown as speed (higher = faster).
@@ -417,40 +482,61 @@ function recordsCurve(rows, allRows, kind) {
 }
 
 // ---- Thresholds (Settings › People) -------------------------------------------------------
+// Each value: your own (Settings) > from the watch (FIT files) > estimated. The People table
+// shows the values in use; the pencil opens this editor under the person's row.
 
-async function renderThresholds(el, pid) {
-  const people = realPeople();
-  if (!people.length) { el.innerHTML = ""; return; }
-  pid = pid && people.some((p) => p.id === pid) ? pid : (CURRENT && CURRENT !== "all" && people.some((p) => p.id === CURRENT) ? CURRENT : people[0].id);
-  const st = await api("thresholds/" + encodeURIComponent(pid));
+const ICON_PENCIL = svg(`<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/>`);
+
+// Short line for the People table: the values in use, estimated ones marked.
+function thresholdSummary(st) {
   const eff = st.effective, src = eff.sources || {};
-  const ph = (k, fmt) => (eff[k] != null && src[k] !== "set" ? `${fmt(eff[k])}${SOURCE_LABEL[src[k]]}` : "");
-  el.innerHTML = `<div class="card">
-    <h3>Training thresholds</h3>
-    ${hint("Used for training load and the Fitness tab. Leave a field empty to use the estimate. A new row applies from its date on, so older activities keep the values that were true back then. Saving recomputes the load of this person's activities in the background.")}
-    <div class="card-row" style="margin:8px 0 12px">
-      <select data-th-person>${people.map((p) => `<option value="${esc(p.id)}" ${p.id === pid ? "selected" : ""}>${esc(p.label)}</option>`).join("")}</select>
-      ${st.pending ? state(`Recomputing ${num(st.pending)} activities…`, "warn") : ""}
+  const parts = THRESHOLD_ITEMS.filter(([k]) => eff[k] != null).map(([k, l, fmt]) =>
+    `<span class="th-sum ${src[k] === "auto" || src[k] === "default" ? "est" : ""}" title="${esc(l)}${esc(SOURCE_LABEL[src[k]] || "")}">${esc(l)} <b>${fmt(eff[k])}</b></span>`);
+  return parts.join("") || `<span class="hint">–</span>`;
+}
+
+async function renderThresholds(el, pid, onChange) {
+  const st = await api("thresholds/" + encodeURIComponent(pid));
+  const eff = st.effective, src = eff.sources || {}, watch = st.watch || {};
+  const accepted = new Set(st.accepted || []);
+  const weak = (k) => src[k] === "default" || (k === "hr_max" && src[k] === "auto");
+  const field = ([k, l, fmt]) => {
+    const isPace = k === "threshold_pace";
+    const w = watch[k];
+    const acceptBtn = weak(k)
+      ? (accepted.has(k)
+        ? `<button class="small ghost" data-th-accept="${k}" data-on="0" title="Warn again about this estimate">Estimate accepted ✓</button>`
+        : `<button class="small" data-th-accept="${k}" data-on="1" title="Keep the estimate and stop the warning">Use estimate</button>`)
+      : "";
+    return `<div class="th-field">
+      <div class="th-field-head"><span class="th-label">${l}</span>${sourceChip(eff[k] == null ? null : src[k])}</div>
+      <div class="th-value">${eff[k] == null ? "–" : fmt(eff[k])}</div>
+      <div class="hint">${w != null ? `Watch: ${fmt(w)}` : "Not in watch files"}</div>
+      <input name="${k}" ${isPace ? 'placeholder="min:s, e.g. 4:30"' : 'inputmode="numeric" placeholder="Your value"'}>
+      ${acceptBtn}
+    </div>`;
+  };
+  el.innerHTML = `<div class="th-editor">
+    <div class="th-fields">${THRESHOLD_ITEMS.map(field).join("")}</div>
+    <div class="th-actions">
+      <label class="th-from"><span class="th-label">Valid from</span><input type="date" name="valid_from" value="${todayIso()}"></label>
+      <button class="primary small" data-th-save>Save my values</button>
+      <span class="hint">Empty field: watch value, otherwise an estimate.</span>
+      <span data-th-msg>${st.pending ? state(`Recomputing ${num(st.pending)} activities…`, "warn") : ""}</span>
     </div>
-    <div class="th-form">
-      <label><span class="opt-label">Valid from</span><input type="date" name="valid_from" value="${todayIso()}"></label>
-      <label><span class="opt-label">HR max (bpm)</span><input name="hr_max" inputmode="numeric" placeholder="${esc(ph("hr_max", (v) => v))}"></label>
-      <label><span class="opt-label">Resting HR (bpm)</span><input name="hr_rest" inputmode="numeric" placeholder="${esc(ph("hr_rest", (v) => v))}"></label>
-      <label><span class="opt-label">Threshold HR (bpm)</span><input name="lthr" inputmode="numeric" placeholder="${esc(ph("lthr", (v) => v))}"></label>
-      <label><span class="opt-label">FTP (W)</span><input name="ftp" inputmode="numeric"></label>
-      <label><span class="opt-label">Threshold pace (min:s /km)</span><input name="threshold_pace" placeholder="4:30"></label>
-      <div class="th-actions"><button class="primary small" data-th-save>Add</button><span data-th-msg></span></div>
-    </div>
-    ${st.rows.length ? `<div class="scroll" style="margin-top:12px"><table class="data">
-      <thead><tr><th>Valid from</th><th class="num">HR max</th><th class="num">Resting HR</th><th class="num">Threshold HR</th><th class="num">FTP</th><th class="num">Threshold pace</th><th></th></tr></thead>
+    ${st.rows.length ? `<div class="panel-title" style="margin-top:14px">My values</div><div class="scroll"><table class="data th-rows">
+      <thead><tr><th>Valid from</th>${THRESHOLD_ITEMS.map(([, l]) => `<th class="num">${l}</th>`).join("")}<th></th></tr></thead>
       <tbody>${st.rows.map((r) => `<tr><td>${r.valid_from === "1970-01-01" ? "always" : r.valid_from}</td>
-        <td class="num">${r.hr_max ? bpm(r.hr_max) : "–"}</td><td class="num">${r.hr_rest ? bpm(r.hr_rest) : "–"}</td><td class="num">${r.lthr ? bpm(r.lthr) : "–"}</td>
-        <td class="num">${r.ftp ? watts(r.ftp) : "–"}</td><td class="num">${r.threshold_pace ? fmtPace(r.threshold_pace) : "–"}</td>
+        ${THRESHOLD_ITEMS.map(([k, , fmt]) => `<td class="num">${r[k] ? fmt(r[k]) : "–"}</td>`).join("")}
         <td class="actions"><button class="icon delete" data-th-del="${r.valid_from}" title="Delete row" aria-label="Delete row">${ICON.trash}</button></td></tr>`).join("")}</tbody></table></div>`
-      : hint(`No thresholds set yet — estimates in use: HR max ${eff.hr_max ? bpm(eff.hr_max) : "unknown"} (highest recorded), resting HR ${bpm(eff.hr_rest)}, threshold HR ${eff.lthr ? bpm(eff.lthr) : "unknown"} (90 % of HR max).`)}
+      : ""}
   </div>`;
-  el.querySelector("[data-th-person]").onchange = (e) => renderThresholds(el, e.target.value);
   const msg = el.querySelector("[data-th-msg]");
+  const refresh = async (text) => {
+    await renderThresholds(el, pid, onChange);
+    if (text) el.querySelector("[data-th-msg]").innerHTML = state(text, "ok");
+    if (onChange) onChange();
+  };
   el.querySelector("[data-th-save]").onclick = async () => {
     const f = (n) => el.querySelector(`[name=${n}]`).value.trim();
     const paceText = f("threshold_pace");
@@ -460,14 +546,19 @@ async function renderThresholds(el, pid) {
     if (!["hr_max", "hr_rest", "lthr", "ftp"].some((k) => body[k]) && !paceSec) { msg.innerHTML = state("Enter at least one value", "warn"); return; }
     try {
       await api("thresholds/" + encodeURIComponent(pid), { method: "PUT", body: JSON.stringify(body) });
-      await renderThresholds(el, pid);
-      el.querySelector("[data-th-msg]").innerHTML = state("Saved · load is being recomputed", "ok");
+      await refresh("Saved · load is being recomputed");
     } catch (e) { msg.innerHTML = state(esc(e.message), "bad"); }
   };
+  el.querySelectorAll("[data-th-accept]").forEach((b) => b.onclick = async () => {
+    try {
+      await api(`thresholds/${encodeURIComponent(pid)}/accept`, { method: "PUT", body: JSON.stringify({ field: b.dataset.thAccept, accepted: b.dataset.on === "1" }) });
+      await refresh(b.dataset.on === "1" ? "Estimate accepted" : "Warning back on");
+    } catch (e) { msg.innerHTML = state(esc(e.message), "bad"); }
+  });
   el.querySelectorAll("[data-th-del]").forEach((b) => b.onclick = async () => {
-    if (!confirm("Delete this row of thresholds?")) return;
+    if (!confirm("Delete this row of your values?")) return;
     await api(`thresholds/${encodeURIComponent(pid)}/${b.dataset.thDel}`, { method: "DELETE" });
-    renderThresholds(el, pid);
+    await refresh("Deleted · load is being recomputed");
   });
 }
 

@@ -1,0 +1,1136 @@
+{
+  "name": "Trailbook · Metric icons",
+  "version": "1.1.0",
+  "date": "2026-11-15",
+  "sizes": [
+    20,
+    32
+  ],
+  "size_ratio": 1.6,
+  "viewBox": "0 0 24 24",
+  "color": "currentColor",
+  "fallback": "other",
+  "scope": "Każdy nazwany parametr pierwszej tabeli katalogu, z wariantami i ikoną zastępczą. Nie obejmuje drugiej tabeli parametrów sportowych ani wszystkich technicznych pól FIT.",
+  "naming": "Klucze identyfikują ikony UI; nie stanowią automatycznego mapowania pól FIT.",
+  "stat_marks": {
+    "avg": "Dwie poziome kreski; średnie tętno: jedna kreska pod sercem.",
+    "min": "Strzałka w dół",
+    "max": "Strzałka w górę"
+  },
+  "groups": [
+    {
+      "key": "time",
+      "label": "Czas"
+    },
+    {
+      "key": "distance",
+      "label": "Dystans i pozycja"
+    },
+    {
+      "key": "speed",
+      "label": "Tempo i prędkość"
+    },
+    {
+      "key": "elevation",
+      "label": "Wysokość i teren"
+    },
+    {
+      "key": "heart",
+      "label": "Tętno"
+    },
+    {
+      "key": "cadence",
+      "label": "Kadencja i cykle"
+    },
+    {
+      "key": "power",
+      "label": "Moc i praca"
+    },
+    {
+      "key": "energy",
+      "label": "Energia"
+    },
+    {
+      "key": "breathing",
+      "label": "Oddychanie"
+    },
+    {
+      "key": "physiology",
+      "label": "Pomiary fizjologiczne"
+    },
+    {
+      "key": "environment",
+      "label": "Temperatura i otoczenie"
+    },
+    {
+      "key": "training",
+      "label": "Ocena treningu"
+    },
+    {
+      "key": "device",
+      "label": "Urządzenia"
+    }
+  ],
+  "count": 87,
+  "icons": [
+    {
+      "key": "date",
+      "label": "Data rozpoczęcia",
+      "group": "time",
+      "variant": null,
+      "base": "date",
+      "files": {
+        "20": "20/date.svg",
+        "32": "32/date.svg"
+      },
+      "symbol": "tbm-date"
+    },
+    {
+      "key": "start_time",
+      "label": "Godzina rozpoczęcia",
+      "group": "time",
+      "variant": null,
+      "base": "start_time",
+      "files": {
+        "20": "20/start_time.svg",
+        "32": "32/start_time.svg"
+      },
+      "symbol": "tbm-start_time"
+    },
+    {
+      "key": "elapsed_time",
+      "label": "Czas całkowity",
+      "group": "time",
+      "variant": null,
+      "base": "elapsed_time",
+      "files": {
+        "20": "20/elapsed_time.svg",
+        "32": "32/elapsed_time.svg"
+      },
+      "symbol": "tbm-elapsed_time"
+    },
+    {
+      "key": "timer_time",
+      "label": "Czas timera",
+      "group": "time",
+      "variant": null,
+      "base": "timer_time",
+      "files": {
+        "20": "20/timer_time.svg",
+        "32": "32/timer_time.svg"
+      },
+      "symbol": "tbm-timer_time"
+    },
+    {
+      "key": "moving_time",
+      "label": "Czas w ruchu",
+      "group": "time",
+      "variant": null,
+      "base": "moving_time",
+      "files": {
+        "20": "20/moving_time.svg",
+        "32": "32/moving_time.svg"
+      },
+      "symbol": "tbm-moving_time"
+    },
+    {
+      "key": "pause_time",
+      "label": "Czas przerw",
+      "group": "time",
+      "variant": null,
+      "base": "pause_time",
+      "files": {
+        "20": "20/pause_time.svg",
+        "32": "32/pause_time.svg"
+      },
+      "symbol": "tbm-pause_time"
+    },
+    {
+      "key": "lap_time",
+      "label": "Czas okrążenia",
+      "group": "time",
+      "variant": null,
+      "base": "lap_time",
+      "files": {
+        "20": "20/lap_time.svg",
+        "32": "32/lap_time.svg"
+      },
+      "symbol": "tbm-lap_time"
+    },
+    {
+      "key": "interval_time",
+      "label": "Czas interwału",
+      "group": "time",
+      "variant": null,
+      "base": "interval_time",
+      "files": {
+        "20": "20/interval_time.svg",
+        "32": "32/interval_time.svg"
+      },
+      "symbol": "tbm-interval_time"
+    },
+    {
+      "key": "distance_total",
+      "label": "Dystans całkowity",
+      "group": "distance",
+      "variant": null,
+      "base": "distance_total",
+      "files": {
+        "20": "20/distance_total.svg",
+        "32": "32/distance_total.svg"
+      },
+      "symbol": "tbm-distance_total"
+    },
+    {
+      "key": "distance_lap",
+      "label": "Dystans okrążenia",
+      "group": "distance",
+      "variant": null,
+      "base": "distance_lap",
+      "files": {
+        "20": "20/distance_lap.svg",
+        "32": "32/distance_lap.svg"
+      },
+      "symbol": "tbm-distance_lap"
+    },
+    {
+      "key": "distance_interval",
+      "label": "Dystans interwału",
+      "group": "distance",
+      "variant": null,
+      "base": "distance_interval",
+      "files": {
+        "20": "20/distance_interval.svg",
+        "32": "32/distance_interval.svg"
+      },
+      "symbol": "tbm-distance_interval"
+    },
+    {
+      "key": "position",
+      "label": "Pozycja GPS",
+      "group": "distance",
+      "variant": null,
+      "base": "position",
+      "files": {
+        "20": "20/position.svg",
+        "32": "32/position.svg"
+      },
+      "symbol": "tbm-position"
+    },
+    {
+      "key": "latitude",
+      "label": "Szerokość geograficzna",
+      "group": "distance",
+      "variant": null,
+      "base": "latitude",
+      "files": {
+        "20": "20/latitude.svg",
+        "32": "32/latitude.svg"
+      },
+      "symbol": "tbm-latitude"
+    },
+    {
+      "key": "longitude",
+      "label": "Długość geograficzna",
+      "group": "distance",
+      "variant": null,
+      "base": "longitude",
+      "files": {
+        "20": "20/longitude.svg",
+        "32": "32/longitude.svg"
+      },
+      "symbol": "tbm-longitude"
+    },
+    {
+      "key": "route",
+      "label": "Trasa",
+      "group": "distance",
+      "variant": null,
+      "base": "route",
+      "files": {
+        "20": "20/route.svg",
+        "32": "32/route.svg"
+      },
+      "symbol": "tbm-route"
+    },
+    {
+      "key": "gps_accuracy",
+      "label": "Dokładność GPS",
+      "group": "distance",
+      "variant": null,
+      "base": "gps_accuracy",
+      "files": {
+        "20": "20/gps_accuracy.svg",
+        "32": "32/gps_accuracy.svg"
+      },
+      "symbol": "tbm-gps_accuracy"
+    },
+    {
+      "key": "speed",
+      "label": "Prędkość",
+      "group": "speed",
+      "variant": null,
+      "base": "speed",
+      "files": {
+        "20": "20/speed.svg",
+        "32": "32/speed.svg"
+      },
+      "symbol": "tbm-speed"
+    },
+    {
+      "key": "avg_speed",
+      "label": "Średnia: Prędkość",
+      "group": "speed",
+      "variant": "avg",
+      "base": "speed",
+      "files": {
+        "20": "20/avg_speed.svg",
+        "32": "32/avg_speed.svg"
+      },
+      "symbol": "tbm-avg_speed"
+    },
+    {
+      "key": "max_speed",
+      "label": "Maksimum: Prędkość",
+      "group": "speed",
+      "variant": "max",
+      "base": "speed",
+      "files": {
+        "20": "20/max_speed.svg",
+        "32": "32/max_speed.svg"
+      },
+      "symbol": "tbm-max_speed"
+    },
+    {
+      "key": "pace",
+      "label": "Tempo",
+      "group": "speed",
+      "variant": null,
+      "base": "pace",
+      "files": {
+        "20": "20/pace.svg",
+        "32": "32/pace.svg"
+      },
+      "symbol": "tbm-pace"
+    },
+    {
+      "key": "avg_pace",
+      "label": "Średnia: Tempo",
+      "group": "speed",
+      "variant": "avg",
+      "base": "pace",
+      "files": {
+        "20": "20/avg_pace.svg",
+        "32": "32/avg_pace.svg"
+      },
+      "symbol": "tbm-avg_pace"
+    },
+    {
+      "key": "best_pace",
+      "label": "Najlepsze tempo",
+      "group": "speed",
+      "variant": "min",
+      "base": "pace",
+      "files": {
+        "20": "20/best_pace.svg",
+        "32": "32/best_pace.svg"
+      },
+      "symbol": "tbm-best_pace"
+    },
+    {
+      "key": "grade_adjusted_speed",
+      "label": "Prędkość skorygowana o nachylenie",
+      "group": "speed",
+      "variant": null,
+      "base": "grade_adjusted_speed",
+      "files": {
+        "20": "20/grade_adjusted_speed.svg",
+        "32": "32/grade_adjusted_speed.svg"
+      },
+      "symbol": "tbm-grade_adjusted_speed"
+    },
+    {
+      "key": "grade_adjusted_pace",
+      "label": "Tempo skorygowane o nachylenie",
+      "group": "speed",
+      "variant": null,
+      "base": "grade_adjusted_pace",
+      "files": {
+        "20": "20/grade_adjusted_pace.svg",
+        "32": "32/grade_adjusted_pace.svg"
+      },
+      "symbol": "tbm-grade_adjusted_pace"
+    },
+    {
+      "key": "altitude",
+      "label": "Wysokość",
+      "group": "elevation",
+      "variant": null,
+      "base": "altitude",
+      "files": {
+        "20": "20/altitude.svg",
+        "32": "32/altitude.svg"
+      },
+      "symbol": "tbm-altitude"
+    },
+    {
+      "key": "min_altitude",
+      "label": "Minimum: Wysokość",
+      "group": "elevation",
+      "variant": "min",
+      "base": "altitude",
+      "files": {
+        "20": "20/min_altitude.svg",
+        "32": "32/min_altitude.svg"
+      },
+      "symbol": "tbm-min_altitude"
+    },
+    {
+      "key": "max_altitude",
+      "label": "Maksimum: Wysokość",
+      "group": "elevation",
+      "variant": "max",
+      "base": "altitude",
+      "files": {
+        "20": "20/max_altitude.svg",
+        "32": "32/max_altitude.svg"
+      },
+      "symbol": "tbm-max_altitude"
+    },
+    {
+      "key": "total_ascent",
+      "label": "Suma podejść",
+      "group": "elevation",
+      "variant": null,
+      "base": "total_ascent",
+      "files": {
+        "20": "20/total_ascent.svg",
+        "32": "32/total_ascent.svg"
+      },
+      "symbol": "tbm-total_ascent"
+    },
+    {
+      "key": "total_descent",
+      "label": "Suma zejść",
+      "group": "elevation",
+      "variant": null,
+      "base": "total_descent",
+      "files": {
+        "20": "20/total_descent.svg",
+        "32": "32/total_descent.svg"
+      },
+      "symbol": "tbm-total_descent"
+    },
+    {
+      "key": "grade",
+      "label": "Nachylenie",
+      "group": "elevation",
+      "variant": null,
+      "base": "grade",
+      "files": {
+        "20": "20/grade.svg",
+        "32": "32/grade.svg"
+      },
+      "symbol": "tbm-grade"
+    },
+    {
+      "key": "vertical_speed",
+      "label": "Prędkość pionowa",
+      "group": "elevation",
+      "variant": null,
+      "base": "vertical_speed",
+      "files": {
+        "20": "20/vertical_speed.svg",
+        "32": "32/vertical_speed.svg"
+      },
+      "symbol": "tbm-vertical_speed"
+    },
+    {
+      "key": "vam",
+      "label": "VAM — tempo wznoszenia",
+      "group": "elevation",
+      "variant": null,
+      "base": "vam",
+      "files": {
+        "20": "20/vam.svg",
+        "32": "32/vam.svg"
+      },
+      "symbol": "tbm-vam"
+    },
+    {
+      "key": "heart_rate",
+      "label": "Tętno",
+      "group": "heart",
+      "variant": null,
+      "base": "heart_rate",
+      "files": {
+        "20": "20/heart_rate.svg",
+        "32": "32/heart_rate.svg"
+      },
+      "symbol": "tbm-heart_rate"
+    },
+    {
+      "key": "avg_heart_rate",
+      "label": "Średnia: Tętno",
+      "group": "heart",
+      "variant": "avg",
+      "base": "heart_rate",
+      "files": {
+        "20": "20/avg_heart_rate.svg",
+        "32": "32/avg_heart_rate.svg"
+      },
+      "symbol": "tbm-avg_heart_rate"
+    },
+    {
+      "key": "min_heart_rate",
+      "label": "Minimum: Tętno",
+      "group": "heart",
+      "variant": "min",
+      "base": "heart_rate",
+      "files": {
+        "20": "20/min_heart_rate.svg",
+        "32": "32/min_heart_rate.svg"
+      },
+      "symbol": "tbm-min_heart_rate"
+    },
+    {
+      "key": "max_heart_rate",
+      "label": "Maksimum: Tętno",
+      "group": "heart",
+      "variant": "max",
+      "base": "heart_rate",
+      "files": {
+        "20": "20/max_heart_rate.svg",
+        "32": "32/max_heart_rate.svg"
+      },
+      "symbol": "tbm-max_heart_rate"
+    },
+    {
+      "key": "time_in_hr_zone",
+      "label": "Czas w strefach tętna",
+      "group": "heart",
+      "variant": null,
+      "base": "time_in_hr_zone",
+      "files": {
+        "20": "20/time_in_hr_zone.svg",
+        "32": "32/time_in_hr_zone.svg"
+      },
+      "symbol": "tbm-time_in_hr_zone"
+    },
+    {
+      "key": "cadence",
+      "label": "Kadencja",
+      "group": "cadence",
+      "variant": null,
+      "base": "cadence",
+      "files": {
+        "20": "20/cadence.svg",
+        "32": "32/cadence.svg"
+      },
+      "symbol": "tbm-cadence"
+    },
+    {
+      "key": "avg_cadence",
+      "label": "Średnia: Kadencja",
+      "group": "cadence",
+      "variant": "avg",
+      "base": "cadence",
+      "files": {
+        "20": "20/avg_cadence.svg",
+        "32": "32/avg_cadence.svg"
+      },
+      "symbol": "tbm-avg_cadence"
+    },
+    {
+      "key": "max_cadence",
+      "label": "Maksimum: Kadencja",
+      "group": "cadence",
+      "variant": "max",
+      "base": "cadence",
+      "files": {
+        "20": "20/max_cadence.svg",
+        "32": "32/max_cadence.svg"
+      },
+      "symbol": "tbm-max_cadence"
+    },
+    {
+      "key": "steps",
+      "label": "Liczba kroków",
+      "group": "cadence",
+      "variant": null,
+      "base": "steps",
+      "files": {
+        "20": "20/steps.svg",
+        "32": "32/steps.svg"
+      },
+      "symbol": "tbm-steps"
+    },
+    {
+      "key": "cycles",
+      "label": "Liczba cykli",
+      "group": "cadence",
+      "variant": null,
+      "base": "cycles",
+      "files": {
+        "20": "20/cycles.svg",
+        "32": "32/cycles.svg"
+      },
+      "symbol": "tbm-cycles"
+    },
+    {
+      "key": "crank_revolutions",
+      "label": "Obroty korby",
+      "group": "cadence",
+      "variant": null,
+      "base": "crank_revolutions",
+      "files": {
+        "20": "20/crank_revolutions.svg",
+        "32": "32/crank_revolutions.svg"
+      },
+      "symbol": "tbm-crank_revolutions"
+    },
+    {
+      "key": "swim_strokes",
+      "label": "Ruchy pływackie",
+      "group": "cadence",
+      "variant": null,
+      "base": "swim_strokes",
+      "files": {
+        "20": "20/swim_strokes.svg",
+        "32": "32/swim_strokes.svg"
+      },
+      "symbol": "tbm-swim_strokes"
+    },
+    {
+      "key": "wheelchair_pushes",
+      "label": "Odepchnięcia wózka",
+      "group": "cadence",
+      "variant": null,
+      "base": "wheelchair_pushes",
+      "files": {
+        "20": "20/wheelchair_pushes.svg",
+        "32": "32/wheelchair_pushes.svg"
+      },
+      "symbol": "tbm-wheelchair_pushes"
+    },
+    {
+      "key": "power",
+      "label": "Moc",
+      "group": "power",
+      "variant": null,
+      "base": "power",
+      "files": {
+        "20": "20/power.svg",
+        "32": "32/power.svg"
+      },
+      "symbol": "tbm-power"
+    },
+    {
+      "key": "avg_power",
+      "label": "Średnia: Moc",
+      "group": "power",
+      "variant": "avg",
+      "base": "power",
+      "files": {
+        "20": "20/avg_power.svg",
+        "32": "32/avg_power.svg"
+      },
+      "symbol": "tbm-avg_power"
+    },
+    {
+      "key": "max_power",
+      "label": "Maksimum: Moc",
+      "group": "power",
+      "variant": "max",
+      "base": "power",
+      "files": {
+        "20": "20/max_power.svg",
+        "32": "32/max_power.svg"
+      },
+      "symbol": "tbm-max_power"
+    },
+    {
+      "key": "normalized_power",
+      "label": "Moc znormalizowana",
+      "group": "power",
+      "variant": null,
+      "base": "normalized_power",
+      "files": {
+        "20": "20/normalized_power.svg",
+        "32": "32/normalized_power.svg"
+      },
+      "symbol": "tbm-normalized_power"
+    },
+    {
+      "key": "total_work",
+      "label": "Praca całkowita",
+      "group": "power",
+      "variant": null,
+      "base": "total_work",
+      "files": {
+        "20": "20/total_work.svg",
+        "32": "32/total_work.svg"
+      },
+      "symbol": "tbm-total_work"
+    },
+    {
+      "key": "intensity_factor",
+      "label": "Intensity Factor — intensywność",
+      "group": "power",
+      "variant": null,
+      "base": "intensity_factor",
+      "files": {
+        "20": "20/intensity_factor.svg",
+        "32": "32/intensity_factor.svg"
+      },
+      "symbol": "tbm-intensity_factor"
+    },
+    {
+      "key": "training_stress_score",
+      "label": "Training Stress Score — TSS",
+      "group": "power",
+      "variant": null,
+      "base": "training_stress_score",
+      "files": {
+        "20": "20/training_stress_score.svg",
+        "32": "32/training_stress_score.svg"
+      },
+      "symbol": "tbm-training_stress_score"
+    },
+    {
+      "key": "time_in_power_zone",
+      "label": "Czas w strefach mocy",
+      "group": "power",
+      "variant": null,
+      "base": "time_in_power_zone",
+      "files": {
+        "20": "20/time_in_power_zone.svg",
+        "32": "32/time_in_power_zone.svg"
+      },
+      "symbol": "tbm-time_in_power_zone"
+    },
+    {
+      "key": "calories",
+      "label": "Kalorie",
+      "group": "energy",
+      "variant": null,
+      "base": "calories",
+      "files": {
+        "20": "20/calories.svg",
+        "32": "32/calories.svg"
+      },
+      "symbol": "tbm-calories"
+    },
+    {
+      "key": "active_calories",
+      "label": "Kalorie aktywne",
+      "group": "energy",
+      "variant": null,
+      "base": "active_calories",
+      "files": {
+        "20": "20/active_calories.svg",
+        "32": "32/active_calories.svg"
+      },
+      "symbol": "tbm-active_calories"
+    },
+    {
+      "key": "resting_calories",
+      "label": "Kalorie spoczynkowe",
+      "group": "energy",
+      "variant": null,
+      "base": "resting_calories",
+      "files": {
+        "20": "20/resting_calories.svg",
+        "32": "32/resting_calories.svg"
+      },
+      "symbol": "tbm-resting_calories"
+    },
+    {
+      "key": "metabolic_calories",
+      "label": "Kalorie metaboliczne",
+      "group": "energy",
+      "variant": null,
+      "base": "metabolic_calories",
+      "files": {
+        "20": "20/metabolic_calories.svg",
+        "32": "32/metabolic_calories.svg"
+      },
+      "symbol": "tbm-metabolic_calories"
+    },
+    {
+      "key": "fat_calories",
+      "label": "Kalorie z tłuszczu",
+      "group": "energy",
+      "variant": null,
+      "base": "fat_calories",
+      "files": {
+        "20": "20/fat_calories.svg",
+        "32": "32/fat_calories.svg"
+      },
+      "symbol": "tbm-fat_calories"
+    },
+    {
+      "key": "respiration_rate",
+      "label": "Częstość oddechów",
+      "group": "breathing",
+      "variant": null,
+      "base": "respiration_rate",
+      "files": {
+        "20": "20/respiration_rate.svg",
+        "32": "32/respiration_rate.svg"
+      },
+      "symbol": "tbm-respiration_rate"
+    },
+    {
+      "key": "avg_respiration_rate",
+      "label": "Średnia: Częstość oddechów",
+      "group": "breathing",
+      "variant": "avg",
+      "base": "respiration_rate",
+      "files": {
+        "20": "20/avg_respiration_rate.svg",
+        "32": "32/avg_respiration_rate.svg"
+      },
+      "symbol": "tbm-avg_respiration_rate"
+    },
+    {
+      "key": "min_respiration_rate",
+      "label": "Minimum: Częstość oddechów",
+      "group": "breathing",
+      "variant": "min",
+      "base": "respiration_rate",
+      "files": {
+        "20": "20/min_respiration_rate.svg",
+        "32": "32/min_respiration_rate.svg"
+      },
+      "symbol": "tbm-min_respiration_rate"
+    },
+    {
+      "key": "max_respiration_rate",
+      "label": "Maksimum: Częstość oddechów",
+      "group": "breathing",
+      "variant": "max",
+      "base": "respiration_rate",
+      "files": {
+        "20": "20/max_respiration_rate.svg",
+        "32": "32/max_respiration_rate.svg"
+      },
+      "symbol": "tbm-max_respiration_rate"
+    },
+    {
+      "key": "rr_intervals",
+      "label": "Odstępy RR między uderzeniami",
+      "group": "physiology",
+      "variant": null,
+      "base": "rr_intervals",
+      "files": {
+        "20": "20/rr_intervals.svg",
+        "32": "32/rr_intervals.svg"
+      },
+      "symbol": "tbm-rr_intervals"
+    },
+    {
+      "key": "hrv",
+      "label": "Zmienność rytmu serca — HRV",
+      "group": "physiology",
+      "variant": null,
+      "base": "hrv",
+      "files": {
+        "20": "20/hrv.svg",
+        "32": "32/hrv.svg"
+      },
+      "symbol": "tbm-hrv"
+    },
+    {
+      "key": "rmssd",
+      "label": "HRV — RMSSD",
+      "group": "physiology",
+      "variant": null,
+      "base": "rmssd",
+      "files": {
+        "20": "20/rmssd.svg",
+        "32": "32/rmssd.svg"
+      },
+      "symbol": "tbm-rmssd"
+    },
+    {
+      "key": "sdrr",
+      "label": "HRV — SDRR",
+      "group": "physiology",
+      "variant": null,
+      "base": "sdrr",
+      "files": {
+        "20": "20/sdrr.svg",
+        "32": "32/sdrr.svg"
+      },
+      "symbol": "tbm-sdrr"
+    },
+    {
+      "key": "spo2",
+      "label": "Saturacja krwi — SpO₂",
+      "group": "physiology",
+      "variant": null,
+      "base": "spo2",
+      "files": {
+        "20": "20/spo2.svg",
+        "32": "32/spo2.svg"
+      },
+      "symbol": "tbm-spo2"
+    },
+    {
+      "key": "muscle_oxygen",
+      "label": "Tlenowanie mięśni — SmO₂",
+      "group": "physiology",
+      "variant": null,
+      "base": "muscle_oxygen",
+      "files": {
+        "20": "20/muscle_oxygen.svg",
+        "32": "32/muscle_oxygen.svg"
+      },
+      "symbol": "tbm-muscle_oxygen"
+    },
+    {
+      "key": "hemoglobin",
+      "label": "Stężenie hemoglobiny",
+      "group": "physiology",
+      "variant": null,
+      "base": "hemoglobin",
+      "files": {
+        "20": "20/hemoglobin.svg",
+        "32": "32/hemoglobin.svg"
+      },
+      "symbol": "tbm-hemoglobin"
+    },
+    {
+      "key": "temperature",
+      "label": "Temperatura z czujnika",
+      "group": "environment",
+      "variant": null,
+      "base": "temperature",
+      "files": {
+        "20": "20/temperature.svg",
+        "32": "32/temperature.svg"
+      },
+      "symbol": "tbm-temperature"
+    },
+    {
+      "key": "core_temperature",
+      "label": "Temperatura głęboka ciała",
+      "group": "environment",
+      "variant": null,
+      "base": "core_temperature",
+      "files": {
+        "20": "20/core_temperature.svg",
+        "32": "32/core_temperature.svg"
+      },
+      "symbol": "tbm-core_temperature"
+    },
+    {
+      "key": "pressure",
+      "label": "Ciśnienie",
+      "group": "environment",
+      "variant": null,
+      "base": "pressure",
+      "files": {
+        "20": "20/pressure.svg",
+        "32": "32/pressure.svg"
+      },
+      "symbol": "tbm-pressure"
+    },
+    {
+      "key": "wind_speed",
+      "label": "Prędkość wiatru",
+      "group": "environment",
+      "variant": null,
+      "base": "wind_speed",
+      "files": {
+        "20": "20/wind_speed.svg",
+        "32": "32/wind_speed.svg"
+      },
+      "symbol": "tbm-wind_speed"
+    },
+    {
+      "key": "wind_direction",
+      "label": "Kierunek wiatru",
+      "group": "environment",
+      "variant": null,
+      "base": "wind_direction",
+      "files": {
+        "20": "20/wind_direction.svg",
+        "32": "32/wind_direction.svg"
+      },
+      "symbol": "tbm-wind_direction"
+    },
+    {
+      "key": "humidity",
+      "label": "Wilgotność",
+      "group": "environment",
+      "variant": null,
+      "base": "humidity",
+      "files": {
+        "20": "20/humidity.svg",
+        "32": "32/humidity.svg"
+      },
+      "symbol": "tbm-humidity"
+    },
+    {
+      "key": "feels_like",
+      "label": "Temperatura odczuwalna",
+      "group": "environment",
+      "variant": null,
+      "base": "feels_like",
+      "files": {
+        "20": "20/feels_like.svg",
+        "32": "32/feels_like.svg"
+      },
+      "symbol": "tbm-feels_like"
+    },
+    {
+      "key": "weather",
+      "label": "Warunki pogodowe",
+      "group": "environment",
+      "variant": null,
+      "base": "weather",
+      "files": {
+        "20": "20/weather.svg",
+        "32": "32/weather.svg"
+      },
+      "symbol": "tbm-weather"
+    },
+    {
+      "key": "aerobic_effect",
+      "label": "Aerobowy efekt treningowy",
+      "group": "training",
+      "variant": null,
+      "base": "aerobic_effect",
+      "files": {
+        "20": "20/aerobic_effect.svg",
+        "32": "32/aerobic_effect.svg"
+      },
+      "symbol": "tbm-aerobic_effect"
+    },
+    {
+      "key": "anaerobic_effect",
+      "label": "Anaerobowy efekt treningowy",
+      "group": "training",
+      "variant": null,
+      "base": "anaerobic_effect",
+      "files": {
+        "20": "20/anaerobic_effect.svg",
+        "32": "32/anaerobic_effect.svg"
+      },
+      "symbol": "tbm-anaerobic_effect"
+    },
+    {
+      "key": "workout_rpe",
+      "label": "Odczuwany wysiłek — RPE",
+      "group": "training",
+      "variant": null,
+      "base": "workout_rpe",
+      "files": {
+        "20": "20/workout_rpe.svg",
+        "32": "32/workout_rpe.svg"
+      },
+      "symbol": "tbm-workout_rpe"
+    },
+    {
+      "key": "workout_feel",
+      "label": "Samopoczucie po treningu",
+      "group": "training",
+      "variant": null,
+      "base": "workout_feel",
+      "files": {
+        "20": "20/workout_feel.svg",
+        "32": "32/workout_feel.svg"
+      },
+      "symbol": "tbm-workout_feel"
+    },
+    {
+      "key": "watch",
+      "label": "Model zegarka",
+      "group": "device",
+      "variant": null,
+      "base": "watch",
+      "files": {
+        "20": "20/watch.svg",
+        "32": "32/watch.svg"
+      },
+      "symbol": "tbm-watch"
+    },
+    {
+      "key": "sensor",
+      "label": "Czujnik",
+      "group": "device",
+      "variant": null,
+      "base": "sensor",
+      "files": {
+        "20": "20/sensor.svg",
+        "32": "32/sensor.svg"
+      },
+      "symbol": "tbm-sensor"
+    },
+    {
+      "key": "software_version",
+      "label": "Wersja oprogramowania",
+      "group": "device",
+      "variant": null,
+      "base": "software_version",
+      "files": {
+        "20": "20/software_version.svg",
+        "32": "32/software_version.svg"
+      },
+      "symbol": "tbm-software_version"
+    },
+    {
+      "key": "battery",
+      "label": "Stan baterii",
+      "group": "device",
+      "variant": null,
+      "base": "battery",
+      "files": {
+        "20": "20/battery.svg",
+        "32": "32/battery.svg"
+      },
+      "symbol": "tbm-battery"
+    },
+    {
+      "key": "measurement_source",
+      "label": "Źródło pomiaru",
+      "group": "device",
+      "variant": null,
+      "base": "measurement_source",
+      "files": {
+        "20": "20/measurement_source.svg",
+        "32": "32/measurement_source.svg"
+      },
+      "symbol": "tbm-measurement_source"
+    },
+    {
+      "key": "other",
+      "label": "Inny parametr",
+      "group": "device",
+      "variant": null,
+      "base": "other",
+      "files": {
+        "20": "20/other.svg",
+        "32": "32/other.svg"
+      },
+      "symbol": "tbm-other"
+    }
+  ],
+  "revised_icons": [
+    "time_in_hr_zone",
+    "distance_total",
+    "total_ascent",
+    "total_descent",
+    "altitude",
+    "heart_rate",
+    "avg_heart_rate",
+    "timer_time",
+    "power",
+    "calories",
+    "cadence",
+    "speed"
+  ],
+  "elevation_variant": "A — profil terenu"
+}

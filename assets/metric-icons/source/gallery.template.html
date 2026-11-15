@@ -1,0 +1,57 @@
+<div id="tb-metric-gallery" aria-label="Ikony parametrów Trailbook w rozmiarach 20 i 32 piksele">
+<style>
+#tb-metric-gallery{--metric-accent:#53c4ff;--metric-bg:#101216;--metric-panel:#20242d;--metric-border:#323844;--metric-text:#edf2fa;--metric-secondary:#aeb9cb;font-family:Inter,Segoe UI,Arial,sans-serif;color:var(--metric-text)}
+#tb-metric-gallery *{box-sizing:border-box}
+#tb-metric-gallery .metric-controls{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:16px;padding-right:85px;color:light-dark(#202733,#edf2fa)}
+#tb-metric-gallery .metric-controls label{display:flex;align-items:center;gap:8px;max-width:100%}
+#tb-metric-gallery .metric-controls select{max-width:100%;min-width:0}
+#tb-metric-gallery .metric-stage{background:var(--metric-bg);padding:20px;border-radius:14px;border:1px solid var(--metric-border)}
+#tb-metric-gallery .metric-topline{display:flex;gap:12px;justify-content:space-between;flex-wrap:wrap;margin-bottom:18px}
+#tb-metric-gallery h3{margin:0;font-size:16px;font-weight:600;line-height:1.5}
+#tb-metric-gallery .metric-info{font-size:12px;color:var(--metric-secondary)}
+#tb-metric-gallery .metric-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+#tb-metric-gallery .metric-cell{padding:16px 12px;background:var(--metric-panel);border-radius:10px;display:flex;flex-direction:column;gap:15px;min-width:0}
+#tb-metric-gallery .metric-samples{display:flex;align-items:center;gap:24px;min-height:40px;color:var(--metric-accent)}
+#tb-metric-gallery .metric-small{width:20px;height:20px;flex:none}
+#tb-metric-gallery .metric-large{width:32px;height:32px;flex:none}
+#tb-metric-gallery .metric-name{font-size:13px;line-height:1.45;overflow-wrap:anywhere}
+#tb-metric-gallery .metric-legend{color:var(--metric-secondary);font-size:12px;margin-top:16px}
+@media(max-width:600px){#tb-metric-gallery .metric-grid{grid-template-columns:repeat(3,minmax(0,1fr))}#tb-metric-gallery .metric-samples{gap:16px}}
+@media(max-width:430px){#tb-metric-gallery .metric-grid{grid-template-columns:repeat(2,minmax(0,1fr))}#tb-metric-gallery .metric-stage{padding:12px}#tb-metric-gallery .metric-cell{padding:12px}}
+</style>
+<div class="metric-controls">
+ <label class="form-label">Grupa <select class="form-select" aria-label="Grupa parametrów"></select></label>
+ <label class="form-label">Akcent <input class="form-control form-control-color" type="color" value="#53c4ff" aria-label="Kolor ikon"></label>
+ <label class="form-label">Tło <select class="form-select" aria-label="Motyw"><option value="dark">Ciemne</option><option value="light">Jasne</option></select></label>
+</div>
+<div class="metric-stage"><div class="metric-topline"><h3>Parametry · 20 px + 32 px</h3><span class="metric-info" aria-live="polite"></span></div><div class="metric-grid"></div><div class="metric-legend">= średnia &nbsp; · &nbsp; ↓ minimum &nbsp; · &nbsp; ↑ maksimum &nbsp; · &nbsp; większa ikona: ×1,6</div></div>
+<script type="application/json" id="tb-metric-data">__DATA__</script>
+<script>
+(() => {
+ const root=document.getElementById('tb-metric-gallery');
+ const data=JSON.parse(root.querySelector('#tb-metric-data').textContent);
+ const group=root.querySelector('select'),theme=root.querySelectorAll('select')[1],accent=root.querySelector('input');
+ const featured=['heart_rate','avg_heart_rate','cadence','power','distance_total','pace','altitude','total_ascent','calories','respiration_rate','temperature','timer_time'];
+ const escape=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+ group.innerHTML='<option value="featured">Najczęstsze parametry</option>'+data.groups.map(g=>`<option value="${g.key}">${escape(g.label)}</option>`).join('')+`<option value="all">Wszystkie · ${data.icons.length}</option>`;
+ function render(){
+  const icons=group.value==='featured'?featured.map(k=>data.icons.find(i=>i.key===k)):data.icons.filter(i=>group.value==='all'||i.group===group.value);
+  root.style.setProperty('--metric-accent',accent.value);
+  const palette=theme.value==='light'?['#f5f7fa','#ffffff','#dce2eb','#172131','#56667e']:['#101216','#20242d','#323844','#edf2fa','#aeb9cb'];
+  ['bg','panel','border','text','secondary'].forEach((name,i)=>root.style.setProperty('--metric-'+name,palette[i]));
+  root.querySelector('.metric-info').textContent=icons.length+' / '+data.icons.length+' ikon';
+  root.querySelector('.metric-grid').innerHTML=icons.map(i=>`<div class="metric-cell"><div class="metric-samples"><svg class="metric-small" viewBox="0 0 24 24" fill="none" stroke="none" aria-hidden="true">${i.body}</svg><svg class="metric-large" viewBox="0 0 24 24" fill="none" stroke="none" aria-hidden="true">${i.body}</svg></div><span class="metric-name">${escape(i.label)}</span></div>`).join('');
+ }
+ function restore(s){
+  if(s&&[...group.options].some(o=>o.value===s.group))group.value=s.group;
+  if(s&&/^#[a-f0-9]{6}$/i.test(s.accent||''))accent.value=s.accent;
+  if(s&&['light','dark'].includes(s.theme))theme.value=s.theme;
+  render();
+ }
+ function update(){render();if(window.openai?.setWidgetState)window.openai.setWidgetState({modelContent:{group:group.value,accent:accent.value,theme:theme.value},privateContent:null}).catch(()=>{});}
+ group.addEventListener('change',update);theme.addEventListener('change',update);accent.addEventListener('input',update);
+ restore(window.openai?.widgetState?.modelContent);
+ window.addEventListener('openai:set_globals',e=>{if(e.detail?.globals?.widgetState)restore(e.detail.globals.widgetState.modelContent);});
+})();
+</script>
+</div>

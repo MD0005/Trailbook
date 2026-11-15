@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import re
 import struct
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -37,6 +39,26 @@ FILE_TYPE_NAMES = {
     68: "skin_temperature",
     73: "respiration",
     79: "health_snapshot",
+}
+
+# Further per-second record fields kept as streams when the file has them (watch dependent).
+# Numeric keys are undocumented Garmin fields, named after their observed meaning.
+EXTRA_CHANNELS = {
+    "stance_time": "stance_time",  # ms
+    "step_length": "step_length",  # mm
+    "vertical_oscillation": "vertical_oscillation",  # mm
+    "vertical_ratio": "vertical_ratio",  # %
+    "left_pco": "left_pco",  # mm, platform centre offset
+    "right_pco": "right_pco",
+    "left_smoothness": "left_pedal_smoothness",  # %
+    "right_smoothness": "right_pedal_smoothness",
+    "left_torque": "left_torque_effectiveness",  # %
+    "right_torque": "right_torque_effectiveness",
+    "performance_condition": 90,
+    # 138 drops fast in a hard effort and recovers (current stamina); 137 falls slowly (the
+    # potential: the most the current one can recover to).
+    "stamina": 138,  # %
+    "stamina_potential": 137,  # %
 }
 
 # Gaps longer than this between two records are treated as pauses, not movement.
@@ -194,6 +216,11 @@ class Lap:
     ascent_m: float | None
     descent_m: float | None
     intensity: str | None
+    # Target of the workout step the lap belongs to (structured workouts): the stream it
+    # refers to (hr|power|speed|cadence) and the range in stream units (bpm, W, m/s, rpm/spm).
+    target: str | None = None
+    target_low: float | None = None
+    target_high: float | None = None
 
 
 @dataclass
@@ -212,6 +239,8 @@ class ParsedActivity:
     track: list[tuple[float, float]]  # full-resolution (lat, lon)
     streams: dict[str, list[float | None]]
     laps: list[Lap] = field(default_factory=list)
+    # Thresholds the watch used for this activity (see `watch_thresholds`).
+    profile: dict[str, float | None] = field(default_factory=dict)
 
 
 def _first(d: dict, *keys):
@@ -228,6 +257,48 @@ def _cadence(d: dict, on_foot: bool, base_keys: tuple[str, ...], frac_key: str) 
         return None
     value = float(value) + float(d.get(frac_key) or 0.0)
     return value * 2 if on_foot else value
+
+
+# Workout step target types → stream channel.
+_TARGET_CHANNEL = {
+    "heart_rate": "hr", "heart_rate_lap": "hr",
+    "power": "power", "power_lap": "power", "power_3s": "power", "power_10s": "power",
+    "power_30s": "power",
+    "speed": "speed", "speed_lap": "speed",
+    "cadence": "cadence",
+}  # fmt: skip
+
+
+def workout_targets(messages: dict, on_foot: bool) -> dict[int, tuple[str, float, float]]:
+    """Custom targets of the workout steps: {step index: (channel, low, high)}.
+
+    Only custom ranges are used (a target given as a zone number needs the zones of that
+    time, which the file does not always carry). Units as in the FIT profile, with what
+    Garmin writes in practice: heart rate in bpm (values up to 100 = % of max HR), power in
+    watts (1000 + watts in the profile), speed in m/s, cadence per foot on foot (doubled
+    here like the cadence stream).
+    """
+    hr_max = watch_thresholds(messages).get("hr_max")
+    out = {}
+    for i, s in enumerate(messages.get("workout_step_mesgs") or []):
+        ch = _TARGET_CHANNEL.get(str(s.get("target_type")))
+        lo, hi = s.get("custom_target_value_low"), s.get("custom_target_value_high")
+        if ch is None or not lo or not hi:
+            continue
+        if ch == "speed":
+            lo = _first(s, "custom_target_speed_low") or lo / 1000
+            hi = _first(s, "custom_target_speed_high") or hi / 1000
+        elif ch == "hr" and hi <= 100:
+            if not hr_max:
+                continue
+            lo, hi = lo * hr_max / 100, hi * hr_max / 100
+        elif ch == "power" and lo >= 1000:
+            lo, hi = lo - 1000, hi - 1000
+        elif ch == "cadence" and on_foot:
+            lo, hi = lo * 2, hi * 2
+        idx = s.get("message_index", i)
+        out[int(idx)] = (ch, float(lo), float(hi))
+    return out
 
 
 def parse_activity(data: bytes) -> ParsedActivity:
@@ -286,6 +357,7 @@ def parse_activity(data: bytes) -> ParsedActivity:
         "cadence": [],
         "temperature": [],
         "respiration": [],
+        **{k: [] for k in EXTRA_CHANNELS},
     }
     track: list[tuple[float, float]] = []
     for r in records:
@@ -307,6 +379,10 @@ def parse_activity(data: bytes) -> ParsedActivity:
         channels["cadence"].append(_cadence(r, on_foot, ("cadence",), "fractional_cadence"))
         channels["temperature"].append(r.get("temperature"))
         channels["respiration"].append(_first(r, "enhanced_respiration_rate", "respiration_rate"))
+        for key, name in EXTRA_CHANNELS.items():
+            v = r.get(name)
+            ok = isinstance(v, (int, float)) and not isinstance(v, bool)
+            channels[key].append(v if ok else None)
         if lat is not None and lon is not None:
             track.append((lat, lon))
 
@@ -316,6 +392,8 @@ def parse_activity(data: bytes) -> ParsedActivity:
 
     # --- summary --------------------------------------------------------------------
     summary = _summary(sessions, channels, on_foot)
+    summary["zones"] = time_in_zones(messages)
+    summary["devices"] = devices_json(messages)
 
     if len(track) >= 2:
         lats = [p[0] for p in track]
@@ -335,8 +413,11 @@ def parse_activity(data: bytes) -> ParsedActivity:
 
     # --- laps -----------------------------------------------------------------------
     laps = []
+    targets = workout_targets(messages, on_foot)
     for i, lap in enumerate(messages.get("lap_mesgs") or []):
         lap_start = lap.get("start_time")
+        step = lap.get("wkt_step_index")
+        target = targets.get(int(step)) if isinstance(step, int) else None
         laps.append(
             Lap(
                 idx=i,
@@ -355,6 +436,9 @@ def parse_activity(data: bytes) -> ParsedActivity:
                 ascent_m=lap.get("total_ascent"),
                 descent_m=lap.get("total_descent"),
                 intensity=str(lap["intensity"]) if lap.get("intensity") is not None else None,
+                target=target[0] if target else None,
+                target_low=target[1] if target else None,
+                target_high=target[2] if target else None,
             )
         )
 
@@ -381,7 +465,55 @@ def parse_activity(data: bytes) -> ParsedActivity:
         track=track,
         streams=streams,
         laps=laps,
+        profile=watch_thresholds(messages),
     )
+
+
+# Plausible ranges; anything else (0 = not set, 255 = invalid) is ignored.
+_PROFILE_LIMITS = {
+    "hr_max": (100, 230), "hr_rest": (25, 120), "lthr": (80, 220), "ftp": (30, 700),
+    "weight": (20, 300),
+}  # fmt: skip
+
+
+def watch_thresholds(messages: dict) -> dict[str, float | None]:
+    """Thresholds the watch had set when the activity was recorded: HR max, threshold HR
+    and FTP from `zones_target`, resting HR and weight from `user_profile`, with the
+    session's `time_in_zone` as a fallback (newer watches write the values there)."""
+    zones = (messages.get("zones_target_mesgs") or [{}])[0]
+    user = (messages.get("user_profile_mesgs") or [{}])[0]
+    tiz = (
+        [
+            t
+            for t in messages.get("time_in_zone_mesgs") or []
+            if str(t.get("reference_mesg")) == "session"
+        ]
+        or messages.get("time_in_zone_mesgs")
+        or [{}]
+    )
+    t0 = tiz[0]
+    raw = {
+        "hr_max": _first(zones, "max_heart_rate") or t0.get("max_heart_rate"),
+        "hr_rest": _first(user, "resting_heart_rate") or t0.get("resting_heart_rate"),
+        "lthr": _first(zones, "threshold_heart_rate") or t0.get("threshold_heart_rate"),
+        "ftp": _first(zones, "functional_threshold_power") or t0.get("functional_threshold_power"),
+        "weight": user.get("weight"),
+    }
+    out: dict[str, float | None] = {}
+    for k, v in raw.items():
+        lo, hi = _PROFILE_LIMITS[k]
+        out[k] = v if isinstance(v, (int, float)) and lo <= v <= hi else None
+    return out
+
+
+def parse_watch_thresholds(data: bytes) -> dict[str, float | None]:
+    """Only the watch thresholds of a FIT file (for activities imported before they were
+    stored)."""
+    messages, _errors = Decoder(Stream.from_byte_array(bytearray(data))).read(
+        apply_scale_and_offset=True, convert_types_to_strings=True, expand_components=False,
+        merge_heart_rates=False,
+    )  # fmt: skip
+    return watch_thresholds(messages)
 
 
 def _fit_uid(file_id: dict, start_time: datetime, sport: str | None) -> str:
@@ -403,6 +535,146 @@ def _utc_offset(messages: dict) -> int | None:
             offset = local - (int(ts.timestamp()) - FIT_EPOCH_S)
             return int(round(offset / 900.0) * 900)  # time zones are multiples of 15 min
     return None
+
+
+# ANT+ / BLE device types → kind of device (for the picture on the activity page).
+_DEVICE_KIND = {
+    11: "power_meter", 17: "trainer", 34: "shifting", 35: "light", 36: "light", 40: "radar",
+    120: "hr_strap", 121: "speed_cadence", 122: "speed_cadence", 123: "speed_cadence",
+    124: "foot_pod",
+    "bike_power": "power_meter", "fitness_equipment": "trainer", "shifting": "shifting",
+    "bike_light_main": "light", "bike_light_shared": "light", "bike_radar": "radar",
+    "heart_rate": "hr_strap", "bike_speed_cadence": "speed_cadence",
+    "bike_cadence": "speed_cadence", "bike_speed": "speed_cadence",
+    "stride_speed_distance": "foot_pod",
+}  # fmt: skip
+_KIND_ORDER = ("watch", "bike_computer", "app", "power_meter", "hr_strap", "trainer", "radar",
+               "light", "speed_cadence", "foot_pod", "shifting", "sensor")  # fmt: skip
+_NAME_PREFIX = {
+    "fr": "Forerunner", "edge": "Edge", "fenix": "fēnix", "epix": "epix", "venu": "Venu",
+    "vivoactive": "vívoactive", "instinct": "Instinct", "enduro": "Enduro", "marq": "MARQ",
+    "hrm": "HRM", "approach": "Approach", "descent": "Descent", "tacx": "Tacx",
+}  # fmt: skip
+# Products the FIT SDK does not name yet (Garmin product number → model).
+_PRODUCT_NAMES = {"tacx_training_app_android": "Tacx Training app",
+                  "tacx_training_app_ios": "Tacx Training app"}  # fmt: skip
+_MAKER = {"favero_electronics": "Favero", "garmin": "Garmin", "wahoo_fitness": "Wahoo",
+          "tacx": "Tacx", "sram": "SRAM", "shimano": "Shimano", "polar": "Polar",
+          "stages_cycling": "Stages", "4iiiis": "4iiii", "zwift": "Zwift"}  # fmt: skip
+
+
+def device_name(maker: str | None, product) -> str | None:
+    """Readable model name from the FIT product name (fr965 → Forerunner 965)."""
+    if not isinstance(product, str) or not product or product.isdigit():
+        return None
+    if product.lower().startswith("hrm_"):
+        return "HRM-" + " ".join(w.capitalize() for w in product[4:].split("_"))
+    m = re.fullmatch(r"([a-z]+?)_?(\d.*)?", product.lower())
+    head, rest = (m.group(1), m.group(2) or "") if m else (product, "")
+    if head in _NAME_PREFIX:
+        tail = " ".join(
+            w.upper() if len(w) <= 2 and not w.isdigit() else w
+            for w in re.split(r"[_ ]", rest)
+            if w
+        )
+        tail = re.sub(r"(\d)([a-z]+)$", lambda x: x.group(1) + x.group(2).upper(), tail)
+        return f"{_NAME_PREFIX[head]} {tail}".strip()
+    return " ".join(w.capitalize() for w in product.split("_"))
+
+
+def devices(messages: dict) -> list[dict]:
+    """Devices that recorded the activity: the watch / bike computer and connected sensors.
+
+    From `device_info`: the creator plus external sensors (ANT+ / Bluetooth); built-in
+    sensors (barometer, GPS, wrist heart rate) are left out. One entry per physical device
+    (same maker, product and serial) with {kind, maker, product, name, serial, battery}.
+    """
+    file_id = (messages.get("file_id_mesgs") or [{}])[0]
+    out: dict[tuple, dict] = {}
+    for d in messages.get("device_info_mesgs") or []:
+        idx, src = d.get("device_index"), str(d.get("source_type") or "")
+        creator = str(idx) == "creator" or idx == 0
+        if not creator and src not in ("antplus", "bluetooth", "bluetooth_low_energy"):
+            continue
+        maker = d.get("manufacturer")
+        product = d.get("garmin_product") or d.get("favero_product") or d.get("product")
+        dtype = d.get("device_type") or d.get("antplus_device_type") or d.get("ble_device_type")
+        if creator:
+            maker = maker or file_id.get("manufacturer")
+            product = product or file_id.get("garmin_product") or file_id.get("product")
+            p = str(product or "").lower()
+            kind = ("bike_computer" if p.startswith("edge") else
+                    "app" if "app" in p or "zwift" in str(maker) else "watch")  # fmt: skip
+        elif str(product) == "OHR":  # a watch sending its wrist heart rate
+            kind, product = "watch", None
+        else:
+            kind = _DEVICE_KIND.get(dtype, "sensor")
+        serial = d.get("serial_number")
+        key = (str(maker), str(product), serial if serial else kind)
+        e = out.get(key)
+        if e is None:
+            name = (
+                _PRODUCT_NAMES.get(str(product))
+                or device_name(str(maker), product)
+                or {
+                    "radar": "Varia radar",
+                    "light": "Bike light",
+                    "power_meter": "Power meter",
+                    "hr_strap": "Heart rate monitor",
+                    "speed_cadence": "Speed / cadence sensor",
+                    "foot_pod": "Foot pod",
+                    "trainer": "Smart trainer",
+                    "watch": "Watch",
+                    "app": "App",
+                }.get(kind, "Sensor")
+            )
+            e = out[key] = {
+                "kind": kind, "maker": _MAKER.get(str(maker), str(maker or "").title() or None),
+                "product": str(product) if product is not None else None, "name": name,
+                "serial": serial, "battery": None,
+            }  # fmt: skip
+        elif _KIND_ORDER.index(kind) < _KIND_ORDER.index(e["kind"]):
+            e["kind"] = kind  # e.g. a radar with a light: the radar
+            if e["product"] is None or str(e["product"]).isdigit():
+                e["name"] = {"radar": "Varia radar"}.get(kind, e["name"])
+        if d.get("battery_status") is not None:
+            e["battery"] = str(d["battery_status"])
+    return sorted(out.values(), key=lambda e: _KIND_ORDER.index(e["kind"]))
+
+
+def devices_json(messages: dict) -> str | None:
+    found = devices(messages)
+    return json.dumps(found, separators=(",", ":")) if found else None
+
+
+def time_in_zones(messages: dict) -> str | None:
+    """Garmin's time in heart rate and power zones for the whole activity, as JSON.
+
+    From the `time_in_zone` message of the session (the watch's own zone limits):
+    {"hr": {"times": [s...], "bounds": [bpm...]}, "power": {...}}. `bounds` are the zone
+    limits as written: for heart rate the first one is the low limit of zone 1 (times[0] is
+    the time below zone 1), and so for cycling power (bounds start at 0); for running power
+    each one is the high limit of a zone (times[0] is zone 1). Sessions are summed when
+    there are several. None when the file has none.
+    """
+    out: dict[str, dict] = {}
+    for t in messages.get("time_in_zone_mesgs") or []:
+        if str(t.get("reference_mesg")) != "session":
+            continue
+        for key, times_f, bounds_f in (
+            ("hr", "time_in_hr_zone", "hr_zone_high_boundary"),
+            ("power", "time_in_power_zone", "power_zone_high_boundary"),
+        ):
+            times, bounds = t.get(times_f), t.get(bounds_f)
+            if not isinstance(times, list) or not isinstance(bounds, list) or not any(times):
+                continue
+            bounds = [b for b in bounds if b is not None]
+            times = [float(x or 0) for x in times]
+            if key in out and len(out[key]["times"]) == len(times):
+                out[key]["times"] = [a + b for a, b in zip(out[key]["times"], times, strict=True)]
+            else:
+                out[key] = {"times": times, "bounds": bounds}
+    return json.dumps(out, separators=(",", ":")) if out else None
 
 
 def _summary(sessions: list[dict], ch: dict[str, list], on_foot: bool) -> dict:
@@ -450,6 +722,8 @@ def _summary(sessions: list[dict], ch: dict[str, list], on_foot: bool) -> dict:
         if s0
         else None,
         "calories": total("total_calories"),
+        # resting (BMR) share of the calories; active = total - metabolic
+        "metabolic_calories": total("metabolic_calories"),
     }
     if summary["avg_speed"] is None and distance and summary["moving_s"]:
         summary["avg_speed"] = distance / summary["moving_s"]

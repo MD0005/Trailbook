@@ -81,7 +81,7 @@ MIGRATIONS: list[str] = [
     CREATE TABLE files (
         id              INTEGER PRIMARY KEY,
         person_id       TEXT NOT NULL REFERENCES persons(id),
-        rel_path        TEXT NOT NULL,          -- relative to root, '/' separators
+        rel_path        TEXT NOT NULL,          -- where the bytes are read, see v9
         zip_member      TEXT NOT NULL DEFAULT '',
         size            INTEGER NOT NULL,
         mtime           REAL NOT NULL,
@@ -301,6 +301,90 @@ MIGRATIONS: list[str] = [
     CREATE INDEX ix_segment_efforts_act ON segment_efforts(activity_id);
     ALTER TABLE activities ADD COLUMN segments_version INTEGER NOT NULL DEFAULT 0;
     CREATE INDEX ix_activities_segments ON activities(segments_version);
+    """,
+    # v9 — one archive for every source: files of the watched folder are copied into the
+    # archive next to the database (like uploads and Garmin downloads). `source_rel` is the
+    # path in the watched folder (NULL for uploads / Garmin); `rel_path` is where the bytes
+    # are read from: '@uploads/_folder/<source_rel>' once archived, `source_rel` until then.
+    """
+    ALTER TABLE files ADD COLUMN source_rel TEXT;
+    UPDATE files SET source_rel = rel_path WHERE rel_path NOT LIKE '@uploads/%';
+    CREATE INDEX ix_files_source ON files(source_rel);
+    """,
+    # v10 — thresholds the watch used for each activity (from the FIT file: HR max, resting
+    # HR, threshold HR, FTP, weight); `watch_version` < importer.WATCH_VERSION = not read
+    # yet. `load_estimated` = the load used an estimated or default threshold.
+    """
+    ALTER TABLE activities ADD COLUMN watch_hr_max INTEGER;
+    ALTER TABLE activities ADD COLUMN watch_hr_rest INTEGER;
+    ALTER TABLE activities ADD COLUMN watch_lthr INTEGER;
+    ALTER TABLE activities ADD COLUMN watch_ftp INTEGER;
+    ALTER TABLE activities ADD COLUMN watch_weight REAL;
+    ALTER TABLE activities ADD COLUMN watch_version INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE activities ADD COLUMN load_estimated INTEGER NOT NULL DEFAULT 0;
+    """,
+    # v11 — activity names come from Garmin Connect titles only (the FIT sport profile name
+    # is no longer used); unnamed activities show their type. Names the user set are kept.
+    """
+    UPDATE activities SET name = (
+        SELECT g.name FROM files f
+        JOIN garmin_activities g ON g.person_id = f.person_id AND g.file_rel = f.rel_path
+        WHERE f.activity_id = activities.id AND COALESCE(g.name, '') != ''
+        ORDER BY f.id LIMIT 1)
+    WHERE name_overridden = 0;
+    """,
+    # v12 — UI settings the user changes (e.g. Map options), per person ('all' = Everyone),
+    # stored on the server so they follow the person to every device. Value = JSON text.
+    """
+    CREATE TABLE ui_settings (
+        person_id   TEXT NOT NULL,
+        key         TEXT NOT NULL,
+        value       TEXT NOT NULL,
+        updated_at  TEXT NOT NULL,
+        PRIMARY KEY (person_id, key)
+    ) WITHOUT ROWID;
+    """,
+    # v13 — workout step target per lap (structured workouts): stream and range.
+    """
+    ALTER TABLE laps ADD COLUMN target TEXT;
+    ALTER TABLE laps ADD COLUMN target_low REAL;
+    ALTER TABLE laps ADD COLUMN target_high REAL;
+    """,
+    # v14 — Garmin's time in HR / power zones (JSON, see fitfile.time_in_zones) and the
+    # resting share of the calories (active = calories - metabolic_calories).
+    """
+    ALTER TABLE activities ADD COLUMN zones TEXT;
+    ALTER TABLE activities ADD COLUMN metabolic_calories INTEGER;
+    """,
+    # v15 — where each best effort happened (seconds from the start) and the devices that
+    # recorded the activity (JSON list, see fitfile.devices).
+    """
+    ALTER TABLE best_efforts ADD COLUMN start_s REAL;
+    ALTER TABLE best_efforts ADD COLUMN end_s REAL;
+    ALTER TABLE activities ADD COLUMN devices TEXT;
+    UPDATE activities SET analysis_version = 0;
+    """,
+    # v16 — road surface along the route from OpenStreetMap (JSON, see surface.py), cached.
+    """
+    ALTER TABLE activities ADD COLUMN surface TEXT;
+    """,
+    # v17 — Garmin Connect data that FIT files do not have: the activity list entry (JSON:
+    # training effect, body battery, location, elevation correction…), the local activity it
+    # belongs to (also for activities imported from a folder: matched by start time, nothing
+    # downloaded) and extra streams from the activity details (kept apart from `streams`, so
+    # a reimport of the FIT file does not drop them).
+    """
+    ALTER TABLE garmin_activities ADD COLUMN summary TEXT;
+    ALTER TABLE garmin_activities ADD COLUMN trailbook_id INTEGER;
+    ALTER TABLE garmin_activities ADD COLUMN details_at TEXT;
+    CREATE TABLE connect_streams (
+        activity_id INTEGER NOT NULL REFERENCES activities(id) ON DELETE CASCADE,
+        channel     TEXT NOT NULL,
+        encoding    TEXT NOT NULL,
+        length      INTEGER NOT NULL,
+        data        BLOB NOT NULL,
+        PRIMARY KEY (activity_id, channel)
+    );
     """,
 ]
 

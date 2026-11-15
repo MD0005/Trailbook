@@ -6,6 +6,8 @@ All URLs used by the frontend are relative, so the app works behind HA Ingress.
 
 from __future__ import annotations
 
+import asyncio
+import json
 import os
 import re
 import sqlite3
@@ -39,6 +41,7 @@ from . import (
     segments,
     sports,
     streams,
+    surface,
 )
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -75,7 +78,7 @@ ACTIVITY_SORTS = {
 
 FILE_SORTS = {
     "status": "f.status",
-    "file": "f.rel_path || '/' || f.zip_member",
+    "file": "COALESCE(f.source_rel, f.rel_path) || '/' || f.zip_member",
     "person": "f.person_id",
     "content": "COALESCE(a.name, f.skip_reason, f.fit_type, f.error)",
     "recorded": "COALESCE(a.start_time_utc, f.fit_created)",
@@ -85,7 +88,7 @@ FILE_SORTS = {
 
 # Column key -> SQL expression matched with LIKE '%value%'
 FILE_TEXT_FILTERS = {
-    "file": "(f.rel_path || ' ' || f.zip_member)",
+    "file": "(COALESCE(f.source_rel, f.rel_path) || ' ' || f.zip_member)",
     "content": (
         "(COALESCE(a.name, '') || ' ' || COALESCE(a.activity_type, '') || ' ' || "
         "COALESCE(f.skip_reason, '') || ' ' || COALESCE(f.fit_type, '') || ' ' || "
@@ -96,26 +99,56 @@ FILE_TEXT_FILTERS = {
     "processed": "f.imported_at",
 }
 
+# Best efforts ranked per (kind, key): rk = 1 is the record (lowest time for pace/ride, highest
+# value otherwise; the earliest wins a tie), with when it was set. {where} filters oa (activities).
+_RECORDS_SQL = """SELECT o.kind, o.key, o.value, oa.start_time_utc, oa.utc_offset_s,
+           ROW_NUMBER() OVER (PARTITION BY o.kind, o.key
+               ORDER BY CASE WHEN o.kind IN ('pace', 'ride') THEN o.value ELSE -o.value END,
+                        oa.start_time_utc) AS rk
+    FROM best_efforts o JOIN activities oa ON oa.id = o.activity_id WHERE {where}"""
+
+
+def activity_filters(q, alias: str = "a", person: bool = True) -> tuple[list[str], list]:
+    """The filters every tab shares (SPEC §10, Filters), as SQL conditions on `activities`:
+    person (comma list), from / to (local days, inclusive) and types (comma list of type
+    keys; `g:<group>` selects a whole group). `type` and `year` are older single-value forms."""
+    p = f"{alias}." if alias else ""
+    where: list[str] = []
+    params: list = []
+    if person and q.get("person") and q["person"] != "all":
+        values = q["person"].split(",")
+        where.append(f"{p}person_id IN ({','.join('?' for _ in values)})")
+        params += values
+    day = f"date({p}start_time_utc, printf('%+d seconds', COALESCE({p}utc_offset_s, 0)))"
+    for key, op in (("from", ">="), ("to", "<=")):
+        value = q.get(key)
+        if value:
+            if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+                raise HTTPException(400, f"{key} must be a date (YYYY-MM-DD)")
+            where.append(f"{day} {op} ?")
+            params.append(value)
+    if q.get("year"):
+        where.append(f"substr({day}, 1, 4) = ?")
+        params.append(q["year"])
+    raw = q.get("types") or q.get("type") or ""
+    values = [v for v in raw.split(",") if v]
+    if values:
+        keys = [v for v in values if not v.startswith("g:")]
+        groups = [v[2:] for v in values if v.startswith("g:")]
+        parts = []
+        if keys:
+            parts.append(f"{p}activity_type IN ({','.join('?' for _ in keys)})")
+        if groups:
+            parts.append(f"{p}category IN ({','.join('?' for _ in groups)})")
+        where.append("(" + " OR ".join(parts) + ")")
+        params += keys + groups
+    return where, params
+
 
 def _map_filters(q) -> tuple[str, list]:
-    """person / type (or g:group) / year filters shared by the map endpoints."""
-    where, params = ["a.has_gps = 1"], []
-    if q.get("person"):
-        values = q["person"].split(",")
-        where.append(f"a.person_id IN ({','.join('?' for _ in values)})")
-        params += values
-    if q.get("type"):
-        t = q["type"]
-        if t.startswith("g:"):
-            where.append("a.category = ?")
-            params.append(t[2:])
-        else:
-            where.append("a.activity_type = ?")
-            params.append(t)
-    if q.get("year"):
-        where.append("substr(a.start_time_utc, 1, 4) = ?")
-        params.append(q["year"])
-    return " AND ".join(where), params
+    """Shared filters plus 'has a route', for the map endpoints."""
+    where, params = activity_filters(q)
+    return " AND ".join(["a.has_gps = 1", *where]), params
 
 
 def _speed_series(c: sqlite3.Connection, activity_id: int, points: int = 48) -> list:
@@ -163,6 +196,8 @@ STREAM_CHANNELS = (
     "cadence",
     "temperature",
     "respiration",
+    *fitfile.EXTRA_CHANNELS,
+    *garmin.DETAIL_CHANNELS.values(),  # from Garmin Connect (connect_streams)
 )
 
 
@@ -173,6 +208,16 @@ def create_app(db_path: str | Path) -> Starlette:
     sched = scheduler.Scheduler(db_path, job)
     tiles = basemap.TileCache(Path(db_path).parent / "tilecache")
     uploads_dir = Path(db_path).resolve().parent / "uploads"
+    # Own device photos: <data>/device-images/<product>.png|jpg|webp (e.g. edge_850.png).
+    device_images = Path(db_path).resolve().parent / "device-images"
+
+    def _device_image(product: str | None) -> str | None:
+        if not product or not re.fullmatch(r"[\w.-]+", product):
+            return None
+        for ext in ("png", "jpg", "webp"):
+            if (device_images / f"{product}.{ext}").is_file():
+                return f"/api/device-image/{product}.{ext}"
+        return None
 
     def conn() -> sqlite3.Connection:
         return db.connect(db_path, apply_migrations=False)
@@ -217,6 +262,26 @@ def create_app(db_path: str | Path) -> Starlette:
         with closing(conn()) as c:
             counts = dict(c.execute(sql + " GROUP BY activity_type", args).fetchall())
         return JSONResponse(counts)
+
+    async def time_range(request: Request):
+        """First and last local day with an activity (and the years between) for the Time
+        filter of one person or everyone."""
+        where, params = activity_filters({"person": request.query_params.get("person")}, "")
+        day = analysis.LOCAL_DAY_SQL
+        clause = f"WHERE {' AND '.join(where)}" if where else ""
+        with closing(conn()) as c:
+            row = c.execute(
+                f"SELECT MIN({day}) AS first, MAX({day}) AS last FROM activities {clause}", params
+            ).fetchone()
+            years = [
+                r[0]
+                for r in c.execute(
+                    f"""SELECT DISTINCT substr({day}, 1, 4) AS y FROM activities {clause}
+                        ORDER BY y DESC""",
+                    params,
+                )
+            ]
+        return JSONResponse({"first": row["first"], "last": row["last"], "years": years})
 
     async def types(request: Request):
         sources = sports.fit_sources()
@@ -324,11 +389,44 @@ def create_app(db_path: str | Path) -> Starlette:
             "scan_interval_choices": list(scheduler.INTERVAL_CHOICES_MIN),
             "next_scan_at": due.strftime("%Y-%m-%dT%H:%M:%SZ") if due else None,
             "allowed_roots": os.environ.get("TRAILBOOK_ALLOWED_ROOTS"),
+            # road surface: "open" (when an activity is opened) or "background" (all, slowly)
+            "surface_mode": db.get_setting(c, "surface_mode") or "open",
+            "surface_progress": surface.progress(c),
         }
 
     async def settings_get(request: Request):
         with closing(conn()) as c:
             return JSONResponse(_settings(c))
+
+    # ---- UI settings per person (JSON values the browser keeps for a person) ----------
+
+    async def ui_settings_get(request: Request):
+        person = request.query_params.get("person") or "all"
+        with closing(conn()) as c:
+            rows = c.execute(
+                "SELECT key, value FROM ui_settings WHERE person_id = ?", (person,)
+            ).fetchall()
+        return JSONResponse({r["key"]: json.loads(r["value"]) for r in rows})
+
+    async def ui_settings_put(request: Request):
+        person = request.query_params.get("person") or "all"
+        key = request.path_params["key"]
+        if not key.replace("-", "").replace("_", "").isalnum() or len(key) > 40:
+            raise HTTPException(400, "invalid key")
+        raw = await request.body()
+        if len(raw) > 20_000:
+            raise HTTPException(400, "value too large")
+        try:
+            value = json.loads(raw)
+        except ValueError as exc:
+            raise HTTPException(400, "value must be JSON") from exc
+        with closing(conn()) as c:
+            c.execute(
+                """INSERT OR REPLACE INTO ui_settings (person_id, key, value, updated_at)
+                   VALUES (?, ?, ?, ?)""",
+                (person, key, json.dumps(value), importer.now_iso()),
+            )
+        return Response(status_code=204)
 
     async def settings_update(request: Request):
         body = await request.json()
@@ -350,6 +448,11 @@ def create_app(db_path: str | Path) -> Starlette:
                 if body["person_mode"] not in importer.PERSON_MODES:
                     raise HTTPException(400, "unknown person mode")
                 db.set_setting(c, "person_mode", body["person_mode"])
+            if "surface_mode" in body:
+                if body["surface_mode"] not in ("open", "background"):
+                    raise HTTPException(400, "surface_mode must be open or background")
+                db.set_setting(c, "surface_mode", body["surface_mode"])
+                surface_wake.set()
             if "scan_interval_min" in body:
                 try:
                     minutes = int(body["scan_interval_min"])
@@ -381,10 +484,7 @@ def create_app(db_path: str | Path) -> Starlette:
 
     async def compare(request: Request):
         q = request.query_params
-        where, params = [], []
-        if q.get("year"):
-            where.append("substr(a.start_time_utc, 1, 4) = ?")
-            params.append(q["year"])
+        where, params = activity_filters(q, person=False)
         clause = f"AND {' AND '.join(where)}" if where else ""
         with closing(conn()) as c:
             people = c.execute(
@@ -439,27 +539,14 @@ def create_app(db_path: str | Path) -> Starlette:
 
     async def activities(request: Request):
         q = request.query_params
-        where, params = [], []
-        for name, column in (
-            ("person", "person_id"),
-            ("group", "category"),
-            ("type", "activity_type"),
-        ):
-            if q.get(name):
-                values = q[name].split(",")
-                if name == "type" and len(values) == 1 and values[0].startswith("g:"):
-                    column, values = "category", [values[0][2:]]  # whole group
-                where.append(f"{column} IN ({','.join('?' for _ in values)})")
-                params += values
+        where, params = activity_filters(q, "")
+        if q.get("group"):
+            values = q["group"].split(",")
+            where.append(f"category IN ({','.join('?' for _ in values)})")
+            params += values
         if q.get("date"):
             where.append("start_time_utc LIKE ?")
             params.append(f"{q['date']}%")
-        if q.get("from"):
-            where.append("start_time_utc >= ?")
-            params.append(q["from"])
-        if q.get("to"):
-            where.append("start_time_utc < ?")
-            params.append(q["to"])
         if q.get("gps") == "1":
             where.append("has_gps = 1")
         if q.get("q"):
@@ -512,22 +599,95 @@ def create_app(db_path: str | Path) -> Starlette:
                 r["channel"]
                 for r in c.execute("SELECT channel FROM streams WHERE activity_id = ?", (aid,))
             ]
+            # Best efforts with where they happened and the person's record for each in the same
+            # category (with when the record was set).
+            same = _RECORDS_SQL.format(where="oa.person_id = ? AND oa.category IS ?")
             a["best_efforts"] = [
                 dict(r)
                 for r in c.execute(
-                    "SELECT kind, key, value FROM best_efforts WHERE activity_id = ?"
-                    " ORDER BY kind, key",
-                    (aid,),
+                    f"""WITH r AS ({same})
+                       SELECT b.kind, b.key, b.value, b.start_s, b.end_s, r.value AS record,
+                              r.start_time_utc AS record_time, r.utc_offset_s AS record_offset_s
+                       FROM best_efforts b
+                       LEFT JOIN r ON r.kind = b.kind AND r.key = b.key AND r.rk = 1
+                       WHERE b.activity_id = ? ORDER BY b.kind, b.key""",
+                    (a["person_id"], a["category"], aid),
                 )
             ]
+            # Own photos of devices: data/device-images/<product>.(png|jpg|webp)
+            if a.get("devices"):
+                devs = json.loads(a["devices"])
+                for d in devs:
+                    d["image"] = _device_image(d.get("product"))
+                a["devices"] = devs
+            # Garmin Connect list data (title, training effect, body battery, location…)
+            g = c.execute(
+                """SELECT summary FROM garmin_activities
+                   WHERE summary IS NOT NULL AND (trailbook_id = ? OR file_rel IN (
+                         SELECT rel_path FROM files WHERE activity_id = ?))
+                   LIMIT 1""",
+                (aid, aid),
+            ).fetchone()
+            a["connect"] = json.loads(g["summary"]) if g else None
             a["files"] = [
                 dict(r)
                 for r in c.execute(
-                    "SELECT id, rel_path, zip_member, status FROM files WHERE activity_id = ?",
+                    """SELECT id, COALESCE(source_rel, rel_path) AS rel_path, zip_member, status,
+                              imported_at
+                       FROM files WHERE activity_id = ?""",
                     (aid,),
                 )
             ]
             return JSONResponse(a)
+
+    # The person's best value per effort (kind, key) in a time range, to compare an activity
+    # with: all (all time), year (this calendar year), 365d, 90d, 30d.
+    async def activity_records(request: Request):
+        aid = request.path_params["id"]
+        rng = request.query_params.get("range", "all")
+        days = {"365d": 365, "90d": 90, "30d": 30}
+        with closing(conn()) as c:
+            a = _activity_or_404(c, aid)
+            # Same category only: running power or HR is no record for a ride.
+            where = ["oa.person_id = ?", "oa.category IS ?"]
+            params = [a["person_id"], a["category"]]
+            if rng == "year":
+                where.append("substr(oa.start_time_utc, 1, 4) = ?")
+                params.append(datetime.now(UTC).strftime("%Y"))
+            elif rng in days:
+                since = datetime.now(UTC) - timedelta(days=days[rng])
+                where.append("oa.start_time_utc >= ?")
+                params.append(since.strftime("%Y-%m-%dT%H:%M:%SZ"))
+            elif rng != "all":
+                raise HTTPException(400, "range must be all, year, 365d, 90d or 30d")
+            rows = c.execute(
+                f"""WITH r AS ({_RECORDS_SQL.format(where=" AND ".join(where))})
+                    SELECT kind, key, value, start_time_utc, utc_offset_s FROM r WHERE rk = 1""",
+                params,
+            ).fetchall()
+        return JSONResponse({"range": rng, "records": [dict(r) for r in rows]})
+
+    # Road surface along the route (OpenStreetMap via an Overpass server, cached per activity).
+    async def activity_surface(request: Request):
+        aid = request.path_params["id"]
+
+        def work():
+            with closing(conn()) as c:
+                _activity_or_404(c, aid)
+                return surface.compute(c, aid)
+
+        try:
+            result = await run_in_threadpool(work)
+        except OSError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=503)
+        return JSONResponse(result)
+
+    async def device_image(request: Request):
+        name = request.path_params["name"]
+        path = device_images / name
+        if not re.fullmatch(r"[\w.-]+\.(png|jpg|webp)", name) or not path.is_file():
+            raise HTTPException(404, "no image")
+        return FileResponse(path, headers={"Cache-Control": "max-age=86400"})
 
     async def activity_update(request: Request):
         aid = request.path_params["id"]
@@ -540,10 +700,20 @@ def create_app(db_path: str | Path) -> Starlette:
                 importer.set_activity_type(c, aid, body["type"])
                 analysis.analyse_one(c, aid)  # the group decides e.g. running best efforts
             if "name" in body:
-                c.execute(
-                    "UPDATE activities SET name = ?, name_overridden = 1 WHERE id = ?",
-                    (body["name"], aid),
-                )
+                name = (body["name"] or "").strip()
+                if name:
+                    c.execute(
+                        "UPDATE activities SET name = ?, name_overridden = 1 WHERE id = ?",
+                        (name, aid),
+                    )
+                else:  # cleared: back to the Garmin Connect title, or no name (UI shows type)
+                    c.execute(
+                        "UPDATE activities SET name = NULL, name_overridden = 0 WHERE id = ?",
+                        (aid,),
+                    )
+                    files = c.execute("SELECT id FROM files WHERE activity_id = ?", (aid,))
+                    for f in files.fetchall():
+                        importer.apply_connect_name(c, f["id"])
             return JSONResponse(dict(_activity_or_404(c, aid)))
 
     async def activity_delete(request: Request):
@@ -565,8 +735,11 @@ def create_app(db_path: str | Path) -> Starlette:
             marks = ",".join("?" for _ in channels)
             rows = c.execute(
                 f"""SELECT channel, encoding, data FROM streams
+                    WHERE activity_id = ? AND channel IN ({marks})
+                    UNION ALL
+                    SELECT channel, encoding, data FROM connect_streams
                     WHERE activity_id = ? AND channel IN ({marks})""",
-                [aid, *channels],
+                [aid, *channels, aid, *channels],
             ).fetchall()
         data = {r["channel"]: streams.decode(r["encoding"], r["data"]) for r in rows}
         length = max((len(v) for v in data.values()), default=0)
@@ -679,6 +852,9 @@ def create_app(db_path: str | Path) -> Starlette:
             source = db.get_setting(c, "data_source") or "folder"
             due = scheduler.next_scan_at(c)
             interval = scheduler.interval_min(c)
+            garmin_connected = c.execute(
+                "SELECT COUNT(*) FROM garmin_accounts WHERE status != 'auth_error'"
+            ).fetchone()[0]
         running = job.running_kind() in ("scan", "restore")
         if not running and progress.get("state") == "running":
             # Started outside this server (CLI) or the process died; report what we know.
@@ -691,6 +867,7 @@ def create_app(db_path: str | Path) -> Starlette:
                 "progress": progress,
                 "files": counts,
                 "missing_to_review": undismissed_missing,
+                "garmin_connected": garmin_connected,
                 "last_run": dict(last) if last else None,
                 "scan_interval_min": interval,
                 "next_scan_at": due.strftime("%Y-%m-%dT%H:%M:%SZ") if due else None,
@@ -738,17 +915,43 @@ def create_app(db_path: str | Path) -> Starlette:
             raise HTTPException(400, "choose a person")
         return pid
 
+    # Estimates the person accepted (no warning for them), per person in settings.
+    ACCEPTABLE = ("hr_max", "hr_rest")
+
+    def _accepted(c: sqlite3.Connection, pid: str) -> set[str]:
+        raw = db.get_setting(c, f"accepted_estimates:{pid}")
+        return set(json.loads(raw)) if raw else set()
+
+    async def thresholds_accept(request: Request):
+        body = await request.json()
+        field = body.get("field")
+        if field not in ACCEPTABLE:
+            raise HTTPException(400, "only HR max and resting HR estimates can be accepted")
+        with closing(conn()) as c:
+            pid = _single_person(c, request)
+            acc = _accepted(c, pid)
+            if body.get("accepted", True):
+                acc.add(field)
+            else:
+                acc.discard(field)
+            db.set_setting(c, f"accepted_estimates:{pid}", json.dumps(sorted(acc)))
+            return JSONResponse(_thresholds_state(c, pid))
+
     def _thresholds_state(c: sqlite3.Connection, pid: str) -> dict:
         rows = analysis.threshold_rows(c, pid)
         auto_max = analysis.auto_hr_max(c, pid)
-        th = analysis.thresholds_for(rows, importer.now_iso()[:10], auto_max)
+        today = importer.now_iso()[:10]
+        watch, watch_day = analysis.watch_on(analysis.watch_history(c, pid), today)
+        th = analysis.thresholds_for(rows, today, auto_max, watch)
         return {
             "rows": [dict(r) for r in rows],
+            "watch": {**watch, "day": watch_day},
             "effective": {
                 "hr_max": th.hr_max, "hr_rest": th.hr_rest, "lthr": th.lthr, "ftp": th.ftp,
                 "threshold_pace": th.threshold_pace, "sources": th.sources,
             },
             "auto_hr_max": auto_max,
+            "accepted": sorted(_accepted(c, pid)),
             "pending": c.execute(
                 "SELECT COUNT(*) FROM activities WHERE person_id = ? AND analysis_version < ?",
                 (pid, analysis.ANALYSIS_VERSION),
@@ -822,8 +1025,19 @@ def create_app(db_path: str | Path) -> Starlette:
                 )
             }
             th = _thresholds_state(c, pid)
-        since = request.query_params.get("from")
-        shown = [d for d in series if not since or d["date"] >= since]
+            since, until = request.query_params.get("from"), request.query_params.get("to")
+            warnings = analysis.threshold_warnings(
+                c, pid, since or "", until or "", _accepted(c, pid)
+            )
+        # Ramp rate: fitness change over the last 7 days (from the whole series, so the
+        # first days of a shown range have it too).
+        for i, d in enumerate(series):
+            d["ramp"] = round(d["ctl"] - series[max(0, i - 7)]["ctl"], 1)
+        shown = [
+            d
+            for d in series
+            if (not since or d["date"] >= since) and (not until or d["date"] <= until)
+        ]
         return JSONResponse(
             {
                 "series": shown,
@@ -831,6 +1045,7 @@ def create_app(db_path: str | Path) -> Starlette:
                 "methods": methods,
                 "thresholds": th["effective"],
                 "pending": th["pending"],
+                "warnings": warnings,
             }
         )
 
@@ -866,19 +1081,10 @@ def create_app(db_path: str | Path) -> Starlette:
         day = analysis.LOCAL_DAY_SQL
         with closing(conn()) as c:
             pid = _single_person(c, request)
-            where, params = ["person_id = ?"], [pid]
-            t = q.get("type", "")
-            if t.startswith("g:"):
-                where.append("category = ?")
-                params.append(t[2:])
-            elif t:
-                where.append("activity_type = ?")
-                params.append(t)
+            where, params = activity_filters(q, "", person=False)
+            where, params = ["person_id = ?", *where], [pid, *params]
             inner = f"SELECT *, {day} AS day FROM activities WHERE {' AND '.join(where)}"
             outer = ""
-            if q.get("year"):
-                outer = "WHERE substr(day, 1, 4) = ?"
-                params.append(q["year"])
             rows = c.execute(
                 f"""SELECT {period} AS period, COUNT(*) AS count, SUM(distance_m) AS distance_m,
                            SUM(moving_s) AS moving_s, SUM(ascent_m) AS ascent_m,
@@ -913,14 +1119,8 @@ def create_app(db_path: str | Path) -> Starlette:
         rng = q.get("range", "all")
         with closing(conn()) as c:
             pid = _single_person(c, request)
-            where, params = ["a.person_id = ?", "b.kind = ?"], [pid, kind]
-            t = q.get("type", "")
-            if t.startswith("g:"):
-                where.append("a.category = ?")
-                params.append(t[2:])
-            elif t:
-                where.append("a.activity_type = ?")
-                params.append(t)
+            shared, sp = activity_filters(q, person=False)
+            where, params = ["a.person_id = ?", "b.kind = ?", *shared], [pid, kind, *sp]
             if rng == "90d":
                 since = datetime.now(UTC) - timedelta(days=90)
                 where.append("a.start_time_utc >= ?")
@@ -972,10 +1172,9 @@ def create_app(db_path: str | Path) -> Starlette:
         return d
 
     def _person_filter(request: Request) -> tuple[str, list]:
-        pid = request.query_params.get("person")
-        if pid and pid != "all":
-            return " AND a.person_id = ?", [pid]
-        return "", []
+        """Shared filters (person, time, types) on the activity `a` of each effort."""
+        where, params = activity_filters(request.query_params)
+        return "".join(f" AND {w}" for w in where), params
 
     def _kick_matching(c: sqlite3.Connection) -> None:
         """Pending segment work and no job running: start the matcher (self-healing when a
@@ -1240,7 +1439,12 @@ def create_app(db_path: str | Path) -> Starlette:
 
     async def garmin_accounts(request: Request):
         with closing(conn()) as c:
-            return JSONResponse({"accounts": garmin.accounts(c)})
+            return JSONResponse(
+                {
+                    "accounts": garmin.accounts(c),
+                    "estimate": garmin.history_estimate(c, scheduler.interval_min(c)),
+                }
+            )
 
     async def garmin_account_set(request: Request):
         pid = request.path_params["id"]
@@ -1305,7 +1509,6 @@ def create_app(db_path: str | Path) -> Starlette:
                 "exports": backup.list_exports(db_path),
                 "exports_dir": str(backup.exports_dir(db_path)),
                 "empty": backup.is_empty_install(db_path),
-                "default_root": str(backup.default_restore_root(db_path)),
             }
 
         return JSONResponse(await run_in_threadpool(collect))
@@ -1348,12 +1551,6 @@ def create_app(db_path: str | Path) -> Starlette:
         q = request.query_params
         if job.running():
             raise HTTPException(409, "another job is running")
-        root = (q.get("root") or "").strip() or None
-        if root:
-            rp = Path(root).expanduser()
-            if not rp.is_absolute() or not _allowed_root(rp.resolve()):
-                raise HTTPException(400, "the files folder must be an allowed absolute path")
-            root = str(rp.resolve())
         if not q.get("confirm") and not await run_in_threadpool(backup.is_empty_install, db_path):
             raise HTTPException(409, "this install already has data: confirm replacing it")
         uploaded = False
@@ -1384,7 +1581,7 @@ def create_app(db_path: str | Path) -> Starlette:
             if uploaded:
                 archive.unlink(missing_ok=True)
             raise HTTPException(400, str(exc)) from exc
-        if not job.start_restore(archive, root, delete_archive=uploaded):
+        if not job.start_restore(archive, delete_archive=uploaded):
             if uploaded:
                 archive.unlink(missing_ok=True)
             raise HTTPException(409, "another job is running")
@@ -1426,7 +1623,9 @@ def create_app(db_path: str | Path) -> Starlette:
                 params,
             ).fetchone()[0]
             rows = c.execute(
-                f"""SELECT f.id, f.person_id, f.rel_path, f.zip_member, f.size, f.status,
+                f"""SELECT f.id, f.person_id, COALESCE(f.source_rel, f.rel_path) AS rel_path,
+                           f.rel_path LIKE '@uploads/%' AS archived, f.zip_member, f.size,
+                           f.status,
                            f.prev_status, f.skip_reason, f.error, f.activity_id, f.first_seen,
                            f.missing_since, f.dismissed, f.imported_at,
                            f.fit_uid, f.fit_type, f.fit_created, f.device_serial,
@@ -1466,6 +1665,7 @@ def create_app(db_path: str | Path) -> Starlette:
         Route("/api/info", info),
         Route("/api/types", types),
         Route("/api/types/counts", type_counts),
+        Route("/api/time-range", time_range),
         Route("/api/persons", persons),
         Route("/api/persons", person_create, methods=["POST"]),
         Route("/api/persons/order", persons_order, methods=["PUT"]),
@@ -1474,6 +1674,9 @@ def create_app(db_path: str | Path) -> Starlette:
         Route("/api/devices/{serial:int}", device_update, methods=["PATCH"]),
         Route("/api/settings", settings_get),
         Route("/api/settings", settings_update, methods=["PUT"]),
+        Route("/api/ui-settings", ui_settings_get),
+        Route("/api/device-image/{name}", device_image),
+        Route("/api/ui-settings/{key}", ui_settings_put, methods=["PUT"]),
         Route("/api/uploads", upload, methods=["POST"]),
         Route("/api/persons/{id}", person_update, methods=["PATCH"]),
         Route("/api/activities", activities),
@@ -1481,6 +1684,8 @@ def create_app(db_path: str | Path) -> Starlette:
         Route("/api/activities/{id:int}", activity_update, methods=["PATCH"]),
         Route("/api/activities/{id:int}", activity_delete, methods=["DELETE"]),
         Route("/api/activities/{id:int}/streams", activity_streams),
+        Route("/api/activities/{id:int}/records", activity_records),
+        Route("/api/activities/{id:int}/surface", activity_surface),
         Route("/api/activities/{id:int}/track", activity_track),
         Route("/api/heatmap/tracks", heatmap_tracks),
         Route("/api/heatmap/tiles", heatmap_tiles),
@@ -1495,6 +1700,7 @@ def create_app(db_path: str | Path) -> Starlette:
         Route("/api/segments/{id:int}/efforts", segment_efforts),
         Route("/api/thresholds/{id}", thresholds_get),
         Route("/api/thresholds/{id}", thresholds_put, methods=["PUT"]),
+        Route("/api/thresholds/{id}/accept", thresholds_accept, methods=["PUT"]),
         Route("/api/thresholds/{id}/{valid_from}", thresholds_delete, methods=["DELETE"]),
         Route("/api/fitness", fitness),
         Route("/api/calendar", calendar),
@@ -1518,10 +1724,39 @@ def create_app(db_path: str | Path) -> Starlette:
         Mount("/", _RevalidatedStatic(directory=STATIC_DIR, html=True), name="static"),
     ]
 
+    # Road surface for all activities, slowly in the background (setting surface_mode =
+    # "background"): one activity, then a pause, newest first; a server error waits longer.
+    surface_wake = asyncio.Event()
+
+    async def surface_loop():
+        while True:
+            wait = 600.0
+            with closing(conn()) as c:
+                on = (db.get_setting(c, "surface_mode") or "open") == "background"
+                aid = surface.next_missing(c) if on else None
+            if aid is not None:
+
+                def work(aid=aid):
+                    with closing(conn()) as c2:
+                        surface.compute(c2, aid)
+
+                try:
+                    await run_in_threadpool(work)
+                    wait = 15.0
+                except OSError:
+                    wait = 600.0
+            try:
+                await asyncio.wait_for(surface_wake.wait(), wait)
+                surface_wake.clear()
+            except TimeoutError:
+                pass
+
     @asynccontextmanager
     async def lifespan(app):
         sched.start()
+        surface_task = asyncio.create_task(surface_loop(), name="trailbook-surface")
         yield
+        surface_task.cancel()
         await sched.stop()
 
     app = Starlette(

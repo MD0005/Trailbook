@@ -123,3 +123,14 @@ def test_files_listing_has_fit_fields_and_forget(setup):
     assert client.delete(f"/api/import/files/{item['id']}").status_code == 204
     assert client.get("/api/import/files").json()["total"] == 0
     assert client.delete(f"/api/import/files/{item['id']}").status_code == 404
+
+
+def test_ui_settings_are_kept_per_person(setup):
+    client, _, _ = setup
+    assert client.get("/api/ui-settings?person=alice").json() == {}
+    value = {"map": {"tone": "muted"}, "heatmap": {"width": 3}}
+    assert client.put("/api/ui-settings/map?person=alice", json=value).status_code == 204
+    assert client.put("/api/ui-settings/map?person=all", json={"x": 1}).status_code == 204
+    assert client.get("/api/ui-settings?person=alice").json() == {"map": value}
+    assert client.get("/api/ui-settings").json() == {"map": {"x": 1}}
+    assert client.put("/api/ui-settings/bad key?person=alice", json=1).status_code == 400

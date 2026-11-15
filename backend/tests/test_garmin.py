@@ -212,3 +212,66 @@ def test_type_counts_per_person(tmp_path):
     with TestClient(api.create_app(path)) as client:
         assert client.get("/api/types/counts?person=anna").json() == {"run": 2, "yoga": 1}
         assert client.get("/api/types/counts").json() == {"run": 2, "yoga": 1, "walk": 1}
+
+
+def test_history_estimate(conn):
+    from datetime import UTC, datetime, timedelta
+
+    # Nobody connected: only the typical estimate (5 years, an activity every 3 days).
+    est = garmin.history_estimate(conn, 60)
+    assert est["typical"]["remaining"] == 608
+    assert est["typical"]["runs"] == 11  # 60 per run
+    run_s = garmin.RUN_S
+    assert est["typical"]["seconds"] == 11 * run_s + 10 * 3600
+    assert est["remaining"] == 0 and est["persons"] == {}
+    assert garmin.history_estimate(conn, 0)["typical"]["seconds"] is None  # automatic off
+
+    conn.execute("INSERT INTO persons (id, label) VALUES ('anna', 'Anna')")
+    garmin.set_account(conn, "anna", "k" * 32, None)
+    assert garmin.history_estimate(conn, 60)["persons"]["anna"] == {
+        "remaining": 608, "basis": "typical",
+    }  # fmt: skip
+
+    # Measured pace: 40 activities over the last 40 days -> one a day, 5 years minus 40 days.
+    today = datetime.now(UTC).date()
+    for i in range(40):
+        day = (today - timedelta(days=40 - i)).isoformat()
+        conn.execute(
+            """INSERT INTO garmin_activities (person_id, activity_id, start_gmt, status,
+                                              fetched_at) VALUES ('anna', ?, ?, 'downloaded', ?)""",
+            (i, f"{day} 07:00:00", day),
+        )
+    p = garmin.history_estimate(conn, 60)["persons"]["anna"]
+    assert p["basis"] == "measured" and p["remaining"] == 5 * 365 - 40
+
+    # A Download-from date ends the history earlier; a finished history needs nothing.
+    conn.execute(
+        "UPDATE garmin_accounts SET history_from = ?",
+        ((today - timedelta(days=100)).isoformat(),),
+    )
+    assert garmin.history_estimate(conn, 60)["persons"]["anna"]["remaining"] == 60
+    conn.execute("UPDATE garmin_accounts SET backfill_done = 1")
+    assert garmin.history_estimate(conn, 60)["remaining"] == 0
+
+
+def test_activities_already_here_are_matched_not_downloaded(conn, tmp_path):
+    fake = FakeGarmin(3)
+    uploads = _setup(conn, fake, tmp_path)
+    # one of them came from a folder: same start (40 s off), no title yet
+    conn.execute(
+        """INSERT INTO activities (person_id, fit_uid, start_time_utc, category, activity_type,
+                                   name_overridden, importer_version)
+           VALUES ('anna', 'x1', '2026-01-02T07:00:40Z', 'run', 'run', 0, 1)"""
+    )
+    local = conn.execute("SELECT id FROM activities WHERE fit_uid = 'x1'").fetchone()[0]
+    r = garmin.sync_all(conn, uploads, transport=fake, gap_s=0)
+    assert r.downloaded == 2 and r.matched == 1
+    row = conn.execute(
+        "SELECT status, trailbook_id, summary FROM garmin_activities WHERE activity_id = 1001"
+    ).fetchone()
+    assert row["status"] == "matched" and row["trailbook_id"] == local
+    assert json.loads(row["summary"])["activityName"] == "Run 1"
+    assert (
+        conn.execute("SELECT name FROM activities WHERE id = ?", (local,)).fetchone()[0] == "Run 1"
+    )
+    assert not any("/download-service/files/activity/1001" in c for c in fake.calls)

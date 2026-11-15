@@ -53,10 +53,8 @@ class ImportJob:
             args.append("--include-secrets")
         return self._spawn("export", args)
 
-    def start_restore(self, archive: str | Path, root: str | None, delete_archive: bool) -> bool:
+    def start_restore(self, archive: str | Path, delete_archive: bool) -> bool:
         args = [str(archive), "--yes"]
-        if root:
-            args += ["--root", root]
         if delete_archive:
             args.append("--delete-archive")
         return self._spawn("restore", args)

@@ -100,22 +100,42 @@ def test_restore_on_a_fresh_install_matches_the_disk(source, tmp_path):
     archive = backup.export(path, tmp_path / "out").path
     new_db = tmp_path / "b" / "trailbook.db"
     db.connect(new_db).close()
-    new_root = tmp_path / "newroot"
-    r = backup.restore(new_db, archive, root=new_root)
-    assert r.files == 3 and r.activities == 1 and r.root == str(new_root.resolve())
-    assert (new_root / "bob" / "sub" / "two.fit").is_file()
-    assert (new_db.parent / "uploads" / "alice" / "up.fit").is_file()
+    r = backup.restore(new_db, archive)
+    assert r.files == 3 and r.activities == 1
+    # Folder files of the old install land in the archive, not in a folder.
+    uploads = new_db.parent / "uploads"
+    assert (uploads / "_folder" / "bob" / "sub" / "two.fit").is_file()
+    assert (uploads / "alice" / "up.fit").is_file()
     assert _counts(new_db) == _counts(path)
     with closing(db.connect(new_db)) as c:
-        assert db.get_setting(c, "root") == str(new_root.resolve())
+        assert db.get_setting(c, "root") == str(source[1])  # the folder exists here: kept
         assert db.get_setting(c, "import_progress") is None
-        # same paths, sizes and mtimes: a scan finds nothing to do
-        s = importer.scan(c, new_root)
+        rows = c.execute("SELECT rel_path FROM files WHERE source_rel IS NOT NULL").fetchall()
+        assert {r[0] for r in rows} == {
+            "@uploads/_folder/alice/one.fit", "@uploads/_folder/bob/sub/two.fit",
+        }  # fmt: skip
+        # An empty folder here loses nothing: every file is read from the archive.
+        (tmp_path / "empty").mkdir()
+        s = importer.scan(c, tmp_path / "empty")
         assert (s.new, s.changed, s.missing) == (0, 0, 0)
     # a second restore needs confirmation
     with pytest.raises(backup.BackupError, match="already has data"):
-        backup.restore(new_db, archive, root=new_root)
-    backup.restore(new_db, archive, root=new_root, replace=True)
+        backup.restore(new_db, archive)
+    backup.restore(new_db, archive, replace=True)
+
+
+def test_restore_forgets_a_folder_missing_on_this_device(source, tmp_path):
+    path, root = source
+    archive = backup.export(path, tmp_path / "out").path
+    for f in root.rglob("*"):
+        if f.is_file():
+            f.unlink()
+    root.rename(tmp_path / "gone")
+    new_db = tmp_path / "b" / "trailbook.db"
+    db.connect(new_db).close()
+    backup.restore(new_db, archive)
+    with closing(db.connect(new_db)) as c:
+        assert db.get_setting(c, "root") is None
 
 
 def test_restore_rejects_bad_archives_before_touching_the_db(source, tmp_path):
@@ -151,9 +171,9 @@ def test_restore_rejects_bad_archives_before_touching_the_db(source, tmp_path):
     with pytest.raises(backup.BackupError, match="newer"):
         backup.restore(target, rewrite("n.zip", newer))
     with pytest.raises(backup.BackupError, match="checksum"):
-        backup.restore(target, rewrite("d.zip", damaged), root=tmp_path / "r1")
+        backup.restore(target, rewrite("d.zip", damaged))
     with pytest.raises(backup.BackupError):
-        backup.restore(target, rewrite("e.zip", escape), root=tmp_path / "r2")
+        backup.restore(target, rewrite("e.zip", escape))
     assert not (tmp_path / "evil.fit").exists()
     not_export = tmp_path / "x.zip"
     with zipfile.ZipFile(not_export, "w") as zf:
@@ -170,7 +190,7 @@ def test_cli_export_and_restore_write_progress(source, tmp_path):
     assert p["state"] == "finished"
     archive = backup.exports_dir(path) / p["name"]
     new_db = tmp_path / "c" / "trailbook.db"
-    args = ["--db", str(new_db), "restore", str(archive), "--root", str(tmp_path / "r"), "-q"]
+    args = ["--db", str(new_db), "restore", str(archive), "-q"]
     assert cli.main(args) == 0
     assert backup.read_progress(new_db, "restore")["state"] == "finished"
     assert _counts(new_db)[0] == 1
@@ -219,3 +239,27 @@ def test_backup_api(source, tmp_path):
         assert client.get("/api/activities").json()["total"] == 1
         assert client.delete(f"/api/export/{name}").json() == {"deleted": True}
         assert client.get("/api/backup").json()["exports"] == []
+
+
+def test_archived_folder_files_are_exported_once(source, tmp_path):
+    path, root = source
+    with closing(db.connect(path)) as c:
+        assert importer.archive_folder(c, root, path.parent / "uploads") == 2
+    r = backup.export(path, tmp_path / "out")
+    with zipfile.ZipFile(r.path) as zf:
+        names = set(zf.namelist())
+    assert "files/uploads/_folder/alice/one.fit" in names
+    assert not any(n.startswith("files/root/") for n in names)
+
+    # Restored install: everything is read from the archive, the folder may stay empty.
+    new_db = tmp_path / "b" / "trailbook.db"
+    db.connect(new_db).close()
+    backup.restore(new_db, r.path)
+    with closing(db.connect(new_db)) as c:
+        (tmp_path / "newroot").mkdir(exist_ok=True)
+        s = importer.scan(c, tmp_path / "newroot")
+        assert (s.new, s.changed, s.missing) == (0, 0, 0)
+        data = importer.read_file_bytes(
+            None, "@uploads/_folder/bob/sub/two.fit", "", new_db.parent / "uploads"
+        )
+        assert data == make_fit(49, serial=2, created=T0 + 60)

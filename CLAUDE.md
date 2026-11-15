@@ -11,3 +11,7 @@
 - Dev setup: `python -m venv .venv`, `.venv/Scripts/python -m pip install -e "backend[dev]"`.
   Tests: `cd backend && ../.venv/Scripts/python -m pytest`. Lint: `ruff check` + `ruff format`.
 - The UI design comes from the owner; until then the frontend is a plain technical preview.
+- **Numbers in the UI: decimal comma, space between thousands** (`1 234,56 km`), everywhere —
+  always format through `num()` in `preview.js`, never `toFixed()` for displayed values.
+- UI rules (one button style, controls, maps, defaults) are in `docs/SPEC.md` › UI rules;
+  charts in `docs/CHARTS.md`.

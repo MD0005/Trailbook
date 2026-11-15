@@ -12,6 +12,20 @@ let TYPE_COUNTS = {}; // activity type → number of activities of the selected 
 let PERSONS = [];
 let CURRENT = null; // selected person id or "all"
 let timer = null;
+// Tab state: views and toggles that start from fixed defaults every time a tab is entered
+// (Activities → Tiles, Map → Heatmap, Summary off). Cleared when the tab changes.
+const TAB = {};
+let LAST_SECTION = null;
+// UI settings the user changes (Map options…), per person on the server (`/api/ui-settings`).
+const UI = { person: null, data: {} };
+let uiSaveTimer = null;
+function saveUi(key, value) {
+  UI.data[key] = value;
+  const person = UI.person || "all";
+  clearTimeout(uiSaveTimer);
+  uiSaveTimer = setTimeout(() => api(`ui-settings/${key}?${new URLSearchParams({ person })}`,
+    { method: "PUT", body: JSON.stringify(value) }).catch(() => {}), 400);
+}
 
 const api = async (path, opts = {}) => {
   const res = await fetch("api/" + path, {
@@ -32,6 +46,8 @@ const store = {
 
 const svg = (body, extra = "") => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ${extra}>${body}</svg>`;
 const ICON = {
+  pencil: svg(`<path d="M4 20h4L19 9a2.8 2.8 0 0 0-4-4L4 16Z"/><path d="m13.5 6.5 4 4"/>`),
+  back: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17 4 6 12l11 8Z" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>`,
   trash: svg(`<path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/>`),
   sun: svg(`<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>`),
   moon: svg(`<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/>`),
@@ -75,9 +91,10 @@ const PERSON_COLORS = ["#0f766e", "#e8590c", "#7048e8", "#d6336c", "#2b8a3e", "#
 
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
-const num = (v, digits = 0) => Number(v).toLocaleString("en-US", { minimumFractionDigits: digits, maximumFractionDigits: digits }).replace(/,/g, " ");
+// Numbers: decimal comma, space between thousands (1 234,56) — everywhere in the app.
+const num = (v, digits = 0) => Number(v).toLocaleString("en-US", { minimumFractionDigits: digits, maximumFractionDigits: digits }).replace(/,/g, " ").replace(".", ",");
 const unit = (v, u, digits = 0) => (v == null ? "–" : `${num(v, digits)} ${u}`);
-const km = (m) => (m == null ? "–" : `${num(m / 1000, m >= 100000 ? 0 : 2)} km`);
+const km = (m) => (m == null ? "–" : `${num(m / 1000, 2)} km`); // distance: always 2 decimals
 const bpm = (v) => unit(v, "bpm");
 const meters = (v) => unit(v, "m");
 const watts = (v) => unit(v, "W");
@@ -111,16 +128,92 @@ const typeOf = (key) => TYPES?.types.find((t) => t.key === key);
 const typeLabel = (key) => typeOf(key)?.en ?? key;
 // Activity type icons (assets/icons, “Trailbook B”): small next to names in lists and
 // filters, larger only in Activities › tiles. Unknown types fall back to “other”.
-const typeIcon = (key, size = 18) => (window.TrailbookIcons ? TrailbookIcons.render(key, { size }) : "");
+const typeIcon = (key, size = 18) => (OWN_TYPE_ICONS[key]
+  ? `<svg class="tb-activity-icon" viewBox="0 0 24 24" fill="none" stroke="none" width="${size}" height="${size}" style="--tb-icon-size:${size}px" focusable="false" aria-hidden="true">${OWN_TYPE_ICONS[key]}</svg>`
+  : window.TrailbookIcons ? TrailbookIcons.render(key, { size }) : "");
+// Own replacements for weak drawings of the set (same runner as `run`).
+const OWN_TYPE_ICONS = {
+  // runner on a treadmill: deck with rollers and a handrail in front
+  treadmill_run: `<g transform="translate(-1 -0.5) scale(.78)"><circle cx="16.2" cy="3.5" r="2" fill="currentColor"/>
+    <path fill="currentColor" d="M13 6.5c1.4-.5 3 .8 2.3 2.2l-3.7 6.1-3-1.9 3.2-5.3c.3-.5.7-.9 1.2-1.1Z"/>
+    <path d="m14.1 8 2.5 3L20 9M13 7.7 9 7 6.6 10M10.3 13.2l4.7 3-1.5 4.8M10 13.5 6.5 17 3 15.5" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></g>
+    <rect x="1.5" y="17.2" width="16" height="3.6" rx="1.8" fill="none" stroke="currentColor" stroke-width="1.8"/>
+    <path d="M17 17.2 19.6 7.5h2.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="4.2" cy="19" r=".9" fill="currentColor"/><circle cx="14.8" cy="19" r=".9" fill="currentColor"/>`,
+};
 const typeName = (key, text = typeLabel(key), size = 18) =>
   `<span class="tb-activity-name">${typeIcon(key, size)}<span>${esc(text)}</span></span>`;
 // Group rows use the icon of the group's main type (run, ride, swim, …) when there is one.
 const groupIcon = (g, size = 18) => typeIcon(window.TrailbookIcons?.keys?.includes(g) ? g : (TYPES.types.find((t) => t.group === g)?.key || "other"), size);
 const groupLabel = (key) => TYPES?.groups.find((g) => g.key === key)?.en ?? key;
+// Metric icons (assets/metric-icons, 20 or 32 px), coloured by metric group — docs/ICONS.md.
+const METRIC_COLOR = {
+  power: ["power", "avg_power", "max_power", "normalized_power", "total_work", "intensity_factor",
+    "training_stress_score", "time_in_power_zone"],
+  heart: ["heart_rate", "avg_heart_rate", "min_heart_rate", "max_heart_rate", "time_in_hr_zone",
+    "rr_intervals", "hrv", "rmssd", "sdrr"],
+  sleep: ["sleep"],
+  breath: ["respiration_rate", "avg_respiration_rate", "min_respiration_rate", "max_respiration_rate"],
+  temp: ["temperature", "core_temperature", "feels_like"],
+  speed: ["speed", "avg_speed", "max_speed", "pace", "avg_pace", "best_pace", "grade_adjusted_speed", "grade_adjusted_pace"],
+  elev: ["altitude", "min_altitude", "max_altitude", "total_ascent", "total_descent", "grade", "vertical_speed", "vam"],
+  cadence: ["cadence", "avg_cadence", "max_cadence", "steps", "cycles", "crank_revolutions", "swim_strokes", "wheelchair_pushes"],
+  energy: ["calories", "active_calories", "resting_calories", "metabolic_calories", "fat_calories"],
+  oxygen: ["spo2", "muscle_oxygen", "hemoglobin"],
+};
+const metricGroup = (key) => Object.keys(METRIC_COLOR).find((g) => METRIC_COLOR[g].includes(key));
+// Trailbook's own drawings in the style of the set (24 grid, 2.1 stroke, round joins):
+// icons the set lacks (sleep, type, name) and replacements for weak ones.
+const iconLine = (w = 2.1) => `fill="none" stroke="currentColor" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round"`;
+const OWN_ICONS = {
+  sleep: `<path d="M20 13.5A8 8 0 1 1 10.5 4a6.2 6.2 0 0 0 9.5 9.5Z" ${iconLine()}/><path d="M15 4h3l-3 3.5h3" ${iconLine(1.6)}/>`,
+  // calendar with one day marked
+  date: `<rect x="3.5" y="5" width="17" height="15.5" rx="2.5" ${iconLine()}/><path d="M8 3v4M16 3v4M3.5 10h17" ${iconLine()}/><circle cx="15.5" cy="15.5" r="1.9" fill="currentColor"/>`,
+  // activity type: four kinds of shapes
+  type: `<circle cx="7.5" cy="7.5" r="3.5" ${iconLine()}/><rect x="13" y="4" width="7" height="7" rx="1.5" ${iconLine()}/><path d="M7.5 13.5 11 20H4Z" ${iconLine()}/><path d="m16.5 13 3.5 3.5-3.5 3.5-3.5-3.5Z" fill="currentColor" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>`,
+  // name: a title letter and text lines
+  name: `<path d="M3.5 5.5h11M9 5.5v13" ${iconLine()}/><path d="M14 13h6.5M14 17.5h6.5" ${iconLine()}/>`,
+  // heart with a pulse line through it
+  avg_heart_rate: `<path d="M12 20s-7.5-4.6-7.5-10.2A4.3 4.3 0 0 1 12 7.2a4.3 4.3 0 0 1 7.5 2.6C19.5 15.4 12 20 12 20Z" ${iconLine()}/><path d="M2.5 12.5h5l1.5-2.5 2.5 5 2-3.5 1 1h7" ${iconLine(1.8)}/>`,
+  // stopwatch with motion lines
+  moving_time: `<circle cx="14" cy="13.5" r="7" ${iconLine()}/><path d="M12 3.5h4M14 3.5v3M14 13.5v-3.5M14 13.5l2.5 1.5" ${iconLine()}/><path d="M2.5 10h3M2 13.5h2.5M2.5 17h3" ${iconLine(1.8)}/>`,
+  // mountain profile with an arrow up / down
+  total_ascent: `<path d="M2.5 20 9 9.5l3.5 5.5 2-2.5 5 7.5Z" ${iconLine()}/><path d="M18.5 9.5V3M16 5.5 18.5 3 21 5.5" ${iconLine()}/>`,
+  total_descent: `<path d="M2.5 20 9 9.5l3.5 5.5 2-2.5 5 7.5Z" ${iconLine()}/><path d="M18.5 3v6.5M16 7l2.5 2.5L21 7" ${iconLine()}/>`,
+  // speedometer
+  avg_pace: `<path d="M4.2 18.5a8.8 8.8 0 1 1 15.6 0" ${iconLine()}/><path d="M12 15.5 16.5 10" ${iconLine()}/><circle cx="12" cy="15.5" r="1.9" fill="currentColor"/><path d="M12 6.5v1.6M6.4 9.3l1.1 1.1M17.6 9.3l-1.1 1.1" ${iconLine(1.8)}/>`,
+};
+const metricIcon = (key, size = 20) => {
+  const g = metricGroup(key), cls = `tb-metric-icon${g ? " m-" + g : ""}`;
+  if (OWN_ICONS[key]) return `<svg class="${cls}" viewBox="0 0 24 24" width="${size}" height="${size}" style="--tb-metric-size:${size}px" aria-hidden="true">${OWN_ICONS[key]}</svg>`;
+  if (!window.TrailbookMetricIcons) return "";
+  return TrailbookMetricIcons.render(key, { size }).replace('class="tb-metric-icon"', `class="${cls}"`);
+};
+// FIT files that are not activities (Settings › Imported): FIT file type → metric icon.
+const FIT_TYPE_ICON = {
+  sleep: "sleep", hrv: "hrv", respiration: "respiration_rate", skin_temperature: "temperature",
+  health_snapshot: "heart_rate", blood_pressure: "heart_rate",
+  monitoring_a: "steps", monitoring_b: "steps", monitoring_daily: "steps",
+  totals: "distance_total", activity_summary: "distance_total", workout: "interval_time",
+  course: "route", segment: "route", segment_list: "route",
+  device: "watch", settings: "watch", sport: "watch", exd_configuration: "watch", schedules: "date",
+};
 const person = (id) => PERSONS.find((p) => p.id === id);
 const personLabel = (id) => person(id)?.label ?? id;
 const personColor = (p, i = 0) => p?.color || PERSON_COLORS[i % PERSON_COLORS.length];
 const hint = (text) => `<div class="hint">${text}</div>`;
+
+// File input with the same look as the other buttons; the native input stays (hidden), so
+// `input.files` works as before.
+const filePicker = (name, accept) => `<span class="file-pick"><input type="file" name="${name}" accept="${accept}" hidden><button type="button" data-file-pick>Choose file…</button><span class="hint" data-file-name></span></span>`;
+document.addEventListener("click", (e) => {
+  const b = e.target.closest("[data-file-pick]");
+  if (b) b.parentElement.querySelector("input[type=file]").click();
+});
+document.addEventListener("change", (e) => {
+  if (!e.target.matches(".file-pick input[type=file]")) return;
+  e.target.parentElement.querySelector("[data-file-name]").textContent = e.target.files[0]?.name || "";
+});
 const state = (text, kind = "") => `<span class="state ${kind}">${text}</span>`;
 
 function avatar(p, size = 26) {
@@ -216,10 +309,11 @@ function listBar(columns, params, shown, total) {
 function tableHtml(columns, rows, params, total) {
   const sort = params.sort, dir = params.dir || "desc";
   const head = columns.map((c) => {
-    if (!c.sort) return `<th class="${c.num ? "num" : ""}">${esc(c.label)}</th>`;
+    const label = c.icon ? `<span class="th-icon">${metricIcon(c.icon)}${esc(c.label)}</span>` : esc(c.label);
+    if (!c.sort) return `<th class="${c.num ? "num" : ""}">${label}</th>`;
     const active = sort === c.key;
     const arrow = active ? (dir === "asc" ? "▲" : "▼") : "↕";
-    return `<th class="${c.num ? "num" : ""}"><a href="#" class="sort ${active ? "active" : ""}" data-sort="${c.key}">${esc(c.label)} <span class="arrow">${arrow}</span></a></th>`;
+    return `<th class="${c.num ? "num" : ""}"><a href="#" class="sort ${active ? "active" : ""}" data-sort="${c.key}">${label} <span class="arrow">${arrow}</span></a></th>`;
   }).join("");
   const filters = columns.map((c) => (c.filter ? `<th>${filterControl(c, params)}</th>` : "<th></th>")).join("");
   const body = rows.length ? rows.map((r) => rowHtml(columns, r)).join("")
@@ -421,18 +515,6 @@ function trackSvg(polyline, cls = "track") {
     <path d="${d}" fill="none" stroke="var(--accent)" stroke-width="2" vector-effect="non-scaling-stroke"/></svg>`;
 }
 
-function lineChart(values, times, label, u, color) {
-  const pts = values.map((v, i) => [times[i], v]).filter(([t, v]) => v != null && t != null);
-  if (pts.length < 2) return "";
-  const W = 1000, H = 140, P = 4;
-  const t0 = pts[0][0], t1 = pts[pts.length - 1][0];
-  let lo = Math.min(...pts.map((p) => p[1])), hi = Math.max(...pts.map((p) => p[1]));
-  if (hi === lo) hi = lo + 1;
-  const d = pts.map(([t, v], i) => `${i ? "L" : "M"}${(P + ((t - t0) / (t1 - t0 || 1)) * (W - 2 * P)).toFixed(1)},${(H - P - ((v - lo) / (hi - lo)) * (H - 2 * P)).toFixed(1)}`).join("");
-  return `<svg class="chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
-    <path d="${d}" fill="none" stroke="${color}" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
-    <text x="8" y="16" fill="currentColor" font-size="12" opacity="0.7">${esc(label)}: ${num(lo)}–${num(hi)} ${u}</text></svg>`;
-}
 
 const kpi = (label, value) => `<div class="kpi"><span class="hint">${label}</span><b>${value}</b></div>`;
 
@@ -445,7 +527,7 @@ function statStrip(items, cls = "") {
 
 // ---- Activities ---------------------------------------------------------------------
 
-const VIEWS = [["list", "List", ICON.list], ["small", "Tiles", ICON.tilesSmall], ["large", "Large tiles", ICON.tilesLarge]];
+const VIEWS = [["large", "Tiles", ICON.tilesLarge], ["list", "List", ICON.list]];
 
 // Small speed-over-time chart for large tiles (higher = faster), with the average pace.
 function paceSpark(series) {
@@ -477,29 +559,29 @@ function activitySummary(t) {
 
 async function renderActivities(params) {
   params = { sort: "date", dir: "desc", ...params };
-  const mode = VIEWS.some(([k]) => k === store.get("view")) ? store.get("view") : "list";
+  const mode = VIEWS.some(([k]) => k === TAB.view) ? TAB.view : "large";
   const isAll = CURRENT === "all";
-  const q = { limit: PAGE_SIZE, sort: params.sort, dir: params.dir };
-  for (const k of ["type", "date"]) if (params[k]) q[k] = params[k];
+  const q = { limit: PAGE_SIZE, sort: params.sort, dir: params.dir, ...filterQuery(params) };
   if (params.name) q.q = params.name;
   if (!isAll) q.person = CURRENT;
   else if (params.person) q.person = params.person;
   const tileContent = store.get("tile-content") === "pace" ? "pace" : "route";
   if (mode === "large") { if (tileContent === "pace") q.chart = "pace"; else q.track = "1"; }
   const fetchPage = (offset) => api("activities?" + new URLSearchParams({ ...q, offset }));
-  const data = await fetchPage(0);
+  const [data] = await Promise.all([fetchPage(0),
+    mode === "large" && tileContent === "route" ? (async () => { BASEMAPS ??= await api("basemaps"); })() : null]);
 
   const columns = [
-    { key: "date", label: "Date", sort: true, filter: { type: "text", placeholder: "2026-02" },
+    { key: "date", label: "Date", icon: "date", sort: true,
       render: (a) => `<a href="#/activity/${a.id}">${localTime(a)}</a>` },
-    { key: "type", label: "Type", sort: true, filter: { type: "types", all: "All types" },
+    { key: "type", label: "Type", icon: "type", sort: true,
       render: (a) => typeName(a.activity_type) + (a.indoor ? ` <span class="hint">indoor</span>` : "") },
-    { key: "name", label: "Name", sort: true, filter: { type: "text", placeholder: "name…" }, render: (a) => esc(a.name) },
-    { key: "distance", label: "Distance", sort: true, num: true, render: (a) => km(a.distance_m) },
-    { key: "moving", label: "Moving time", sort: true, num: true, render: (a) => dur(a.moving_s) },
-    { key: "pace", label: "Pace", sort: true, num: true, render: (a) => (a.distance_m ? pace(a.avg_speed) : "–") },
-    { key: "hr", label: "Avg HR", sort: true, num: true, render: (a) => bpm(a.avg_hr) },
-    { key: "ascent", label: "Ascent", sort: true, num: true, render: (a) => meters(a.ascent_m) },
+    { key: "name", label: "Name", icon: "name", sort: true, filter: { type: "text", placeholder: "name…" }, render: (a) => esc(a.name || typeLabel(a.activity_type)) },
+    { key: "distance", label: "Distance", icon: "distance_total", sort: true, num: true, render: (a) => km(a.distance_m) },
+    { key: "moving", label: "Moving time", icon: "moving_time", sort: true, num: true, render: (a) => dur(a.moving_s) },
+    { key: "pace", label: "Pace", icon: "avg_pace", sort: true, num: true, render: (a) => (a.distance_m ? pace(a.avg_speed) : "–") },
+    { key: "hr", label: "Avg HR", icon: "avg_heart_rate", sort: true, num: true, render: (a) => bpm(a.avg_hr) },
+    { key: "ascent", label: "Ascent", icon: "total_ascent", sort: true, num: true, render: (a) => meters(a.ascent_m) },
     ...(isAll ? [{ key: "person", label: "Person", sort: true, filter: { type: "select", options: personOptions(), all: "Everyone" },
       render: (a) => `${avatar(person(a.person_id), 18)} ${esc(personLabel(a.person_id))}` }] : []),
     { key: "actions", label: "", cls: "actions",
@@ -508,11 +590,11 @@ async function renderActivities(params) {
 
   const tile = (a) => `
     <a class="tile ${mode}" href="#/activity/${a.id}">
-      ${mode === "large" ? `<div class="tile-map">${tileContent === "pace" ? paceSpark(a.speed_series) : a.polyline ? trackSvg(a.polyline, "tile-track") : `<span class="hint">${a.indoor ? "indoor" : "no route"}</span>`}</div>` : ""}
+      ${mode === "large" ? `<div class="tile-map">${tileContent === "pace" ? paceSpark(a.speed_series) : a.polyline ? staticMap(a.polyline, { W: 400, H: 160, cls: "tile-track", tiles: "faded-tiles" }) : `<span class="hint">${a.indoor ? "indoor" : "no route"}</span>`}</div>` : ""}
       <div class="tile-head">
-        <span class="tile-icon">${typeIcon(a.activity_type, 28)}</span>
+        <span class="tile-icon">${typeIcon(a.activity_type)}</span>
         <span class="tile-title"><b>${esc(a.name || typeLabel(a.activity_type))}</b>
-        <span class="hint">${esc(typeLabel(a.activity_type))} · ${localTime(a)}${isAll ? ` · ${esc(personLabel(a.person_id))}` : ""}</span></span>
+        <span class="hint">${a.name ? `${esc(typeLabel(a.activity_type))} · ` : ""}${localTime(a)}${isAll ? ` · ${esc(personLabel(a.person_id))}` : ""}</span></span>
       </div>
       <div class="tile-stats">
         ${a.distance_m ? `<span><span class="hint">Distance</span>${km(a.distance_m)}</span>` : ""}
@@ -530,19 +612,11 @@ async function renderActivities(params) {
        <div class="tiles ${mode}" data-rows>${data.items.map(tile).join("") || hint("Nothing matches the filters.")}</div>
        ${data.items.length < data.total ? `<div class="sentinel" data-sentinel><span class="hint">Loading…</span></div>` : ""}`;
 
-  const showSummary = store.get("activity-kpis") !== "0";
-  const active = filterCols.filter((c) => params[c.key]).map((c) => {
-    const v = params[c.key];
-    if (c.key === "type") return v.startsWith("g:") ? groupLabel(v.slice(2)) : typeLabel(v);
-    if (c.key === "person") return personLabel(v);
-    return v;
-  });
-  const filterPanelHtml = `<div class="panel-grid">${filterCols.map((c) => section(c.label, filterControl(c, params).replace("data-filter=", "data-pfilter="))).join("")}</div>
-    <div class="panel-actions">${active.length ? `<button class="primary small" data-clear title="Remove all filters">Clear filters</button>` : ""}<button class="primary small" data-apply>Apply</button></div>`;
+  const showSummary = TAB.kpis ?? false;
   view.innerHTML = `
     ${pageHead("Activities", `
-      ${badgeHtml("filter", "Filter", active.join(" · ") || "All", { panel: filterPanelHtml, on: active.length > 0 })}
-      ${badgeHtml("options", "Options", "", { panel: `<div class="opt-panel">${row("Large tiles", selectCtl("tile-content", [["route", "Route map"], ["pace", "Pace chart"]], tileContent))}
+      ${timeBadge(params)}${typeBadge(params)}
+      ${badgeHtml("options", "Options", "", { panel: `<div class="opt-panel">${row("Tiles", selectCtl("tile-content", [["route", "Route map"], ["pace", "Pace chart"]], tileContent))}
         <div class="hint" style="margin-top:6px">More chart types (intervals) will follow.</div></div>` })}
       <button class="badge ${showSummary ? "on" : ""}" data-kpis>Summary</button>`,
       switchHtml("view", VIEWS.map(([k, label, icon]) => [k, `${icon}<span>${label}</span>`]), mode))}
@@ -550,17 +624,18 @@ async function renderActivities(params) {
     <div class="card">${body}</div>`;
   bindBadges(view.querySelector(".page-head"));
   bindTable("#/activities", params);
-  bindStagedFilter(view.querySelector(".page-head"), "#/activities", params);
+  bindFilterBadges(view.querySelector(".page-head"), "#/activities", params, { drop: ["date"] });
   infinite(view, data.items.length, data.total, async (offset) => (await fetchPage(offset)).items, (items) => {
     view.querySelector("[data-rows]").insertAdjacentHTML("beforeend", items.map((a) => (mode === "list" ? rowHtml(columns, a) : tile(a))).join(""));
   });
   view.querySelector("[data-kpis]").onclick = (e) => {
     const on = !e.currentTarget.classList.contains("on");
-    store.set("activity-kpis", on ? "1" : "0");
+    TAB.kpis = on;
     e.currentTarget.classList.toggle("on", on);
     view.querySelector("[data-summary]").hidden = !on;
+    if (on) window.scrollTo({ top: 0, behavior: "smooth" });
   };
-  view.querySelectorAll("[data-switch=view]").forEach((b) => b.onclick = () => { store.set("view", b.dataset.value); renderActivities(params); });
+  view.querySelectorAll("[data-switch=view]").forEach((b) => b.onclick = () => { TAB.view = b.dataset.value; renderActivities(params); });
   view.querySelectorAll("select[name=tile-content]").forEach((sel) => sel.onchange = () => {
     store.set("tile-content", sel.value);
     if (mode === "large") renderActivities(params);
@@ -576,6 +651,35 @@ async function renderActivities(params) {
 
 // ---- Activity detail ---------------------------------------------------------------
 
+// Charts of an activity: every stream the file has (watch dependent). Visible by default: heart
+// rate, speed, altitude; power and cadence on rides. The user's choice is saved per person.
+// [key, label, unit, decimals, pastel colour, icon, explanation, convert]
+const CHART_DEFS = [
+  ["hr", "Heart rate", "bpm", 0, "#ef8a8a", "heart_rate", "Heart beats per minute, from a chest strap or the watch's optical sensor."],
+  ["speed", "Speed", "km/h", 1, "#86aef5", "speed", "Speed over ground (GPS, foot pod or speed sensor).", (v) => v * 3.6],
+  ["power", "Power", "W", 0, "#b9a2f2", "power", "Mechanical power in watts — a power meter on the bike, or running power from the watch."],
+  ["cadence", "Cadence", null, 0, "#7ccfc3", "cadence", "Steps per minute on foot, crank revolutions per minute on a bike."],
+  ["altitude", "Altitude", "m", 0, "#93cf99", "altitude", "Height above sea level, from the barometer (or GPS); Garmin's corrected elevation when Garmin Connect corrected it."],
+  ["body_battery", "Body Battery", "", 0, "#7aa7e8", "battery", "Garmin's estimate of your energy reserve (0–100), from Garmin Connect."],
+  ["gap_speed", "Grade adjusted speed", "km/h", 1, "#86aef5", "grade_adjusted_speed", "Speed adjusted for the slope: what it would be on flat ground (Garmin Connect).", (v) => v * 3.6],
+  ["respiration", "Respiration", "br/min", 0, "#86cfe6", "respiration_rate", "Breaths per minute, estimated by the watch from heart-rate variability."],
+  ["temperature", "Temperature", "°C", 0, "#f5b27f", "temperature", "Temperature at the watch or sensor; worn on the wrist it is warmed by the body."],
+  ["stance_time", "Ground contact time", "ms", 0, "#7ccfc3", "steps", "How long each foot stays on the ground per step (running dynamics)."],
+  ["step_length", "Step length", "m", 2, "#7ccfc3", "steps", "Distance from one foot strike to the next.", (v) => v / 1000],
+  ["vertical_oscillation", "Vertical oscillation", "cm", 1, "#7ccfc3", "vertical_speed", "How much the torso moves up and down with each step.", (v) => v / 10],
+  ["vertical_ratio", "Vertical ratio", "%", 1, "#7ccfc3", "grade", "Vertical oscillation divided by step length; lower is more efficient."],
+  ["left_pco", "Platform centre offset (left)", "mm", 0, "#b9a2f2", "crank_revolutions", "Where on the left pedal the force is applied, sideways from the centre."],
+  ["right_pco", "Platform centre offset (right)", "mm", 0, "#b9a2f2", "crank_revolutions", "Where on the right pedal the force is applied, sideways from the centre."],
+  ["left_smoothness", "Pedal smoothness (left)", "%", 0, "#b9a2f2", "crank_revolutions", "How evenly force is applied through the left pedal stroke."],
+  ["right_smoothness", "Pedal smoothness (right)", "%", 0, "#b9a2f2", "crank_revolutions", "How evenly force is applied through the right pedal stroke."],
+  ["left_torque", "Torque effectiveness (left)", "%", 0, "#b9a2f2", "power", "Share of the left pedal's force that drives the bike forward."],
+  ["right_torque", "Torque effectiveness (right)", "%", 0, "#b9a2f2", "power", "Share of the right pedal's force that drives the bike forward."],
+  ["performance_condition", "Performance condition", "", 0, "#ef8a8a", "aerobic_effect", "Garmin's live estimate of your form against your usual fitness (−20 … +20)."],
+  ["stamina", "Stamina", "%", 0, "#f4a6c8", "battery", "Garmin's estimate of how much energy is left for the current effort."],
+  ["stamina_potential", "Potential stamina", "%", 0, "#f4a6c8", "battery", "The most stamina you could recover to with rest."],
+];
+const chartDefault = (key, a) => ["hr", "speed", "altitude"].includes(key) || (a.category === "ride" && ["power", "cadence"].includes(key));
+
 async function renderActivity(id) {
   const a = await api("activities/" + id);
   const [s, track] = await Promise.all([
@@ -583,66 +687,761 @@ async function renderActivity(id) {
     a.has_gps ? api(`activities/${id}/track`).catch(() => null) : null,
   ]);
   const st = s.streams;
-  const stat = (label, value) => `<div class="stat"><span class="hint">${label}</span><b>${value}</b></div>`;
-  const cadUnit = ["run", "walk", "hike"].includes(a.category) ? "spm" : "rpm";
-  const typeSelect = TYPES.groups.map((g) => `<optgroup label="${esc(g.en)}">${TYPES.types
+  const onFoot = ["run", "walk", "hike"].includes(a.category);
+  const cadUnit = onFoot ? "spm" : "rpm";
+  const typeSelect = `<select name="type">${TYPES.groups.map((g) => `<optgroup label="${esc(g.en)}">${TYPES.types
     .filter((t) => t.group === g.key).map((t) =>
-      `<option value="${t.key}" ${t.key === a.activity_type ? "selected" : ""}>${esc(t.en)}</option>`).join("")}</optgroup>`).join("");
-  const charts = [
-    st.hr && lineChart(st.hr, st.time, "Heart rate", "bpm", "#ff5d5d"),
-    st.speed && lineChart(st.speed.map((v) => (v == null ? null : v * 3.6)), st.time, "Speed", "km/h", "#4c8dff"),
-    st.power && lineChart(st.power, st.time, "Power", "W", "#a678ff"),
-    st.cadence && lineChart(st.cadence, st.time, "Cadence", cadUnit, "#3ecf8e"),
-    st.altitude && lineChart(st.altitude, st.time, "Altitude", "m", "#f0b429"),
-    st.respiration && lineChart(st.respiration, st.time, "Respiration", "br/min", "#38bdf8"),
-  ].filter(Boolean).join("");
+      `<option value="${t.key}" ${t.key === a.activity_type ? "selected" : ""}>${esc(t.en)}</option>`).join("")}</optgroup>`).join("")}</select>`;
+
+  // Series the file has, with the stats shown next to each chart.
+  const hasVals = (arr) => Array.isArray(arr) && arr.some((v) => v != null && v !== 0);
+  const vals = (arr) => arr.filter((v) => v != null);
+  const avgOf = (arr) => { const v = vals(arr); return v.length ? v.reduce((x, y) => x + y, 0) / v.length : null; };
+  // Garmin corrected the elevation (devices without a barometer): use its profile.
+  if (st.altitude_connect?.some((v) => v != null) && a.connect?.elevationCorrected) st.altitude = st.altitude_connect;
+  const chartX = activityChartX(st);
+  // Altitude: the steepest stretch of at least 300 m and the longest climb (needs distance).
+  const CLIMB_TIP = "A climb: at least 20 m up over at least 50 m. Dips on the way count as part of it while each is at most a quarter as long as the rise before it and loses at most a third of the height gained.";
+  const climbStats = (alt) => {
+    const d = chartX?.distance;
+    if (!d) return [];
+    const climbs = chartClimbs(alt, d);
+    const steep = climbs.filter((c) => c.len >= 0.3).sort((p, q) => q.grade - p.grade)[0];
+    const long = [...climbs].sort((p, q) => q.len - p.len)[0];
+    return [
+      steep && ["Steepest climb", `${num(steep.grade, 1)} %`, { ranges: [[steep.i0, steep.i1]] },
+        `Steepest climb: ${num(steep.grade, 1)} % average over ${km(steep.len * 1000)}, +${num(steep.gain)} m. The steepest climb at least 300 m long. ${CLIMB_TIP}`],
+      long && ["Longest climb", km(long.len * 1000), { ranges: [[long.i0, long.i1]] },
+        `Longest climb: ${km(long.len * 1000)}, +${num(long.gain)} m at ${num(long.grade, 1)} % on average. ${CLIMB_TIP}`],
+    ].filter(Boolean);
+  };
+  // Best average over a window (seconds), weighted by time; [value, i0, i1] or null. Power: a
+  // sample without a value counts as 0 (a stop); otherwise it is left out of the average.
+  const bestPower = (p, secs, zero = true) => {
+    const t = chartX?.time;
+    if (!t || t[t.length - 1] - t[0] < secs) return null;
+    const cum = [0], cw = [0];
+    for (let i = 1; i < t.length; i++) {
+      const dt = Math.min(30, t[i] - t[i - 1]), has = p[i] != null;
+      cum.push(cum[i - 1] + (p[i] ?? 0) * dt);
+      cw.push(cw[i - 1] + (has || zero ? dt : 0));
+    }
+    let best = null;
+    for (let i = 0, j = 0; i < t.length; i++) {
+      while (j < t.length && t[j] - t[i] < secs) j++;
+      if (j >= t.length) break;
+      const w = cw[j] - cw[i];
+      if (!zero && w < secs * 0.8) continue; // mostly without data
+      const avg = w ? (cum[j] - cum[i]) / w : 0;
+      if (!best || avg > best[0]) best = [avg, i, j];
+    }
+    return best;
+  };
+  // Best average over 20 min and 1 h (power, heart rate, speed), highlighted on hover.
+  const windows = (values, fmt, what) => [[1200, "Max 20 min"], [3600, "Max 1 h"]].map(([secs, label]) => {
+    const b = bestPower(values, secs, what === "power");
+    return b && b[0] > 0 && [label, fmt(b[0]), { ranges: [[b[1], b[2]]] }, `The highest average ${what} held for ${label.slice(4)}.`];
+  }).filter(Boolean);
+  const powerWindows = (p) => windows(p, watts, "power");
+  // Total crank revolutions (or steps on foot): cadence integrated over time, pauses skipped.
+  const totalTurns = (c) => {
+    const t = chartX?.time;
+    if (!t) return [];
+    let n = 0;
+    for (let i = 1; i < t.length; i++) { const dt = t[i] - t[i - 1]; if (dt > 0 && dt < 60 && c[i] != null) n += (c[i] * dt) / 60; }
+    return n > 0 ? [[onFoot ? "Steps" : "Revolutions", num(n), null, onFoot ? "Total steps, from the cadence over time." : "Total crank revolutions, from the cadence over time."]] : [];
+  };
+  // Workout targets: share of the steps' time within the target; hover shows where it was outside.
+  const inTarget = (values, targets) => {
+    const t = chartX?.time;
+    if (!t || !targets.length) return [];
+    let tot = 0, ok = 0, out = [], run = null;
+    for (const g of targets) {
+      for (let i = Math.max(1, g.i0); i <= g.i1; i++) {
+        const v = values[i], dt = Math.min(30, t[i] - t[i - 1]);
+        if (v == null || dt <= 0) continue;
+        tot += dt;
+        const inside = v >= g.lo && v <= g.hi;
+        if (inside) ok += dt;
+        else if (run && i - run[1] <= 3) run[1] = i; // short returns into the range do not split a stretch
+        else { if (run) out.push(run); run = [i, i]; }
+      }
+      if (run) { out.push(run); run = null; }
+    }
+    if (run) out.push(run);
+    return tot ? [["In target", `${num((ok / tot) * 100)} %`, { ranges: out, color: "#e5484d" },
+      "Share of the workout steps' time spent within the step's target range. Hover: where it was outside."]] : [];
+  };
+  const statsFor = (key, values, unit, dec) => {
+    const f = (v) => (v == null ? null : `${num(v, dec)}${unit ? " " + unit : ""}`);
+    const mx = vals(values).length ? Math.max(...vals(values)) : null, mn = vals(values).length ? Math.min(...vals(values)) : null;
+    switch (key) {
+      // [label, value, mark] - mark: what hovering the stat highlights on the chart (charts.js)
+      case "hr": return [["Avg", bpm(a.avg_hr), a.avg_hr ?? avgOf(values)], ["Max", bpm(a.max_hr), "max"], ...windows(values, bpm, "heart rate")];
+      case "speed": return [[onFoot ? "Avg pace" : "Avg", onFoot ? pace(a.avg_speed) : f(a.avg_speed * 3.6), a.avg_speed != null ? a.avg_speed * 3.6 : avgOf(values), onFoot ? "Average pace" : "Average speed"],
+        ["Max", f(a.max_speed != null ? a.max_speed * 3.6 : mx), "max"],
+        ...windows(values, (v) => (onFoot ? pace(v / 3.6) : f(v)), onFoot ? "pace" : "speed")];
+      case "power": return [["Avg", watts(a.avg_power), a.avg_power ?? avgOf(values)], ["NP", a.np_power ? watts(a.np_power) : null, a.np_power, "Normalized power: the steady power that would have cost the same effort (Coggan)."], ["Max", watts(a.max_power ?? mx), "max"], ...powerWindows(values)];
+      case "cadence": return [["Avg", cadence(a.avg_cadence, a.category), avgOf(values)], ["Max", cadence(a.max_cadence ?? mx, a.category), "max"], ...totalTurns(values)];
+      case "altitude": return [["Ascent", meters(a.ascent_m), "up", "Total ascent"], ["Descent", meters(a.descent_m), "down", "Total descent"], ["Max", f(mx), "max", "Highest altitude"], ["Min", f(mn), "min", "Lowest altitude"], ...climbStats(values)];
+      default: return [["Avg", f(avgOf(values)), avgOf(values)], ["Max", f(mx), "max"], ["Min", f(mn), "min"]];
+    }
+  };
+  // Workout step targets (structured workouts) per lap, as sample index ranges.
+  const targetsFor = (key, conv) => (chartX ? a.laps.filter((l) => l.target === key && l.start_offset_s != null).map((l) => {
+    const t = chartX.time, end = l.start_offset_s + (l.elapsed_s || 0);
+    const i0 = t.findIndex((v) => v >= l.start_offset_s);
+    let i1 = t.length - 1;
+    while (i1 > 0 && t[i1] > end) i1--;
+    const c = conv || ((v) => v);
+    return i0 >= 0 && i1 > i0 ? { i0, i1, lo: c(l.target_low), hi: c(l.target_high) } : null;
+  }).filter(Boolean) : []);
+  // Chart order: the person's saved order first, then the rest in the default order.
+  const order = UI.data["activity-chart-order"] || [];
+  const rank = (k) => (order.includes(k) ? order.indexOf(k) : order.length + CHART_DEFS.findIndex(([x]) => x === k));
+  const available = CHART_DEFS.filter(([key]) => hasVals(st[key])).map(([key, label, unit, dec, color, icon, tip, conv]) => {
+    const values = conv ? st[key].map((v) => (v == null ? null : conv(v))) : st[key];
+    const u = key === "cadence" ? cadUnit : unit;
+    const targets = targetsFor(key, conv);
+    return { key, label, unit: u, dec, color, icon, tip, values, raw: values, stats: [...statsFor(key, values, u, dec), ...inTarget(values, targets)], targets };
+  }).sort((p, q) => rank(p.key) - rank(q.key));
+  // Stamina and potential stamina belong together (Garmin shows them as one chart).
+  const stam = available.find((x) => x.key === "stamina"), pot = available.findIndex((x) => x.key === "stamina_potential");
+  if (stam && pot >= 0) {
+    stam.lines = [{ label: "Potential", values: available[pot].values, color: "#a3487d", dash: [5, 4] }];
+    stam.fill = true;
+    stam.title = "Stamina and potential"; // the dashed line is the potential; no legend
+    stam.legend = false;
+    const v = stam.values.filter((x) => x != null);
+    stam.stats = [["Start", `${num(v[0])} %`, null, "Stamina at the start"], ["End", `${num(v[v.length - 1])} %`, null, "Stamina at the end"],
+      ["Min", `${num(Math.min(...v))} %`, "min", "Lowest stamina"]];
+    available.splice(pot, 1);
+  }
+  const chartChoice = () => ({ ...(UI.data["activity-charts"] || {}) });
+  const isShown = (key) => chartChoice()[key] ?? chartDefault(key, a);
+  const visibleSeries = () => available.filter((x) => isShown(x.key));
+
+  // Tiles: a tile only when there is a value. Values that belong to a chart (avg/max HR, pace,
+  // power, cadence, ascent...) live only next to their chart, visible or not; they stay in the
+  // tiles only when the activity has no such chart.
+  const stat = (label, raw, value = raw, icon = null) => (raw == null || raw === "" || raw === 0 ? ""
+    : `<div class="card stat-card"><h3 class="tile-title">${icon ? metricIcon(icon, 18) : ""}<span>${label}</span></h3><b>${value}</b></div>`);
+  const active = a.calories != null && a.metabolic_calories != null ? a.calories - a.metabolic_calories : null;
+  const tilesHtml = () => {
+    const on = new Set(chartX ? available.map((x) => x.key) : []);
+    return `${stat("Distance", a.distance_m, km(a.distance_m), "distance_total")}${stat("Moving time", a.moving_s, dur(a.moving_s), "moving_time")}
+      ${stat("Elapsed time", a.elapsed_s, dur(a.elapsed_s), "elapsed_time")}
+      ${(() => { // from Garmin Connect
+        const c = a.connect || {}, te = c.aerobicTrainingEffect, an = c.anaerobicTrainingEffect;
+        return stat("Training effect", te, `<span data-tip="Aerobic ${num(te ?? 0, 1)} · anaerobic ${num(an ?? 0, 1)}${c.trainingEffectLabel ? ` · ${esc(String(c.trainingEffectLabel).replace(/_/g, " ").toLowerCase())}` : ""} (Garmin)">${num(te ?? 0, 1)} / ${num(an ?? 0, 1)}</span>`, "aerobic_effect")
+          + stat("Body Battery", c.differenceBodyBattery, `<span data-tip="Change of Body Battery during the activity (Garmin)">${c.differenceBodyBattery > 0 ? "+" : ""}${num(c.differenceBodyBattery ?? 0)}</span>`, "battery");
+      })()}
+      ${stat("Calories", a.calories, active != null ? `<span data-tip="Active / total: active = total minus the resting calories">${num(active)} / ${kcal(a.calories)}</span>` : kcal(a.calories), "calories")}
+      ${on.has("speed") ? "" : stat("Average pace", a.distance_m && a.avg_speed, pace(a.avg_speed), "avg_pace")}
+      ${on.has("hr") ? "" : stat("Average heart rate", a.avg_hr, bpm(a.avg_hr), "avg_heart_rate") + stat("Maximum heart rate", a.max_hr, bpm(a.max_hr), "max_heart_rate")}
+      ${on.has("power") ? "" : stat("Average power", a.avg_power, watts(a.avg_power), "avg_power") + stat("Normalized power", a.np_power, watts(a.np_power), "normalized_power")}
+      ${on.has("cadence") ? "" : stat("Average cadence", a.avg_cadence, cadence(a.avg_cadence, a.category), "avg_cadence")}
+      ${on.has("altitude") ? "" : stat("Total ascent", a.ascent_m, meters(a.ascent_m), "total_ascent") + stat("Total descent", a.descent_m, meters(a.descent_m), "total_descent")}`;
+  };
+
+  const editPanel = `<div class="opt-panel">
+      ${row("Name", `<input name="name" value="${esc(a.name || "")}" placeholder="${esc(typeLabel(a.activity_type))}">`)}
+      ${row("Type", typeSelect)}
+      ${row("", `<button id="del" class="badge danger">Delete activity</button>`)}
+    </div>`;
+  const hasData = (arr) => Array.isArray(arr) && arr.some((v) => v != null && v > 0);
+  const ROUTE_MODES = [["plain", "Single colour", true], ["speed", "Speed", hasData(st.speed)], ["hr", "Heart rate", hasData(st.hr)],
+    ["power", "Power", hasData(st.power)], ["cadence", "Cadence", hasData(st.cadence)], ["altitude", "Altitude", hasVals(st.altitude)], ["surface", "Surface", Boolean(a.has_gps)]].filter((m) => m[2]);
+  const mode = "plain", kmOn = true; // fixed defaults on every visit
+  const lapsN = routeKmStep(a);       // laps grouped by 1 (runs) or 5 (rides, long activities)
+  const X_KINDS = [chartX?.distance && ["distance", "Distance"], ["time", "Elapsed time"], chartX?.moving && ["moving", "Moving time"], ["percent", "Percent"]].filter(Boolean);
+  const xKind = X_KINDS[0][0];
+  // Averaging of the power and cadence lines (one choice for both): remembered per person, default 10 s.
+  const POWER_AVG = [[0, "None"], [5, "5 s"], [10, "10 s"], [15, "15 s"], [30, "30 s"], [60, "1 min"], [300, "5 min"], [1200, "20 min"]];
+  let powerAvg = UI.data["activity-power-avg"] ?? 10;
+  const hasPower = available.some((x) => x.key === "power" || x.key === "cadence");
+  // Records to compare with (best efforts, power curve): remembered per person, default all time.
+  const COMPARE = [["all", "All time"], ["365d", "Last 12 months"], ["90d", "Last 3 months"], ["30d", "Last 30 days"]];
+  let compare = UI.data["activity-compare"] ?? "all";
+  if (!COMPARE.some(([k]) => k === compare)) compare = "all"; // "This year" is always a column now
+  const optLabel = (label, hint) => `${label}<small class="opt-hint">${hint}</small>`;
+  let routeOffset = UI.data["activity-route-offset"] ?? true;
+  const optionsPanel = `<div class="opt-panel">${track ? row(optLabel("Route lines", "Where the route runs twice (out and back): side by side or on top"),
+      pickList("route-offset", [["on", "Side by side"], ["off", "On top"]], routeOffset ? "on" : "off")) : ""}
+      ${row(optLabel("X axis", "Charts along distance, time or % of the activity"), pickList("chart-x", X_KINDS, xKind))}
+      ${hasPower ? row(optLabel("Smoothing", "Power and cadence lines: rolling average"), pickList("power-avg", POWER_AVG, powerAvg)) : ""}
+      ${(a.best_efforts || []).length ? row(optLabel("Compare with", "Your best from this period, in best efforts and the power curve"), pickList("compare", COMPARE, compare)) : ""}</div>`;
+  const chartsPanel = `<div class="opt-panel"><div class="checks checks-col">${available.map((x) =>
+    `<label class="check"><input type="checkbox" data-chart-key="${x.key}" ${isShown(x.key) ? "checked" : ""}> ${metricIcon(x.icon, 16)} ${esc(x.label)}</label>`).join("")}</div></div>`;
   view.innerHTML = `
-    <a class="back" href="#/activities">← Activities</a>
-    <div class="page-head"><h2 class="tb-activity-name">${typeIcon(a.activity_type, 24)}<span>${esc(a.name || typeLabel(a.activity_type))}</span></h2></div>
-    <div class="card">
-      <div class="card-row">
-        ${avatar(person(a.person_id), 22)}
-        <span class="hint">${localTime(a)} · ${esc(personLabel(a.person_id))} · ${esc(a.device ?? "")}</span>
-        <span class="spacer"></span>
-        <select id="type">${typeSelect}</select>
-        ${a.type_overridden ? state("type set manually") : ""}
-        <button id="del" class="danger">${ICON.trash} Delete</button>
-      </div>
-    </div>
-    <div class="card"><div class="grid">
-      ${stat("Distance", km(a.distance_m))}${stat("Moving time", dur(a.moving_s))}
-      ${stat("Elapsed time", dur(a.elapsed_s))}${stat("Avg pace", a.distance_m ? pace(a.avg_speed) : "–")}
-      ${stat("Avg HR", bpm(a.avg_hr))}${stat("Max HR", bpm(a.max_hr))}
-      ${stat("Avg power", watts(a.avg_power))}${stat("Normalized power", watts(a.np_power))}
-      ${stat("Avg cadence", cadence(a.avg_cadence, a.category))}
-      ${stat("Ascent", meters(a.ascent_m))}${stat("Descent", meters(a.descent_m))}
-      ${stat("Calories", kcal(a.calories))}
-    </div></div>
-    ${track ? `<div class="card"><h3>Route</h3><div id="route-map" class="map"></div>${hint(`${num(track.points)} route points (simplified to 5 m). Green: start, red: finish.`)}</div>` : ""}
-    ${activityTrainingHtml(a)}
-    <div class="card"><h3>Streams</h3>${hint(a.channels.join(", ") || "No streams")}<br>${charts}</div>
-    ${a.laps.length ? `<div class="card"><h3>Laps</h3>${hint(`${a.laps.length} laps`)}<div class="scroll"><table class="data">
-      <thead><tr><th>#</th><th class="num">Distance</th><th class="num">Time</th><th class="num">Pace</th>
-        <th class="num">Avg HR</th><th class="num">Avg power</th><th class="num">Cadence</th><th>Intensity</th></tr></thead>
-      <tbody>${a.laps.map((l) => `<tr><td>${l.idx + 1}</td><td class="num">${km(l.distance_m)}</td>
-        <td class="num">${dur(l.timer_s)}</td><td class="num">${l.distance_m ? pace(l.avg_speed) : "–"}</td>
-        <td class="num">${bpm(l.avg_hr)}</td><td class="num">${watts(l.avg_power)}</td>
-        <td class="num">${cadence(l.avg_cadence, a.category)}</td><td>${esc(l.intensity ?? "")}</td></tr>`).join("")}
-      </tbody></table></div></div>` : ""}
-    <div class="card"><h3>Source files</h3>
-      ${a.files.map((f) => `<div>${esc(f.rel_path)}${f.zip_member ? " › " + esc(f.zip_member) : ""} ${state(f.status)}</div>`).join("") || hint("None")}</div>`;
-  document.getElementById("type").onchange = async (e) => {
+    ${backLink(`#/activities`, "Activities")}
+    <div class="page-head"><h2 class="tb-activity-name">${typeIcon(a.activity_type, 24)}<span>${esc(a.name || typeLabel(a.activity_type))}</span><span class="head-date">${localTime(a)}${a.connect?.locationName ? ` · ${esc(a.connect.locationName)}` : ""}</span></h2>
+      <div class="badges">${available.length && chartX ? `${badgeHtml("charts", "Charts", `${visibleSeries().length} of ${available.length}`, { panel: chartsPanel })}
+          ${badgeHtml("chart-options", "Options", "", { panel: optionsPanel })}` : ""}
+        ${badgeHtml("edit", "Edit", "", { panel: editPanel })}${track ? `<div class="badge-wrap"><button class="badge" data-go="#/segments/new/activity?id=${id}&from=activity">Create segment</button></div>` : ""}</div><span class="spacer"></span></div>
+    <div class="act-top" data-top></div>
+    ${track ? `<div class="card route-card"><div class="card-head"><h3 class="tile-title">${metricIcon("route", 18)}<span>Route</span></h3><span class="spacer"></span>
+        <div class="badges">${badgeHtml("route-color", "Data", routeModeLabel(mode), { panel: `<div class="opt-panel">${pickList("route-color", ROUTE_MODES.map(([k, l]) => [k, l]), mode, () => "", routeModeIcon)}</div>`, right: true })}
+        ${badgeHtml("route-km", "Markers", kmOn ? `Every ${routeKmStep(a)} km` : "None", { panel: `<div class="opt-panel">${pickList("route-km", [["off", "None"], ["on", `Every ${routeKmStep(a)} km`]], kmOn ? "on" : "off")}</div>`, right: true })}</div></div>
+      <div class="route-wrap"><div id="route-map" class="map"></div><div class="route-legend" id="route-legend" hidden></div></div></div>` : ""}
+    ${available.length && chartX ? `<div class="charts" data-charts></div>` : ""}
+    ${a.laps.length ? `<div class="card"><div class="card-head"><h3>Laps</h3><span class="spacer"></span>
+        <div class="badges">${badgeHtml("laps-n", "Group", lapsLabel(lapsN), { panel: `<div class="opt-panel">${pickList("laps-n", [1, 2, 5, 10].map((n) => [n, lapsLabel(n)]), lapsN)}</div>`, right: true })}</div></div>
+      <div data-laps>${lapsTable(a, lapsN)}</div></div>` : ""}
+    <div class="card"><h3>Source files</h3>${a.device ? `<div class="hint">Device: ${esc(a.device)}</div>` : ""}
+      ${a.files.map((f) => `<div>${esc(f.rel_path)}${f.zip_member ? " › " + esc(f.zip_member) : ""} ${state(f.status)}${f.imported_at ? ` <span class="hint">imported ${browserTime(f.imported_at)}</span>` : ""}</div>`).join("") || hint("None")}</div>`;
+  bindBadges(view);
+  view.querySelector("[data-go]")?.addEventListener("click", (e) => { location.hash = e.currentTarget.dataset.go; });
+  const panel = view.querySelector('[data-panel="edit"]');
+  // Single-choice badges (route colour, markers, lap grouping, x axis): pick, update the value, close.
+  const pickBadge = (name, label, apply) => view.querySelectorAll(`[data-pick="${name}"]`).forEach((b) => b.onclick = () => {
+    view.querySelectorAll(`[data-pick="${name}"]`).forEach((x) => { x.classList.toggle("on", x === b); x.setAttribute("aria-checked", x === b); });
+    view.querySelector(`[data-badge-value="${name}"]`).innerHTML = label(b.dataset.value);
+    document.onclick?.();
+    apply(b.dataset.value);
+  });
+  pickBadge("laps-n", (v) => lapsLabel(Number(v)), (v) => { view.querySelector("[data-laps]").innerHTML = lapsTable(a, Number(v)); });
+  panel.querySelector("[name=type]").onchange = async (e) => {
     await api("activities/" + id, { method: "PATCH", body: JSON.stringify({ type: e.target.value }) });
     renderActivity(id);
   };
-  if (track) showRouteMap("route-map", track.polyline).catch((e) => {
-    document.getElementById("route-map").outerHTML = state("Map unavailable: " + esc(e.message), "bad") + trackSvg(track.polyline);
-  });
-  document.getElementById("del").onclick = async () => {
+  const nameInput = panel.querySelector("[name=name]");
+  nameInput.onchange = async () => {
+    const v = nameInput.value.trim();
+    if (v === (a.name || "")) return;
+    await api("activities/" + id, { method: "PATCH", body: JSON.stringify({ name: v || null }) });
+    renderActivity(id);
+  };
+  nameInput.onkeydown = (e) => { if (e.key === "Enter") nameInput.blur(); };
+  panel.querySelector("#del").onclick = async () => {
     if (!confirm("Delete this activity from the database?\n\nThe FIT file is not touched. It will not be imported again unless you remove it from the import history.")) return;
     await api("activities/" + id, { method: "DELETE" });
     location.hash = "#/activities";
   };
+  // A best effort (list row or power curve point): its stretch on the charts and the map.
+  const highlightEffort = (e) => {
+    const t = chartX?.time;
+    if (!e || !t || !(e.end_s > e.start_s)) { charts?.highlight(null); route?.highlight?.(null); return; }
+    const i0 = Math.max(0, t.findIndex((v) => v >= e.start_s));
+    let i1 = t.length - 1;
+    while (i1 > i0 && t[i1] > e.end_s) i1--;
+    charts?.highlight([[i0, i1]]);
+    route?.highlight?.([[i0, i1]]);
+  };
+  // Top tiles: rebuilt when the comparison changes.
+  let curve = null, hrCurve = null;
+  const renderTop = (records, year) => {
+    const cmp = COMPARE.find(([k]) => k === compare) || COMPARE[0];
+    const efforts = (a.best_efforts || []).map((e) => {
+      const r = records ? records[`${e.kind}:${e.key}`] : { value: e.record, start_time_utc: e.record_time, utc_offset_s: e.record_offset_s };
+      return { ...e, record: r?.value ?? null, recordDate: r?.start_time_utc ? localTime(r).slice(0, 10) : "", year: year?.[`${e.kind}:${e.key}`]?.value ?? null };
+    });
+    const top = view.querySelector("[data-top]");
+    const tiles = tilesHtml();
+    top.innerHTML = `<div class="act-col-stats${(tiles.match(/stat-card/g) || []).length > 4 ? " two" : ""}" data-tiles>${tiles}</div>${(a.devices || []).length <= 1
+      ? `<div class="act-col-dev">${devicesHtml(a)}${surfaceCardHtml(a)}</div>${hrZonesCard(a)}`
+      : `${devicesHtml(a)}${hrZonesCard(a) || surfaceCardHtml(a) ? `<div class="act-col-hr">${hrZonesCard(a)}${surfaceCardHtml(a)}</div>` : ""}`}${powerCard(a, efforts) || hrCurveCard(efforts)}${effortsCard(efforts, cmp[0], a.category)}`;
+    top.querySelectorAll("[data-effort]").forEach((el) => {
+      const e = efforts[Number(el.dataset.effort)];
+      el.onmouseenter = () => { el.classList.add("on"); highlightEffort(e); };
+      el.onmouseleave = () => { el.classList.remove("on"); highlightEffort(null); };
+    });
+    curve?.destroy();
+    const cEl = top.querySelector("[data-power-curve]");
+    curve = cEl && curveChart(cEl, {
+      points: efforts.filter((e) => e.kind === "power").map((e) => ({ ...e, compare: e.record, compareDate: e.recordDate })),
+      color: "#b9a2f2", unit: "W", label: "Power", compareLabel: cmp[0] === "all" ? "All time best" : `Best · ${cmp[1].toLowerCase()}`,
+      onHover: highlightEffort,
+    });
+    // Heart rate curve: its own tile when there is room (no power tile), same look as the power curve.
+    hrCurve?.destroy();
+    const hEl = top.querySelector("[data-hr-curve]");
+    hrCurve = hEl && curveChart(hEl, {
+      points: efforts.filter((e) => e.kind === "hr").map((e) => ({ ...e, compare: e.record, compareDate: e.recordDate })),
+      color: "#ef8a8a", unit: "bpm", label: "Heart rate", compareLabel: cmp[0] === "all" ? "All time best" : `Best · ${cmp[1].toLowerCase()}`,
+      onHover: highlightEffort,
+    });
+    bindSlides(top);
+    if (surfaceData) fillSurfaceTile();
+  };
+  // Best efforts: this year always, the comparison (all time by default) as the last column.
+  const byKey = (r) => Object.fromEntries(r.records.map((x) => [`${x.kind}:${x.key}`, x]));
+  let yearRecords = null;
+  const loadCompare = async () => {
+    const [yr, cr] = await Promise.all([
+      yearRecords ? null : api(`activities/${id}/records?range=year`).catch(() => null),
+      compare === "all" ? null : api(`activities/${id}/records?range=${compare}`),
+    ]);
+    if (yr) yearRecords = byKey(yr);
+    renderTop(cr ? byKey(cr) : null, yearRecords);
+  };
+  // Charts (docs/CHARTS.md): synced with each other and with the route map.
+  let charts = null;
+  const route = track ? { a, st, mode, km: kmOn } : null;
+  const chartsEl = view.querySelector("[data-charts]");
+  let surfaceData = null;
+  const fillSurfaceTile = () => {
+    const box = view.querySelector("[data-surface-share]");
+    if (!box) return;
+    box.innerHTML = `<h3 class="tile-title">${metricIcon("route", 18)}<span>Surface</span></h3>${surfaceShareHtml(surfaceData)}`;
+    const d = chartX?.distance;
+    box.querySelectorAll("[data-surface-kind]").forEach((el) => {
+      el.onmouseenter = () => {
+        if (!d) return;
+        const idx = (m) => { const k = d.findIndex((v) => v * 1000 >= m); return k < 0 ? d.length - 1 : k; };
+        const ranges = surfaceData.runs.filter((r) => r[2] === el.dataset.surfaceKind).map(([a0, b0]) => [idx(a0), idx(b0)]);
+        el.classList.add("on");
+        charts?.highlight(ranges);
+        route?.highlight?.(ranges);
+      };
+      el.onmouseleave = () => { el.classList.remove("on"); charts?.highlight(null); route?.highlight?.(null); };
+    });
+  };
+  // Surface runs (metres) → sample index ranges, drawn on the altitude chart (or the first one).
+  const applySurface = () => {
+    const d = chartX?.distance;
+    if (!surfaceData || !charts || !d) return;
+    const idx = (m) => { const k = d.findIndex((v) => v * 1000 >= m); return k < 0 ? d.length - 1 : k; };
+    charts.surface("altitude", surfaceData.runs.map(([a, b, kind]) => [idx(a), idx(b), kind]));
+  };
+  const applyPower = () => available.filter((x) => x.key === "power" || x.key === "cadence")
+    .forEach((p) => { p.values = smoothByTime(p.raw, chartX.time, powerAvg); });
+  if (chartsEl) {
+    applyPower();
+    charts = chartGroup(chartsEl, {
+      x: chartX, kind: xKind, series: visibleSeries(),
+      onHover: (i) => route && routeHover(route, i),
+      // Dragged into a new order: kept per person, like the chart list.
+      onOrder: (keys) => {
+        const all = [...keys, ...available.map((x) => x.key).filter((k) => !keys.includes(k))];
+        available.sort((p, q) => all.indexOf(p.key) - all.indexOf(q.key));
+        saveUi("activity-chart-order", all);
+      },
+    });
+    // Options panel choices: mark the pick, apply, keep the panel open.
+    const pickOpt = (name, apply) => view.querySelectorAll(`[data-pick="${name}"]`).forEach((b) => b.onclick = () => {
+      view.querySelectorAll(`[data-pick="${name}"]`).forEach((x) => { x.classList.toggle("on", x === b); x.setAttribute("aria-checked", x === b); });
+      apply(b.dataset.value);
+    });
+    pickOpt("chart-x", (v) => { charts.setKind(v); setTimeout(applySurface, 200); });
+    pickOpt("compare", (v) => { compare = v; saveUi("activity-compare", v); loadCompare(); });
+    pickOpt("power-avg", (v) => { powerAvg = Number(v); saveUi("activity-power-avg", powerAvg); applyPower(); charts.setSeries(visibleSeries()); });
+    view.querySelectorAll("[data-chart-key]").forEach((c) => c.onchange = () => {
+      const choice = chartChoice();
+      choice[c.dataset.chartKey] = c.checked;
+      saveUi("activity-charts", choice);
+      charts.setSeries(visibleSeries());
+      setTimeout(applySurface, 200);
+      view.querySelector('[data-badge-value="charts"]').textContent = `${visibleSeries().length} of ${available.length}`;
+    });
+  }
+  if (track) {
+    route.charts = charts;
+    const draw = () => drawActivityRoute(route);
+    showRouteMap("route-map", track.polyline, { offset: routeOffset }).then(() => { bindRouteHover(route); draw(); }).catch((e) => {
+      document.getElementById("route-map").outerHTML = state("Map unavailable: " + esc(e.message), "bad") + trackSvg(track.polyline);
+    });
+    pickBadge("route-color", routeModeLabel, (v) => { route.mode = v; draw(); });
+    const mapEl = document.getElementById("route-map");
+    if (mapEl) cardResize(mapEl.closest(".card"), () => mapEl.offsetHeight, (h) => { mapEl.style.height = `${h}px`; activeMap?.resize(); }, 220, 1000);
+    route.highlight = (r) => routeHighlight(route, r);
+    view.querySelectorAll('[data-pick="route-offset"]').forEach((b) => b.onclick = () => {
+      view.querySelectorAll('[data-pick="route-offset"]').forEach((x) => { x.classList.toggle("on", x === b); x.setAttribute("aria-checked", x === b); });
+      routeOffset = b.dataset.value === "on";
+      saveUi("activity-route-offset", routeOffset);
+      setRouteOffset(routeOffset);
+    });
+    pickBadge("route-km", (v) => (v === "on" ? `Every ${routeKmStep(a)} km` : "None"), (v) => { route.km = v === "on"; draw(); });
+  }
+  loadCompare();
+  // Road surface (OpenStreetMap, cached after the first time): shares in the tile, strip on a chart.
+  if (a.has_gps) {
+    api(`activities/${id}/surface`).then((sf) => {
+      if (!sf || !sf.runs) { view.querySelector("[data-surface-share]")?.remove(); return; }
+      surfaceData = sf;
+      fillSurfaceTile();
+      applySurface();
+      if (route) { route.surface = sf; if (route.mode === "surface") drawActivityRoute(route); }
+    }).catch(() => { const box = view.querySelector("[data-surface-share]"); if (box) box.querySelector(".hint").textContent = "Map data not available now."; });
+  }
+}
+
+// X values for the activity charts: distance in km (forward-filled, never decreasing) and
+// time in seconds from the start. Distance is null when the activity has none (indoor).
+function activityChartX(st) {
+  const n = Math.max(st.time?.length || 0, st.distance?.length || 0);
+  if (!n) return null;
+  const t0 = st.time?.find((v) => v != null) ?? 0;
+  let lastT = 0, lastD = 0;
+  const time = [], dist = [];
+  for (let i = 0; i < n; i++) {
+    lastT = Math.max(lastT, st.time?.[i] != null ? st.time[i] - t0 : lastT); time.push(lastT);
+    lastD = Math.max(lastD, st.distance?.[i] != null ? st.distance[i] / 1000 : lastD); dist.push(lastD);
+  }
+  const base = lastD > 0.05 ? dist : time, total = base[base.length - 1] || 1;
+  // Moving time: time that passes only while moving (gaps over 10 s and standing still left out).
+  const moving = [];
+  let mv = 0;
+  for (let i = 0; i < n; i++) {
+    if (i) {
+      const dt = time[i] - time[i - 1], sp = st.speed?.[i];
+      const dd = (dist[i] - dist[i - 1]) * 1000;
+      if (dt > 0 && dt <= 10 && (sp != null ? sp > 0.5 : dd / dt > 0.5)) mv += dt;
+    }
+    moving.push(mv);
+  }
+  return { time, moving: mv > 0 && lastD > 0.05 ? moving : null, distance: lastD > 0.05 ? dist : null, percent: base.map((v) => (v / total) * 100) };
+}
+
+// Trailing average over `secs` seconds of time t (samples without a value are skipped).
+function smoothByTime(v, t, secs) {
+  if (!secs || !t) return v;
+  const out = new Array(v.length);
+  let sum = 0, n = 0, j = 0;
+  for (let i = 0; i < v.length; i++) {
+    if (v[i] != null) { sum += v[i]; n++; }
+    while (t[i] - t[j] >= secs && j < i) { if (v[j] != null) { sum -= v[j]; n--; } j++; }
+    out[i] = v[i] == null ? null : n ? sum / n : null;
+  }
+  return out;
+}
+
+// ---- Activity top tiles: stats, devices, HR zones, power (curve | zones), best efforts ----
+
+// Device pictures: own photos (data/device-images/<product>.png) or a drawing per kind.
+const DEVICE_ART = {
+  watch: `<rect x="20" y="4" width="24" height="12" rx="3"/><rect x="20" y="48" width="24" height="12" rx="3"/><rect x="14" y="14" width="36" height="36" rx="11" class="fill"/><circle cx="32" cy="32" r="11" class="screen"/><path d="M32 25v7l5 3"/><path d="M50 26h3v8h-3"/>`,
+  bike_computer: `<rect x="14" y="6" width="36" height="52" rx="8" class="fill"/><rect x="19" y="12" width="26" height="32" rx="3" class="screen"/><path d="M23 20h12M23 26h18M23 32h9"/><circle cx="26" cy="51" r="2.5"/><circle cx="38" cy="51" r="2.5"/>`,
+  hr_strap: `<path d="M4 34c8-8 16-10 28-10s20 2 28 10"/><path d="M4 40c8-8 16-10 28-10s20 2 28 10"/><rect x="20" y="22" width="24" height="18" rx="7" class="fill"/><path d="M27 31c1.5-3 4-3 5 0 1-3 3.5-3 5 0-1 3-5 5-5 5s-4-2-5-5z" class="accent"/>`,
+  power_meter: `<rect x="8" y="24" width="38" height="16" rx="6" class="fill"/><path d="M46 32h12"/><circle cx="58" cy="32" r="3"/><rect x="14" y="28" width="12" height="8" rx="2" class="screen"/><path d="M32 28l-3 5h4l-3 5" class="accent-stroke"/>`,
+  radar: `<rect x="22" y="6" width="20" height="52" rx="8" class="fill"/><rect x="26" y="12" width="12" height="16" rx="4" class="accent"/><path d="M27 38h10M27 43h10M27 48h10"/><path d="M12 22c-3 6-3 14 0 20M8 18c-5 9-5 19 0 28"/>`,
+  light: `<rect x="22" y="10" width="20" height="44" rx="8" class="fill"/><rect x="26" y="16" width="12" height="20" rx="4" class="accent"/><path d="M14 26h-6M14 32h-8M14 38h-6"/>`,
+  speed_cadence: `<rect x="18" y="20" width="28" height="24" rx="9" class="fill"/><circle cx="32" cy="32" r="5" class="screen"/><path d="M8 32h10M46 32h10"/>`,
+  foot_pod: `<path d="M10 42c10 0 14-12 24-12h12c6 0 10 4 10 10v4H10z" class="fill"/><rect x="28" y="22" width="14" height="10" rx="4" class="screen"/>`,
+  trainer: `<circle cx="22" cy="40" r="12" class="fill"/><circle cx="22" cy="40" r="4"/><path d="M34 40h18l4 14H30M44 40V24l8-6"/>`,
+  app: `<rect x="18" y="4" width="28" height="56" rx="6" class="fill"/><rect x="22" y="12" width="20" height="38" rx="2" class="screen"/><path d="M27 34l4-8 4 6 3-4" class="accent-stroke"/>`,
+  sensor: `<rect x="16" y="18" width="32" height="28" rx="10" class="fill"/><path d="M26 32h12M32 26v12"/>`,
+};
+const DEVICE_KIND_LABEL = { watch: "Watch", bike_computer: "Bike computer", app: "App", power_meter: "Power meter",
+  hr_strap: "Heart rate strap", trainer: "Smart trainer", radar: "Radar", light: "Bike light",
+  speed_cadence: "Speed / cadence sensor", foot_pod: "Foot pod", shifting: "Shifting", sensor: "Sensor" };
+function devicesHtml(a) {
+  const list = Array.isArray(a.devices) ? a.devices : [];
+  if (!list.length) return "";
+  return `<div class="card act-tile act-devices"><h3 class="tile-title">${metricIcon("watch", 18)}<span>Gear</span></h3><div class="devices">${list.map((d) => `<div class="device">
+      <div class="device-pic">${d.image ? `<img src="${esc(d.image)}" alt="">` : `<svg viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">${DEVICE_ART[d.kind] || DEVICE_ART.sensor}</svg>`}</div>
+      <div class="device-text"><b>${esc(d.name || "Device")}</b><span>${esc([d.maker, DEVICE_KIND_LABEL[d.kind]].filter(Boolean).join(" · "))}</span></div></div>`).join("")}</div></div>`;
+}
+
+// Clock-style duration: 1:02:03, 4:12.
+const clock = (s) => {
+  const t = Math.round(s), h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), x = t % 60;
+  return h ? `${h}:${String(m).padStart(2, "0")}:${String(x).padStart(2, "0")}` : `${m}:${String(x).padStart(2, "0")}`;
+};
+
+// Garmin's time in zones (from the FIT file) as one bar per zone, highest zone on top, in the
+// zone colours (HR green → red, power yellow → violet, as on the route map). Share only; the
+// time and the zone range on hover.
+function zoneBars(a, kind) {
+  let z = null;
+  try { z = a.zones ? JSON.parse(a.zones) : null; } catch { z = null; }
+  const d = z?.[kind];
+  if (!d) return "";
+  const b = d.bounds, unitLabel = kind === "hr" ? "bpm" : "W";
+  // HR (and cycling power, starting at 0): bounds[0] is the low limit of zone 1 (times[0] =
+  // below zone 1); running power: every bound is the high limit of a zone.
+  const lowFirst = kind === "hr" || b[0] === 0;
+  const zones = lowFirst ? b.slice(1).map((hi, k) => ({ lo: b[k], hi, t: d.times[k + 1] || 0 }))
+    : b.map((hi, k) => ({ lo: k ? b[k - 1] : 0, hi, t: d.times[k] || 0 }));
+  const total = zones.reduce((s, x) => s + x.t, 0) + (lowFirst ? d.times[0] || 0 : 0);
+  if (!total) return "";
+  const max = Math.max(...zones.map((x) => x.t), 1);
+  const rng = (x, k) => (k === zones.length - 1 && x.hi >= 1000 ? `${num(x.lo)}+` : k === 0 && !x.lo ? `under ${num(x.hi)}` : `${num(x.lo)}–${num(x.hi)}`);
+  return `<div class="zone-bars${kind === "power" ? " with-time" : ""}">${zones.map((x, k) => {
+    const c = rampColor(ROUTE_SCALES[kind].stops, zones.length > 1 ? k / (zones.length - 1) : 0);
+    return `<div class="zone-row" style="--zc:${c}" data-tip="Zone ${k + 1} (${rng(x, k)} ${unitLabel}): ${x.t ? clock(x.t) : "no time"}"><span class="zone-name">Z${k + 1}</span>
+      <span class="zone-bar"><span style="width:${(x.t / max) * 100}%"></span></span>${kind === "power" ? `<span class="zone-time">${x.t ? clock(x.t) : "–"}</span>` : ""}<span class="zone-pct">${num((x.t / total) * 100)}%</span></div>`;
+  }).reverse().join("")}${lowFirst && d.times[0] / total >= 0.01 ? `<div class="zone-row zone-below" style="--zc:var(--muted)" data-tip="Below zone 1 (under ${num(b[0])} ${unitLabel}): ${clock(d.times[0])}">
+      <span class="zone-name">–</span><span class="zone-bar"><span style="width:${Math.min(100, (d.times[0] / max) * 100)}%"></span></span>${kind === "power" ? `<span class="zone-time">${clock(d.times[0])}</span>` : ""}<span class="zone-pct">${num((d.times[0] / total) * 100)}%</span></div>` : ""}</div>`;
+}
+function hrZonesCard(a) {
+  const bars = zoneBars(a, "hr");
+  return bars ? `<div class="card act-tile act-hr"><h3 class="tile-title">${metricIcon("time_in_hr_zone", 18)}<span>Heart rate in zones</span></h3>${bars}</div>` : "";
+}
+// Road surface tile (filled when the map data arrives).
+function surfaceCardHtml(a) {
+  return a.has_gps ? `<div class="card act-tile act-surface" data-surface-share><h3 class="tile-title">${metricIcon("route", 18)}<span>Surface</span></h3><div class="hint">Loading map data…</div></div>` : "";
+}
+// Surface shares: one stacked bar in the surface hatching and the share of each kind.
+function surfaceShareHtml(sf) {
+  const total = Object.values(sf.shares || {}).reduce((x, y) => x + y, 0);
+  if (!total) return "";
+  const kinds = SURFACE_KINDS.filter((k) => sf.shares[k]);
+  return `<div class="surface-bar">${kinds.map((k) => `<span class="surface-swatch s-${k}" style="width:${(sf.shares[k] / total) * 100}%" data-surface-kind="${k}" data-tip="${SURFACE_LABEL[k]}: ${km(sf.shares[k])}"></span>`).join("")}</div>
+    <div class="surface-list">${kinds.map((k) => `<span data-surface-kind="${k}" data-tip="${SURFACE_LABEL[k]}: ${km(sf.shares[k])}"><i class="surface-swatch s-${k}"></i>${SURFACE_LABEL[k]} <b>${num((sf.shares[k] / total) * 100)}%</b></span>`).join("")}</div>`;
+}
+// Power (rides: a power meter, not an estimate): a sliding tile - the power curve first, then
+// the time in power zones.
+function powerCard(a, efforts) {
+  if (a.category !== "ride") return "";
+  const hasCurve = efforts.filter((e) => e.kind === "power").length >= 2, bars = zoneBars(a, "power");
+  const slides = [
+    hasCurve && `<div class="slide"><h3 class="tile-title">${metricIcon("power", 18)}<span>Power curve</span></h3><div class="curve-box" data-power-curve></div></div>`,
+    bars && `<div class="slide"><h3 class="tile-title">${metricIcon("time_in_power_zone", 18)}<span>Power in zones</span></h3>${bars}</div>`,
+  ].filter(Boolean);
+  if (!slides.length) return "";
+  return `<div class="card act-tile act-power"><div class="slides" data-slides>${slides.join("")}</div>
+    ${slides.length > 1 ? `<div class="slide-dots">${slides.map((_, k) => `<button type="button" class="${k ? "" : "on"}" data-slide="${k}" aria-label="Slide ${k + 1}"></button>`).join("")}</div>` : ""}</div>`;
+}
+// Heart rate curve tile (shown instead of the power tile when there is none).
+function hrCurveCard(efforts) {
+  if (efforts.filter((e) => e.kind === "hr").length < 2) return "";
+  return `<div class="card act-tile act-power"><div class="slides"><div class="slide"><h3 class="tile-title">${metricIcon("heart_rate", 18)}<span>Heart rate curve</span></h3>
+    <div class="curve-box" data-hr-curve></div></div></div></div>`;
+}
+// Sliding tiles: dots switch, horizontal scroll (trackpad, touch) moves the dots.
+function bindSlides(root) {
+  root.querySelectorAll("[data-slides]").forEach((box) => {
+    const dots = box.parentElement.querySelectorAll("[data-slide]");
+    dots.forEach((d) => d.onclick = () => box.scrollTo({ left: Number(d.dataset.slide) * box.clientWidth, behavior: "smooth" }));
+    box.onscroll = () => { const k = Math.round(box.scrollLeft / box.clientWidth); dots.forEach((d, j) => d.classList.toggle("on", j === k)); };
+  });
+}
+
+// Best efforts: fastest time over each distance, the record in brackets (or a record badge);
+// hover = the stretch on the charts and the map.
+const LAUREL_SVG = `<svg class="laurel" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="#c99a2e" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21c-4.5-1-7.5-5-7.5-10.5 0-2 .4-3.8 1-5.5"/><path d="M12 21c4.5-1 7.5-5 7.5-10.5 0-2-.4-3.8-1-5.5"/><path d="M5.2 8.5c-1.6-.4-2.6-1.6-2.8-3 1.5-.2 2.7.6 3.2 1.9M4.6 12.4c-1.6.1-2.9-.8-3.4-2.2 1.4-.5 2.8 0 3.6 1.2M5.6 16.1c-1.5.5-3 0-3.8-1.3 1.3-.8 2.8-.6 3.8.4M8 19c-1.3.9-2.9.8-3.9-.2 1-1.1 2.6-1.3 3.9-.6"/><path d="M18.8 8.5c1.6-.4 2.6-1.6 2.8-3-1.5-.2-2.7.6-3.2 1.9M19.4 12.4c1.6.1 2.9-.8 3.4-2.2-1.4-.5-2.8 0-3.6 1.2M18.4 16.1c1.5.5 3 0 3.8-1.3-1.3-.8-2.8-.6-3.8.4M16 19c1.3.9 2.9.8 3.9-.2-1-1.1-2.6-1.3-3.9-.6"/></svg>`;
+const EFFORT_NAMES = { 400: "400 m", 1000: "1 km", 1609.344: "1 mile", 5000: "5 km", 10000: "10 km", 20000: "20 km", 30000: "30 km",
+  21097.5: "Half marathon", 40000: "40 km", 42195: "Marathon", 50000: "50 km", 100000: "100 km" };
+const COMPARE_SHORT = { all: ["ATH", "All-time best"], year: ["Year", "Best this year"], "365d": ["12 mo", "Best in the last 12 months"],
+  "90d": ["3 mo", "Best in the last 3 months"], "30d": ["30 d", "Best in the last 30 days"] };
+function effortsCard(efforts, compareKey, category) {
+  const ride = category === "ride";
+  // Distances (fastest time); on rides also the best 20 min and 1 h power.
+  const list = efforts.map((e, k) => ({ ...e, k }))
+    .filter((e) => e.kind === "pace" || e.kind === "ride" || (ride && e.kind === "power" && (e.key === 1200 || e.key === 3600)))
+    .sort((p, q) => (p.kind === "power") - (q.kind === "power") || p.key - q.key);
+  if (!list.length) return "";
+  const [short, long] = COMPARE_SHORT[compareKey] || COMPARE_SHORT.all;
+  const power = (e) => e.kind === "power";
+  const better = (e, v, than) => than != null && (power(e) ? v >= than - 0.05 : v <= than + 0.05);
+  const val = (e, v) => (power(e) ? watts(v) : clock(v));
+  const speed = (e, t) => (power(e) ? "" : ride ? `${num((e.key / t) * 3.6, 1)} km/h` : `${clock(t / (e.key / 1000))} /km`);
+  const name = (e) => (power(e) ? (e.key === 1200 ? "Power20" : "Power1h") : EFFORT_NAMES[e.key] || km(e.key));
+  // a past best: time and speed, or a laurel when this activity is that best
+  const cell = (e, rec, tip) => (better(e, e.value, rec) ? `<span class="effort-rec effort-pb" data-tip="${tip}: this activity">${LAUREL_SVG}</span><span></span>`
+    : rec != null ? `<span class="effort-rec">${val(e, rec)}</span><span class="effort-speed">${speed(e, rec)}</span>` : `<span class="effort-rec">–</span><span></span>`);
+  return `<div class="card act-tile act-efforts"><h3 class="tile-title">${LAUREL_SVG}<span>Best efforts</span></h3>
+    <div class="efforts"><div class="effort effort-head"><span></span><span class="eh-now" data-tip="This activity">Activity</span><span class="eh-year" data-tip="Best this year">Year</span><span class="eh-rec" data-tip="${long}">${short}</span></div>
+    ${list.map((e) => `<div class="effort${better(e, e.value, e.record) ? " pb" : ""}" data-effort="${e.k}"><span class="effort-name">${name(e)}</span>
+        <b>${val(e, e.value)}</b><span class="effort-speed">${speed(e, e.value)}</span>${cell(e, e.year, "Best this year")}${cell(e, e.record, long)}</div>`).join("")}</div></div>`;
+}
+
+// Out-and-back sections side by side (lines shifted to their right) or on top of each other.
+let ROUTE_OFFSET_PX = 2.2;
+function setRouteOffset(on) {
+  ROUTE_OFFSET_PX = on ? 2.2 : 0;
+  const map = activeMap;
+  if (!map?.getLayer) return;
+  ["route", "route-color", "effort-hl", "effort-hl-casing"].forEach((id) => { if (map.getLayer(id)) map.setPaintProperty(id, "line-offset", ROUTE_OFFSET_PX); });
+}
+
+// A stretch of the route (samples i0..i1) drawn bold over the route; null clears it.
+function routeHighlight(route, range) {
+  const map = activeMap;
+  if (!map?.getSource || (!range && !map.getSource("effort-hl")) || !map.isStyleLoaded()) return;
+  // range: [[i0, i1], …] (several stretches, e.g. all gravel) or null
+  const all = range ? routePoints(route.st, null) : [];
+  const lines = (range || []).map(([a, b]) => all.filter((p) => p.i >= a && p.i <= b).map((p) => p.p)).filter((l) => l.length > 1);
+  const data = { type: "FeatureCollection", features: lines.length ? [{ type: "Feature", properties: {}, geometry: { type: "MultiLineString", coordinates: lines } }] : [] };
+  if (map.getSource("effort-hl")) { map.getSource("effort-hl").setData(data); return; }
+  map.addSource("effort-hl", { type: "geojson", data });
+  map.addLayer({ id: "effort-hl-casing", type: "line", source: "effort-hl", layout: { "line-join": "round", "line-cap": "round" },
+                 paint: { "line-color": "#fff", "line-width": 9, "line-offset": ROUTE_OFFSET_PX } }, "ends");
+  map.addLayer({ id: "effort-hl", type: "line", source: "effort-hl", layout: { "line-join": "round", "line-cap": "round" },
+                 paint: { "line-color": "#f59e0b", "line-width": 5.5, "line-offset": ROUTE_OFFSET_PX } }, "ends");
+}
+
+// Chart ↔ map: a dot on the route at the hovered sample; hovering the route moves the charts.
+function routeHover(route, i) {
+  const map = activeMap, src = map?.getSource("hover-pt");
+  if (!src) return;
+  const lat = route.st.lat?.[i], lon = route.st.lon?.[i];
+  src.setData({ type: "FeatureCollection", features: i == null || lat == null || lon == null ? []
+    : [{ type: "Feature", properties: {}, geometry: { type: "Point", coordinates: [lon, lat] } }] });
+}
+function bindRouteHover(route) {
+  const map = activeMap;
+  map.addSource("hover-pt", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+  map.addLayer({ id: "hover-pt", type: "circle", source: "hover-pt",
+                 paint: { "circle-radius": 6, "circle-color": cssVar("--fg") || "#1b1e25", "circle-stroke-width": 2.5, "circle-stroke-color": "#fff" } });
+  const pts = routePoints(route.st, null);
+  map.on("mousemove", (e) => {
+    if (!route.charts || !pts.length) return;
+    let best = null, bd = 400; // within 20 px
+    for (const x of pts) {
+      const p = map.project(x.p), d = (p.x - e.point.x) ** 2 + (p.y - e.point.y) ** 2;
+      if (d < bd) { bd = d; best = x.i; }
+    }
+    route.charts.hover(best);
+    if (best == null) routeHover(route, null);
+  });
+  map.getCanvas().addEventListener("mouseleave", () => { route.charts?.hover(null); routeHover(route, null); });
+}
+
+// ---- Activity route: colour by a stream, kilometre markers, legend --------------------
+
+// Colour scales (low → high). HR: green to red like HR zones; power ends in violet.
+const ROUTE_SCALES = {
+  speed: { label: "Speed", unit: "km/h", f: (v) => v * 3.6, dec: 1, stops: ["#1e3a8a", "#2563eb", "#22d3ee", "#a3e635", "#facc15"] },
+  hr: { label: "Heart rate", unit: "bpm", f: (v) => v, dec: 0, stops: ["#2b9348", "#a7c957", "#f9c74f", "#f3722c", "#d00000"] },
+  power: { label: "Power", unit: "W", f: (v) => v, dec: 0, stops: ["#facc15", "#f97316", "#e11d48", "#a21caf", "#5b21b6"] },
+  cadence: { label: "Cadence", unit: "", f: (v) => v, dec: 0, stops: ["#a3e635", "#2dd4bf", "#0d9488", "#0e7490", "#1e3a8a"] },
+  // Altitude like a relief map: lowland green, hills yellow, mountains brown.
+  altitude: { label: "Altitude", unit: "m", f: (v) => v, dec: 0, any: true, stops: ["#1a9850", "#91cf60", "#fee08b", "#d8a35d", "#8c510a"] },
+};
+// Bikes and long activities: a marker every 5 km, otherwise every km.
+const routeKmStep = (a) => (a.category === "ride" || (a.distance_m || 0) >= 40000 ? 5 : 1);
+const ROUTE_ICON = { speed: "speed", hr: "avg_heart_rate", power: "power", cadence: "cadence", altitude: "altitude", surface: "route" };
+// Surface on the map: one colour per kind (the base colours of the chart hatching).
+const SURFACE_MAP_COLOR = { paved: "#5b6472", gravel: "#d39a2f", dirt: "#8b5a2b", unknown: "#b8bec7" };
+const routeModeIcon = (k) => (ROUTE_ICON[k] ? metricIcon(ROUTE_ICON[k], 16) : "");
+const routeModeLabel = (k) => (k === "plain" ? "None" : `<span class="badge-metric">${routeModeIcon(k)}${k === "surface" ? "Surface" : ROUTE_SCALES[k].label}</span>`);
+
+// ---- Laps: grouped by n, header icons, columns without data hidden --------------------
+const lapsLabel = (n) => (Number(n) === 1 ? "1 lap" : `${n} laps`);
+function lapGroups(laps, n) {
+  const out = [];
+  for (let i = 0; i < laps.length; i += n) {
+    const g = laps.slice(i, i + n);
+    const t = g.reduce((s, l) => s + (l.timer_s || 0), 0), d = g.reduce((s, l) => s + (l.distance_m || 0), 0);
+    const avg = (k) => { // time-weighted
+      let sum = 0, w = 0;
+      for (const l of g) if (l[k] != null && l.timer_s) { sum += l[k] * l.timer_s; w += l.timer_s; }
+      return w ? sum / w : null;
+    };
+    out.push({
+      label: g.length > 1 ? `${g[0].idx + 1}–${g[g.length - 1].idx + 1}` : String(g[0].idx + 1),
+      distance_m: d, timer_s: t, avg_speed: t ? d / t : null,
+      avg_hr: avg("avg_hr"), avg_power: avg("avg_power"), avg_cadence: avg("avg_cadence"),
+      intensity: [...new Set(g.map((l) => l.intensity).filter(Boolean))].join(", "),
+    });
+  }
+  return out;
+}
+const thIcon = (icon, label, num = true) => `<th class="${num ? "num" : ""}"><span class="th-icon">${icon ? metricIcon(icon) : ""}${label}</span></th>`;
+function lapsTable(a, n) {
+  const rows = lapGroups(a.laps, n);
+  const has = (k) => rows.some((r) => r[k] != null && r[k] !== 0);
+  // Intensity only when it changes (a workout that never left its warm-up step marks all laps "warmup").
+  const showInt = new Set(a.laps.map((l) => l.intensity)).size > 1;
+  const cols = [
+    ["", "#", false, (r) => r.label],
+    ["distance_total", "Distance", true, (r) => km(r.distance_m)],
+    ["moving_time", "Time", true, (r) => dur(r.timer_s)],
+    has("distance_m") && ["avg_pace", "Pace", true, (r) => (r.distance_m ? pace(r.avg_speed) : "–")],
+    has("avg_hr") && ["avg_heart_rate", "Avg HR", true, (r) => bpm(r.avg_hr)],
+    has("avg_power") && ["avg_power", "Avg power", true, (r) => watts(r.avg_power)],
+    has("avg_cadence") && ["avg_cadence", "Cadence", true, (r) => cadence(r.avg_cadence, a.category)],
+    showInt && ["", "Intensity", false, (r) => esc(r.intensity)],
+  ].filter(Boolean);
+  return `<div class="scroll"><table class="data"><thead><tr>${cols.map(([i, l, nm]) => thIcon(i, l, nm)).join("")}</tr></thead>
+    <tbody>${rows.map((r) => `<tr>${cols.map(([, , nm, f]) => `<td class="${nm ? "num" : ""}">${f(r)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
+}
+
+const hexRgb = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
+function rampColor(stops, t) {
+  const x = Math.max(0, Math.min(1, t)) * (stops.length - 1), i = Math.min(stops.length - 2, Math.floor(x)), f = x - i;
+  const [p, q] = [hexRgb(stops[i]), hexRgb(stops[i + 1])];
+  return `rgb(${p.map((v, k) => Math.round(v + (q[k] - v) * f)).join(",")})`;
+}
+const quantile = (sorted, q) => sorted[Math.min(sorted.length - 1, Math.max(0, Math.round(q * (sorted.length - 1))))];
+function haversineLonLat(p, q) {
+  const r = Math.PI / 180, dLat = (q[1] - p[1]) * r, dLon = (q[0] - p[0]) * r;
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(p[1] * r) * Math.cos(q[1] * r) * Math.sin(dLon / 2) ** 2;
+  return 12742000 * Math.asin(Math.sqrt(h));
+}
+
+// Stream points that have a position: [lon, lat], distance from the start and the value.
+function routePoints(st, key) {
+  const pts = [];
+  let d = 0, prev = null;
+  for (let i = 0; i < (st.lat || []).length; i++) {
+    const lat = st.lat[i], lon = st.lon?.[i];
+    if (lat == null || lon == null) continue;
+    const p = [lon, lat];
+    d = st.distance?.[i] != null ? st.distance[i] : d + (prev ? haversineLonLat(prev, p) : 0);
+    pts.push({ p, d, i, v: key ? st[key]?.[i] : null });
+    prev = p;
+  }
+  return pts;
+}
+
+function drawActivityRoute(route) {
+  const map = activeMap;
+  if (!map) return;
+  if (!map.isStyleLoaded()) { map.once("idle", () => drawActivityRoute(route)); return; }
+  const legend = document.getElementById("route-legend");
+  const scale = ROUTE_SCALES[route.mode];
+  const pts = routePoints(route.st, scale ? route.mode : null);
+  // Coloured route: one short line per pair of points, coloured by the value (5–95 % range).
+  const features = [];
+  if (route.mode === "surface" && route.surface && pts.length > 1) {
+    // Road surface (OpenStreetMap): one colour per kind, legend with the kinds present.
+    const runs = route.surface.runs;
+    let r = 0;
+    for (let i = 1; i < pts.length; i++) {
+      const d = pts[i].d;
+      while (r < runs.length - 1 && d > runs[r][1]) r++;
+      features.push({ type: "Feature", properties: { c: SURFACE_MAP_COLOR[runs[r]?.[2]] || SURFACE_MAP_COLOR.unknown },
+                      geometry: { type: "LineString", coordinates: [pts[i - 1].p, pts[i].p] } });
+    }
+    const kinds = SURFACE_KINDS.filter((k) => route.surface.shares?.[k]);
+    legend.innerHTML = `<span class="route-legend-title">Surface</span><div class="route-legend-kinds">${kinds.map((k) =>
+      `<span><i style="background:${SURFACE_MAP_COLOR[k]}"></i>${SURFACE_LABEL[k]}</span>`).join("")}</div>`;
+  }
+  else if (scale && pts.length > 1) {
+    const vals = pts.map((x) => x.v).filter((v) => v != null && (scale.any || v > 0)).sort((x, y) => x - y);
+    const lo = quantile(vals, 0.05), hi = quantile(vals, 0.95);
+    for (let i = 1; i < pts.length; i++) {
+      const v = pts[i].v ?? pts[i - 1].v;
+      const t = v == null || hi === lo ? 0.5 : (v - lo) / (hi - lo);
+      features.push({ type: "Feature", properties: { c: rampColor(scale.stops, t) },
+                      geometry: { type: "LineString", coordinates: [pts[i - 1].p, pts[i].p] } });
+    }
+    const fmt = (v) => num(scale.f(v), scale.dec);
+    legend.innerHTML = `<span class="route-legend-title">${scale.label}${scale.unit ? ` · ${scale.unit}` : ""}</span>
+      <div class="route-ramp" style="background:linear-gradient(90deg,${scale.stops.join(",")})"></div>
+      <div class="route-ramp-labels"><span>${fmt(lo)}</span><span>${fmt(hi)}</span></div>`;
+  }
+  legend.hidden = !features.length;
+  map.setLayoutProperty("route", "visibility", features.length ? "none" : "visible");
+  const data = { type: "FeatureCollection", features };
+  if (map.getSource("route-color")) { // quick fade out → new colours → fade in
+    map.setPaintProperty("route-color", "line-opacity", 0);
+    setTimeout(() => { map.getSource("route-color")?.setData(data); map.setPaintProperty("route-color", "line-opacity", 1); }, 180);
+  }
+  else {
+    map.addSource("route-color", { type: "geojson", data });
+    map.addLayer({ id: "route-color", type: "line", source: "route-color", layout: { "line-join": "round", "line-cap": "round" },
+                   paint: { "line-color": ["get", "c"], "line-width": 3.5, "line-offset": ROUTE_OFFSET_PX,
+                            "line-opacity": 1, "line-opacity-transition": { duration: 180 } } }, "ends");
+  }
+  // Kilometre markers: a numbered dot every 1 or 5 km.
+  (route.markers || []).forEach((m) => m.remove());
+  route.markers = [];
+  if (route.km) {
+    const step = routeKmStep(route.a) * 1000;
+    let next = step;
+    for (const x of pts) {
+      if (x.d < next) continue;
+      const el = document.createElement("div");
+      el.className = "km-marker";
+      el.textContent = Math.round(next / 1000);
+      route.markers.push(new maplibregl.Marker({ element: el }).setLngLat(x.p).addTo(map));
+      next += step;
+    }
+  }
 }
 
 // ---- Maps (MapLibre GL, loaded on first use from the local vendor folder) -----------
@@ -696,7 +1495,7 @@ const TILE_SIZES = [[13, "Large squares"], [14, "Explorer tiles"], [16, "Medium 
 function defaultMapSettings() {
   return {
     layer: "heatmap",
-    kpis: true,
+    kpis: false,
     map: { source: "osm", tone: "faded" },
     heatmap: { style: "density", color: "#e8590c", ramp: "fire", width: 2, intensity: 0.45, perPerson: true },
     tiles: { zoom: 14, style: "coverage", color: "#0f766e", ramp: "viridis", display: "grid",
@@ -707,12 +1506,18 @@ function defaultMapSettings() {
 function loadMapSettings() {
   const d = defaultMapSettings();
   let s = null;
-  try { s = JSON.parse(store.get("map-settings-v3") || "null"); } catch (e) { s = null; }
-  if (!s) return d;
-  return { ...d, ...s, map: { ...d.map, ...s.map }, heatmap: { ...d.heatmap, ...s.heatmap }, tiles: { ...d.tiles, ...s.tiles } };
+  s = UI.data["map-settings"] || null;
+  if (!s) try { s = JSON.parse(store.get("map-settings-v3") || "null"); } catch (e) { s = null; }
+  const tab = { layer: TAB.layer || "heatmap", kpis: TAB.kpis ?? false }; // not saved: fixed per visit
+  if (!s) return { ...d, ...tab };
+  return { ...d, ...s, ...tab, map: { ...d.map, ...s.map }, heatmap: { ...d.heatmap, ...s.heatmap }, tiles: { ...d.tiles, ...s.tiles } };
 }
 
-const saveMapSettings = (s) => store.set("map-settings-v3", JSON.stringify(s));
+function saveMapSettings(s) {
+  TAB.layer = s.layer; TAB.kpis = s.kpis;
+  const { layer, kpis, ...keep } = s;
+  saveUi("map-settings", keep);
+}
 
 const DARK_TONES = new Set(["soft-dark", "slate", "dusk", "dark"]);
 const TONE_PROPS = ["raster-saturation", "raster-brightness-min", "raster-brightness-max", "raster-contrast", "raster-hue-rotate"];
@@ -739,21 +1544,76 @@ function boundsOf(coordsList) {
   return w <= e ? [[w, s], [e, n]] : null;
 }
 
+// The furthest the start view zooms out: central Europe (about zoom 5
+// on a laptop screen, where small countries such as Malta get their labels).
+const CONTINENT = [[2, 40], [24, 52]];
+
 async function createMap(container, mapSettings, opts = {}) {
   const ml = await loadMapLibre();
   BASEMAPS ??= await api("basemaps");
   disposeMap();
   // Start directly at the data (no jump from a world view = no flicker).
   const start = opts.bounds ? { bounds: opts.bounds, fitBoundsOptions: opts.fitBoundsOptions || { padding: 40, maxZoom: 15 } } : { center: [10, 50], zoom: 3 };
-  const zoomOffset = opts.zoomOffset || 0;
-  delete opts.bounds; delete opts.fitBoundsOptions; delete opts.zoomOffset;
-  activeMap = new ml.Map({ container, style: baseStyle(mapSettings), attributionControl: { compact: true },
+  const zoomOffset = opts.zoomOffset || 0, focus = opts.focus, withReset = opts.reset;
+  delete opts.bounds; delete opts.fitBoundsOptions; delete opts.zoomOffset; delete opts.focus; delete opts.reset;
+  activeMap = new ml.Map({ container, style: baseStyle(mapSettings), attributionControl: false,
                            fadeDuration: 0, ...start, ...opts });
-  if (zoomOffset) activeMap.jumpTo({ zoom: Math.max(1, activeMap.getZoom() + zoomOffset) });
-  activeMap.addControl(new ml.NavigationControl({ showCompass: false }), "bottom-right");
+  if (zoomOffset) {
+    // Zoom out from the data, but never further than the CONTINENT view on this screen.
+    // When even the data does not fit at that level, centre on `focus`.
+    const fitZ = activeMap.getZoom();
+    const floor = activeMap.cameraForBounds(CONTINENT, { padding: 20 })?.zoom ?? 3;
+    const zoom = Math.max(fitZ + zoomOffset, floor);
+    activeMap.jumpTo(fitZ < floor && focus ? { zoom, center: focus } : { zoom });
+  }
+  activeMap.addControl(new ml.NavigationControl({ showCompass: false }), "bottom-right"); // buttons: bottom right
+  activeMap.addControl(new ml.ScaleControl({ unit: "metric", maxWidth: 110 }), "bottom-left"); // scale: bottom left
+  activeMap.addControl(new ml.AttributionControl({ compact: false }), "bottom-right"); // small, below the buttons
+  if (!document.body.classList.contains("fullmap")) activeMap.addControl(new ml.FullscreenControl(), "top-right");
+  const reset = withReset ? new MapResetControl() : null;
+  if (reset) activeMap.addControl(reset, "top-right");
   await new Promise((resolve) => activeMap.on("load", resolve));
   activeMap.resize();
+  reset?.home();
   return activeMap;
+}
+
+// Reset view: the refresh pictogram of the charts in a block like Fullscreen (top right),
+// shown only after the map was moved, zoomed or rotated; restores the start view.
+const REFRESH_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3"/><path d="M19.5 3.5v4.5H15"/></svg>`;
+class MapResetControl {
+  onAdd(map) {
+    this.map = map;
+    this.el = Object.assign(document.createElement("div"), { className: "maplibregl-ctrl maplibregl-ctrl-group map-reset", hidden: true });
+    this.el.innerHTML = `<button type="button" title="Reset view">${REFRESH_SVG}</button>`;
+    this.el.firstChild.onclick = () => map.easeTo({ ...this.start, duration: 450 });
+    map.on("moveend", () => this.check());
+    return this.el;
+  }
+  home() { const m = this.map; this.start = { center: m.getCenter(), zoom: m.getZoom(), bearing: m.getBearing(), pitch: m.getPitch() }; this.check(); }
+  check() {
+    if (!this.start) return;
+    const m = this.map, s = this.start, p = m.project(s.center), c = m.project(m.getCenter());
+    this.el.hidden = Math.abs(m.getZoom() - s.zoom) < 0.01 && Math.hypot(p.x - c.x, p.y - c.y) < 2
+      && Math.abs(m.getBearing() - s.bearing) < 0.5 && Math.abs(m.getPitch() - s.pitch) < 0.5;
+  }
+  onRemove() { this.el.remove(); }
+}
+
+// Centre of the area with the most activities (10° cells), for a start view that cannot show
+// all of them at once.
+function busiestArea(tracks) {
+  const cells = new Map();
+  for (const t of tracks) {
+    const p = t.coords?.[0];
+    if (!p) continue;
+    const k = `${Math.floor(p[0] / 10)},${Math.floor(p[1] / 10)}`;
+    const c = cells.get(k) || { n: 0, lon: 0, lat: 0 };
+    c.n++; c.lon += p[0]; c.lat += p[1];
+    cells.set(k, c);
+  }
+  const best = [...cells.values()].sort((a, b) => b.n - a.n)[0];
+  return best ? [best.lon / best.n, best.lat / best.n] : null;
 }
 
 function fitTo(map, coordsList, padding = 40) {
@@ -889,15 +1749,20 @@ function densify(tracks) {
 // A page header is: title, then badges; badges open panels. Panels stay open while their
 // settings change; only what changed is updated.
 
+// One level below a tab (an activity, a segment…): a square back button left of the page
+// header on wide screens; on narrow ones it folds above the header as a text link.
+const backLink = (href, label) => `<a class="back" href="${href}" title="Back to ${esc(label)}" aria-label="Back to ${esc(label)}">
+  <span class="back-box">${ICON.back}</span><span class="back-text">← ${esc(label)}</span></a>`;
+
 function pageHead(title, badges = "", right = "") {
   return `<div class="page-head"><h2>${title}</h2><div class="badges">${badges}</div><span class="spacer"></span>${right}</div>`;
 }
-function badgeHtml(id, label, value = "", { panel = "", on = false, wide = false } = {}) {
+function badgeHtml(id, label, value = "", { panel = "", on = false, wide = false, right = false } = {}) {
   return `<div class="badge-wrap">
     <button class="badge ${on ? "on" : ""}" data-badge="${id}" ${panel ? 'aria-haspopup="true"' : ""}>
       <span class="badge-label">${label}</span>${value ? `<span class="badge-value" data-badge-value="${id}">${value}</span>` : ""}${panel ? ICON.chevron : ""}
     </button>
-    ${panel ? `<div class="badge-panel ${wide ? "wide" : ""}" data-panel="${id}" hidden>${panel}</div>` : ""}
+    ${panel ? `<div class="badge-panel ${wide ? "wide" : ""} ${right ? "right" : ""}" data-panel="${id}" hidden>${panel}</div>` : ""}
   </div>`;
 }
 function switchHtml(name, options, current) {
@@ -923,7 +1788,8 @@ function bindBadges(root) {
 }
 // Compact option rows: label on the left, control on the right.
 // `na`: a reason when the option does not apply to the current choice (shown greyed out).
-const row = (label, control, na = "") => `<div class="opt-row ${na ? "na" : ""}" ${na ? `title="${esc(na)}"` : ""}><span class="opt-label">${label}</span><div class="opt-control">${control}</div></div>`;
+// An option the current style does not use: its control is greyed out and cannot be changed.
+const row = (label, control, na = false) => `<div class="opt-row ${na ? "na" : ""}"><span class="opt-label">${label}</span><div class="opt-control" ${na ? "inert" : ""}>${control}</div></div>`;
 const selectCtl = (name, options, current) => `<select name="${name}">${options.map(([v, l]) =>
   `<option value="${esc(v)}" ${String(v) === String(current) ? "selected" : ""}>${esc(l)}</option>`).join("")}</select>`;
 const segCtl = (name, options, current) => `<div class="seg">${options.map(([v, l]) =>
@@ -968,8 +1834,8 @@ const colorPicker = (name, current) => `<div class="swatch-row small">${COLOR_PR
     <label class="swatch custom" title="Any colour"><input type="color" name="${name}" value="${esc(current)}"></label></div>`;
 const RAMP_LABELS = { fire: "Fire", ice: "Ice", viridis: "Viridis", magma: "Magma" };
 // All options visible, one chosen (radio-like list); `extra(value)` adds e.g. a gradient bar.
-const pickList = (name, options, current, extra = () => "") => `<div class="pick-list" role="radiogroup">${options.map(([v, l]) =>
-  `<button type="button" role="radio" aria-checked="${String(v) === String(current)}" class="pick-item ${String(v) === String(current) ? "on" : ""}" data-pick="${name}" data-value="${esc(v)}"><span class="pick-dot"></span><span class="pick-label">${esc(l)}</span>${extra(v)}</button>`).join("")}</div>`;
+const pickList = (name, options, current, extra = () => "", icon = () => "") => `<div class="pick-list" role="radiogroup">${options.map(([v, l]) =>
+  `<button type="button" role="radio" aria-checked="${String(v) === String(current)}" class="pick-item ${String(v) === String(current) ? "on" : ""}" data-pick="${name}" data-value="${esc(v)}"><span class="pick-dot"></span>${icon(v)}<span class="pick-label">${esc(l)}</span>${extra(v)}</button>`).join("")}</div>`;
 // Gradients: full-width bars one under another, the chosen one framed (like the colour swatches).
 const rampPicker = (name, current) => `<div class="ramp-pick" role="radiogroup">${Object.entries(RAMPS).map(([k, cols]) =>
   `<button type="button" role="radio" aria-checked="${k === current}" aria-label="${esc(RAMP_LABELS[k] || k)}" title="${esc(RAMP_LABELS[k] || k)}" class="ramp-bar ${k === current ? "on" : ""}" data-pick="${name}" data-value="${k}" style="background:linear-gradient(90deg,${cols.join(",")})"></button>`).join("")}</div>`;
@@ -986,20 +1852,18 @@ async function renderHeatmap(params) {
   const isAll = CURRENT === "all";
   const q = {};
   if (!isAll) q.person = CURRENT;
-  if (params.type) q.type = params.type;
-  if (params.year) q.year = params.year;
+  Object.assign(q, filterQuery(params));
   document.body.classList.add("fullmap");
   const [data] = await Promise.all([api("heatmap/tracks?" + new URLSearchParams(q)), (async () => { BASEMAPS ??= await api("basemaps"); })()]);
   const tracks = data.items.map((t) => ({ ...t, coords: lonLat(t.polyline) }));
   heat = { settings: loadMapSettings(), tracks, years: data.years, tileCache: new Map(), params, isAll, map: null };
   const s = heat.settings;
-  const activeFilter = Boolean(params.type || params.year);
 
   view.innerHTML = `<div class="heat-wrap">
       <div id="map" class="heat-map"></div>
       <div class="heat-overlay"><div class="heat-column">
         <div class="float-bar">${pageHead("Map", `
-          ${badgeHtml("filter", "Filter", filterSummary(), { panel: filterPanel(), on: activeFilter })}
+          ${timeBadge(params)}${typeBadge(params)}
           ${badgeHtml("settings", "Options", "", { panel: "<div data-settings></div>" })}
           <button class="badge ${s.kpis ? "on" : ""}" data-kpis>Summary</button>`,
           switchHtml("layer", [["heatmap", `${ICON_HEAT}<span>Heatmap</span>`], ["tiles", `${ICON_GRID}<span>Explorer tiles</span>`]], s.layer))}</div>
@@ -1019,12 +1883,16 @@ async function renderHeatmap(params) {
     s.kpis = !s.kpis; saveMapSettings(s);
     e.currentTarget.classList.toggle("on", s.kpis);
     document.getElementById("heat-kpis").hidden = !s.kpis;
+    if (s.kpis) window.scrollTo({ top: 0, behavior: "smooth" });
   };
-  bindStagedFilter(head, "#/heatmap", heat.params);
-  head.querySelector("[data-clear-map]")?.addEventListener("click", () => { location.hash = "#/heatmap"; });
+  bindFilterBadges(head, "#/heatmap", params);
+  // Options always open on the first section.
+  head.querySelector("[data-badge=settings]")?.addEventListener("click", () => {
+    if (!head.querySelector('[data-panel="settings"]').hidden) { heat.openAcc = "map"; renderSettingsPanel(); }
+  });
 
   const bounds = boundsOf(tracks.map((t) => t.coords));
-  const map = await createMap("map", s.map, bounds ? { bounds, fitBoundsOptions: { padding: { top: 150, left: 40, right: 40, bottom: 40 }, maxZoom: 15 }, zoomOffset: -4 } : {});
+  const map = await createMap("map", s.map, bounds ? { bounds, fitBoundsOptions: { padding: { top: 150, left: 40, right: 40, bottom: 40 }, maxZoom: 15 }, zoomOffset: -4, focus: busiestArea(tracks) } : {});
   heat.map = map;
   drawHeatLayers();
   map.on("click", "routes", (e) => {
@@ -1041,17 +1909,6 @@ async function renderHeatmap(params) {
   });
 }
 
-function filterSummary() {
-  const pt = heat.params.type || "";
-  return [pt.startsWith("g:") ? groupLabel(pt.slice(2)) : pt ? typeLabel(pt) : "", heat.params.year || ""].filter(Boolean).join(" · ") || "All";
-}
-function filterPanel() {
-  return `<div class="panel-grid">${section("Activity type", typePicker("data-pfilter", "type", heat.params.type || ""))}
-    ${section("Year", `<div class="chips">${[["", "All"], ...heat.years.map((y) => [y, y])].map(([v, l]) =>
-      `<button class="chip ${v === (heat.params.year || "") ? "on" : ""}" data-pchip="year" data-value="${v}">${l}</button>`).join("")}</div>`)}</div>
-    <div class="panel-actions">${heat.params.type || heat.params.year ? `<button class="primary small" data-clear-map title="Remove all filters">Clear filters</button>` : ""}<button class="primary small" data-apply>Apply</button></div>`;
-}
-
 function renderSettingsPanel() {
   const s = heat.settings, M = s.map, H = s.heatmap, T = s.tiles;
   const lat = heat.map ? heat.map.getCenter().lat : 52;
@@ -1063,20 +1920,20 @@ function renderSettingsPanel() {
   const mapBody = row("Base map", pickList("map.source", [...(BASEMAPS || []).map((b) => [b.key, b.label]), ["none", "None"]], M.source))
     + row("Colours", pickList("map.tone", BASE_TONES.map(([k, l]) => [k, l]), M.tone));
   const heatBody = row("Style", pickList("heatmap.style", [["density", "Density — overlaps get stronger"], ["coverage", "Coverage — solid lines"], ["glow", "Heat glow — colour gradient"]], H.style))
-    + row("Line colour", colorPicker("heatmap.color", H.color), glow ? "Not used by Heat glow — it uses the gradient" : "")
+    + row("Line colour", colorPicker("heatmap.color", H.color), glow)
     + (heat.isAll ? row("People", checkCtl("heatmap.perPerson", H.perPerson, "A colour per person"), glow ? "Not used by Heat glow" : "") : "")
-    + row("Gradient", rampPicker("heatmap.ramp", H.ramp), glow ? "" : "Used only by Heat glow")
+    + row("Gradient", rampPicker("heatmap.ramp", H.ramp), !glow)
     + row("Line width", `<input type="range" min="1" max="6" step="0.5" value="${H.width}" name="heatmap.width">`)
     + row("Overlap", `<input type="range" min="0.1" max="0.9" step="0.05" value="${H.intensity}" name="heatmap.intensity">`);
   const tilesBody = row("Tile size", pickList("tiles.zoom", TILE_SIZES.map(([z, l]) => [z, `${l} · ${num(tileWidthKm(z, lat), z >= 16 ? 2 : 1)} km`]), T.zoom))
     + row("Style", pickList("tiles.style", [["coverage", "Coverage"], ["heat", "By number of visits"]], T.style))
-    + row("Tile colour", colorPicker("tiles.color", T.color), byVisits ? "Not used by “By number of visits” — it uses the gradient" : "")
-    + row("Gradient", rampPicker("tiles.ramp", T.ramp), byVisits ? "" : "Used only by “By number of visits”")
+    + row("Tile colour", colorPicker("tiles.color", T.color), byVisits)
+    + row("Gradient", rampPicker("tiles.ramp", T.ramp), !byVisits)
     + row("Display", pickList("tiles.display", [["grid", "Single tiles"], ["area", "One area"]], T.display))
     + row("Highlights", `<div class="checks">${checkCtl("tiles.square", T.square, "Max square", "Largest square made only of visited tiles")}
         ${checkCtl("tiles.cluster", T.cluster, "Cluster", "Largest connected group of tiles with visited tiles on all four sides")}
         ${checkCtl("tiles.routes", T.routes, "Routes")}</div>`);
-  heat.openAcc ??= s.layer;
+  heat.openAcc ??= "map";
   const el = view.querySelector("[data-settings]");
   el.innerHTML = accordion([
     ["map", "Map", `${srcLabel} · ${toneLabel}`, mapBody],
@@ -1279,13 +2136,13 @@ function drawHeatLayers() {
   renderHeatKpis();
 }
 
-async function showRouteMap(container, polyline) {
+async function showRouteMap(container, polyline, { offset = false } = {}) {
   const coords = lonLat(polyline);
-  const map = await createMap(container, loadMapSettings().map, { bounds: boundsOf([coords]) });
+  const map = await createMap(container, loadMapSettings().map, { bounds: boundsOf([coords]), reset: true });
   const accent = getComputedStyle(document.documentElement).getPropertyValue("--accent").trim();
   map.addSource("route", { type: "geojson", data: { type: "Feature", properties: {}, geometry: { type: "LineString", coordinates: coords } } });
   map.addLayer({ id: "route", type: "line", source: "route", layout: { "line-join": "round", "line-cap": "round" },
-                 paint: { "line-color": accent, "line-width": 3.5 } });
+                 paint: { "line-color": accent, "line-width": 3.5, "line-offset": (ROUTE_OFFSET_PX = offset ? 2.2 : 0) } });
   map.addSource("ends", { type: "geojson", data: { type: "FeatureCollection", features: [
     { type: "Feature", properties: { c: "#3ecf8e" }, geometry: { type: "Point", coordinates: coords[0] } },
     { type: "Feature", properties: { c: "#ff6b6b" }, geometry: { type: "Point", coordinates: coords[coords.length - 1] } }] } });
@@ -1312,14 +2169,14 @@ function renderPlanned(key) {
 // ---- Compare (everyone) -------------------------------------------------------------
 
 async function renderCompare(params) {
-  const data = await api("compare?" + new URLSearchParams(params.year ? { year: params.year } : {}));
+  const data = await api("compare?" + new URLSearchParams(filterQuery(params)));
   const people = data.people;
   const max = (k) => Math.max(1, ...people.map((p) => p[k] || 0));
   const bar = (p, k, i, fmt) => `<div class="bar-row"><span class="bar-label">${avatar(p, 18)} ${esc(p.label)}</span>
       <span class="bar"><span style="width:${((p[k] || 0) / max(k)) * 100}%;background:${personColor(p, i)}"></span></span>
       <span class="bar-value">${fmt(p[k])}</span></div>`;
   view.innerHTML = `
-    ${pageHead("Compare", badgeHtml("year", "Period", params.year || "All time", { panel: section("Year", `<select id="year"><option value="">All time</option>${data.years.map((y) => `<option ${y === params.year ? "selected" : ""}>${y}</option>`).join("")}</select>`) }))}
+    ${pageHead("Compare", timeBadge(params) + typeBadge(params))}
     ${hint("Everyone side by side, in the order set in Settings › People.")}<br>
     <div class="cards">
       ${[["Activities", "activities", (v) => num(v || 0)], ["Distance", "distance_m", km], ["Moving time", "moving_s", hours], ["Ascent", "ascent_m", meters]]
@@ -1333,29 +2190,25 @@ async function renderCompare(params) {
         <td class="num">${g.distance_m ? km(g.distance_m) : "–"}</td><td class="num">${hours(g.moving_s)}</td></tr>`).join("")
         || `<tr><td colspan="4" class="hint">No activities</td></tr>`}</tbody></table></div>`).join("")}</div>`;
   bindBadges(view.querySelector(".page-head"));
-  document.getElementById("year").onchange = (e) => {
-    location.hash = "#/compare" + (e.target.value ? "?year=" + e.target.value : "");
-  };
+  bindFilterBadges(view.querySelector(".page-head"), "#/compare", params);
 }
 
-// ---- Settings: General / People / Import / Types ------------------------------------
+// ---- Settings: General / People / Import / Backup -----------------------------------
 
 const SETTINGS_TABS = [
   ["general", "General", svg(`<path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/>`)],
   ["people", "People", svg(`<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.8-3.6 3.4-5.5 6.5-5.5s5.7 1.9 6.5 5.5"/><path d="M16 4.5a3.5 3.5 0 0 1 0 7M18 14.8c2 .7 3.2 2.5 3.6 5.2"/>`)],
   ["import", "Imported", svg(`<path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 17v3h16v-3"/>`)],
-  ["types", "Activity types", svg(`<path d="M3 12V4h8l9 9-8 8z"/><circle cx="7.5" cy="8.5" r="1.5"/>`)],
   ["backup", "Backup", svg(`<path d="M4 7h16v13H4z"/><path d="M2 4h20v3H2z"/><path d="M10 11h4"/>`)],
 ];
 
 async function renderSettings(tab, params) {
   tab = SETTINGS_TABS.some(([k]) => k === tab) ? tab : "general";
-  view.innerHTML = `${pageHead("Settings", "", switchHtml("tab", SETTINGS_TABS.map(([k, l, icon]) => [k, `${icon}<span>${l}</span>`]), tab))}<div id="tab"></div>`;
+  view.innerHTML = `${pageHead("Settings", "", switchHtml("tab", SETTINGS_TABS.map(([k, l, icon]) => [k, `${icon}<span>${l}</span>`]), tab))}<div id="tab" class="settings-body"></div>`;
   view.querySelectorAll("[data-switch=tab]").forEach((b) => b.onclick = () => { location.hash = "#/settings/" + b.dataset.value; });
   const el = document.getElementById("tab");
   if (tab === "people") await settingsPeople(el);
   else if (tab === "import") await settingsImport(el, params);
-  else if (tab === "types") settingsTypes(el, params);
   else if (tab === "backup") await settingsBackup(el);
   else await settingsGeneral(el);
 }
@@ -1365,6 +2218,9 @@ async function settingsGeneral(el) {
   PERSONS = await api("persons");
   const people = realPeople();
   const accounts = garminState.accounts || {};
+  const est = garminState.estimate || {};
+  // Upper bound for a download time, rounded up: "12 h", "3 days".
+  const upTo = (sec) => (sec < 36 * 3600 ? `${Math.ceil(sec / 3600 + 0.5)} h` : `${Math.ceil(sec / 86400)} days`);
   const accent = store.get("accent") || "sky";
   const interval = (m) => (m === 0 ? "Off" : m < 60 ? `${m} min` : m === 60 ? "1 hour" : `${m / 60} hours`);
   const source = s.data_source || "folder";
@@ -1373,8 +2229,7 @@ async function settingsGeneral(el) {
       <span><b>${title}${extra}</b><span class="hint">${text}</span></span></label>`;
 
   const watchesHtml = `<div class="watches" ${s.person_mode === "devices" ? "" : "hidden"}>
-      <div class="panel-title" style="margin-top:14px">Watches</div>
-      <div class="note"><b>A watch's person applies to files imported from now on.</b> Activities that already have a person stay where they are; only activities still <i>Unassigned</i> move to the person you choose.</div>
+      <div class="panel-title" style="margin-top:14px">Watches <span class="title-note">(new files only)</span></div>
       <div class="scroll"><table class="data"><thead><tr><th>Watch</th><th>Serial</th><th>Person</th><th class="num">Activities</th><th>Last seen</th></tr></thead>
       <tbody>${devices.map((d) => `<tr><td>${esc(d.product_name || "–")}</td><td><code>${d.serial}</code></td>
         <td><select data-serial="${d.serial}"><option value="">Unassigned</option>${people.map((p) =>
@@ -1386,43 +2241,32 @@ async function settingsGeneral(el) {
 
   const folderCards = `
     <div class="card">
-      <h3>Watched folder</h3>
-      ${hint(`Absolute path to the folder with FIT files.${s.allowed_roots ? ` It must be inside: ${esc(s.allowed_roots)}.` : ""}`)}
+      <h3>Watched folder <span class="title-note">(absolute path${s.allowed_roots ? `, inside ${esc(s.allowed_roots)}` : ""})</span></h3>
       <input class="field-input" name="root" value="${esc(s.root || "")}" placeholder="/share/trailbook">
-      ${hint("Changing the folder marks files of the old folder as missing; their activities stay.")}
       <div class="card-row" style="margin-top:12px"><button class="primary" data-save="root">Save</button><span data-msg></span></div>
     </div>
     <div class="card">
-      <h3>Assigning files to people</h3>
-      ${choice("person_mode", "folders", s.person_mode, "One subfolder per person", "folder/alice/…, folder/bob/… — the folder decides. Works when two people share a watch.")}
-      ${choice("person_mode", "devices", s.person_mode, "One shared folder, assign by watch", "Any folder layout. Choose below which person each watch belongs to.")}
-      <div class="note">
-        <b>Applies only to files imported from now on.</b> Activities that are already imported keep their person.
-        Nothing is imported twice: every activity is recognised by its FIT id (watch serial number + creation time),
-        so changing this setting never re-imports or duplicates anything.
-      </div>
-      <div class="card-row" style="margin-top:12px"><button class="primary" data-save="person_mode">Save</button><span data-msg></span></div>
+      <h3>Assigning files to people <span class="title-note">(new files only)</span></h3>
+      ${choice("person_mode", "folders", s.person_mode, "One subfolder per person", "folder/alice/… — the folder decides.")}
+      ${choice("person_mode", "devices", s.person_mode, "One shared folder", "The watch decides.")}
+      <span data-msg></span>
       ${watchesHtml}
     </div>
     <div class="card">
       <h3>Automatic folder scan</h3>
-      ${hint("A scan only compares file sizes and dates; new files are then imported at the lowest priority.")}
       <select class="field-input" name="scan_interval_min" style="max-width:200px">${s.scan_interval_choices.map((m) =>
         `<option value="${m}" ${m === s.scan_interval_min ? "selected" : ""}>${interval(m)}</option>`).join("")}</select>
-      <div>${s.next_scan_at ? state(`Next scan at ${browserTime(s.next_scan_at)}`) : state("No automatic scan scheduled", "warn")}</div>
-      <div class="card-row" style="margin-top:12px"><button class="primary" data-save="scan_interval_min">Save</button><span data-msg></span></div>
+      <div>${s.next_scan_at ? state(`Next scan at ${browserTime(s.next_scan_at)}`) : state("Off", "warn")} <span data-msg></span></div>
     </div>`;
 
   const uploadCard = `
     <div class="card">
-      <h3>Upload a Garmin export or FIT file</h3>
-      ${hint("A one-time import for one person: the ZIP from Garmin's “Export your data”, a ZIP of FIT files, or a single .fit file. Sleep and monitoring files inside are skipped.")}
+      <h3>Upload <span class="title-note">(Garmin export ZIP, ZIP of FIT files or a single .fit)</span></h3>
       <div class="upload-row">
         <select name="upload-person"><option value="">Choose a person…</option>${people.map((p) => `<option value="${esc(p.id)}">${esc(p.label)}</option>`).join("")}</select>
-        <input type="file" name="upload-file" accept=".zip,.fit">
+        ${filePicker("upload-file", ".zip,.fit")}
         <button class="primary" data-upload>Upload and import</button>
       </div>
-      <div class="note"><b>Nothing is imported twice.</b> Activities already in Trailbook (same FIT id) are recognised and skipped, so uploading an export again is safe.</div>
       <div data-upload-msg style="margin-top:8px"></div>
     </div>`;
 
@@ -1434,7 +2278,7 @@ async function settingsGeneral(el) {
       <div class="garmin-head">
         <span class="garmin-who">${avatar(p, 20)} <b>${esc(p.label)}</b></span>
         ${state(st[0], st[1])}
-        ${a ? `<span class="hint">key ${esc(a.key_hint || "")} · ${num(a.downloaded)} activities downloaded${a.failed ? ` · ${num(a.failed)} failed` : ""}${a.last_sync_at ? ` · last download ${browserTime(a.last_sync_at)}` : ""}${a.downloaded && !a.backfill_done ? " · history still downloading" : ""}</span>` : ""}
+        ${a ? `<span class="hint">${num(a.downloaded)} downloaded${a.failed ? ` · ${num(a.failed)} failed` : ""}${!a.backfill_done && est.persons?.[p.id] ? ` · ≈ ${num(est.persons[p.id].remaining)} left` : ""}</span>` : ""}
       </div>
       ${a && a.last_error ? `<div class="hint garmin-err">${esc(a.last_error)}</div>` : ""}
       <div class="garmin-form">
@@ -1454,32 +2298,28 @@ async function settingsGeneral(el) {
   const garminCard = `
     <div class="card">
       <h3>Garmin Connect</h3>
-      ${hint("Each person connects their own Garmin account with a personal API key. Activities are downloaded as original FIT files in the background, slowly, at the lowest priority.")}
       <ol class="plain steps">
-        <li>Sign in to <b>Garmin Connect on the web</b> and open the <b>Personal API key</b> page (account settings).</li>
-        <li><b>Create Key</b>, accept the terms and choose how long it stays valid (30 days – 1 year).</li>
-        <li>Copy the key — Garmin shows it only once — and paste it below for that person.</li>
+        <li>Garmin Connect (web) › Account settings › <b>Personal API key</b>.</li>
+        <li><b>Create Key</b> and copy it (shown only once).</li>
+        <li>Paste it below.</li>
+        <li>Click <b>Connect</b>${est.typical?.seconds ? ` — it may take up to ${upTo(est.typical.seconds)} to download` : ""}.</li>
       </ol>
       <div class="garmin-people">${people.map(garminRow).join("") || hint("Add people first (Settings › People).")}</div>
-      <div class="note"><b>Nothing is downloaded or imported twice.</b> Downloaded activities are remembered, and each activity is recognised by its FIT id, so activities you already imported from a folder or a ZIP are skipped. To save time, set <i>Download from</i> to the day after your last imported activity.</div>
-      <div class="note">The key is stored only in Trailbook's database on this Home Assistant and is never shown again. Keys expire — Garmin e-mails a reminder a week before; then paste the new key here. Sleep, HRV, stress and other health data will follow with the Wellbeing tab.</div>
     </div>
-    <div class="card">
+    ${connected ? `<div class="card">
       <h3>Automatic download</h3>
-      ${hint("New activities are checked for every connected person. The first run downloads the newest activities; older ones follow in the next runs (up to 60 activities per run, one request every 3 seconds). If Garmin refuses requests, downloading pauses until the next run.")}
       <select class="field-input" name="scan_interval_min" style="max-width:200px">${s.scan_interval_choices.map((m) =>
         `<option value="${m}" ${m === s.scan_interval_min ? "selected" : ""}>${interval(m)}</option>`).join("")}</select>
-      <div>${s.next_scan_at ? state(`Next download at ${browserTime(s.next_scan_at)}`) : state(connected ? "No automatic download scheduled" : "Connect a person first", "warn")}</div>
+      <div>${s.next_scan_at ? state(`Next download at ${browserTime(s.next_scan_at)}${est.remaining && est.seconds ? ` · history: up to ${upTo(est.seconds)} left` : ""}`) : state("Off", "warn")}</div>
       <div class="card-row" style="margin-top:12px">
-        <button class="primary" data-save="scan_interval_min">Save</button>
-        <button data-gsync ${connected ? "" : "disabled"}>Download now</button>
+        <button data-gsync>Download now</button>
         <span data-msg></span>
       </div>
-    </div>`;
+    </div>` : ""}`;
 
   el.innerHTML = `
     <div class="card appearance">
-      <h3>Appearance</h3>
+      <h3>Appearance <span class="title-note">(saved per browser)</span></h3>
       <div class="appearance-grid">
         <div>
           <div class="panel-title">Theme</div>
@@ -1491,19 +2331,23 @@ async function settingsGeneral(el) {
             `<button class="accent-pick ${k === accent ? "on" : ""}" data-accent="${k}" title="${l}" aria-label="${l}"><span style="background:${document.documentElement.dataset.theme === "dark" ? dark : light}"></span><small>${l}</small></button>`).join("")}</div>
         </div>
       </div>
-      ${hint("Saved in this browser.")}
     </div>
     <div class="card">
       <h3>Data connection</h3>
-      ${hint("Where new activities come from.")}
       <div class="source-grid">
-        ${choice("data_source", "garmin", source, "Garmin Connect", "Download automatically for every person with their personal API key. Recommended: the most complete data — the original FIT files plus what only Garmin Connect has (names and edits, weather, training status, Body Battery, sleep score and more).")}
-        ${choice("data_source", "upload", source, "Upload a ZIP", "One-time import of a Garmin export or FIT files for a chosen person.")}
-        ${choice("data_source", "folder", source, "Watch a folder", "Import FIT files that appear in a folder, e.g. saved by a Home Assistant automation.")}
+        ${choice("data_source", "garmin", source, "Garmin Connect", "Recommended — the most complete data.")}
+        ${choice("data_source", "upload", source, "Upload a ZIP", "One-time import of an export or FIT files.")}
+        ${choice("data_source", "folder", source, "Watch a folder", "FIT files saved to a folder, e.g. by Home Assistant.")}
       </div>
       <span data-source-msg></span>
     </div>
-    ${source === "folder" ? folderCards : source === "upload" ? uploadCard : garminCard}`;
+    ${source === "folder" ? folderCards : source === "upload" ? uploadCard : garminCard}
+    <div class="card">
+      <h3>Road surface <span class="title-note">(from OpenStreetMap: the route's area is sent to a public map server)</span></h3>
+      ${choice("surface_mode", "open", s.surface_mode, "When an activity is opened", "The first visit can take a few minutes.")}
+      ${choice("surface_mode", "background", s.surface_mode, "All activities, slowly in the background", "Newest first, one at a time with a pause; opened activities are then ready.")}
+      <div>${state(`${num(s.surface_progress.done)} of ${num(s.surface_progress.total)} activities with a route done`)} <span data-msg></span></div>
+    </div>`;
 
   const reload = () => settingsGeneral(el);
   el.querySelectorAll("[data-accent]").forEach((b) => b.onclick = () => {
@@ -1523,9 +2367,22 @@ async function settingsGeneral(el) {
     catch (e) { el.querySelector("[data-source-msg]").innerHTML = state(esc(e.message), "bad"); }
   });
   // Watches are shown as soon as "assign by watch" is chosen.
+  const autosave = async (key, value, out) => {
+    try {
+      await api("settings", { method: "PUT", body: JSON.stringify({ [key]: value }) });
+      out.innerHTML = state("Saved", "ok");
+    } catch (e) { out.innerHTML = state(esc(e.message), "bad"); }
+  };
+  el.querySelectorAll("input[name=surface_mode]").forEach((r) => r.onchange = () =>
+    autosave("surface_mode", r.value, r.closest(".card").querySelector("[data-msg]")));
   el.querySelectorAll("input[name=person_mode]").forEach((r) => r.onchange = () => {
     const w = el.querySelector(".watches");
     if (w) w.hidden = r.value !== "devices";
+    autosave("person_mode", r.value, r.closest(".card").querySelector("[data-msg]"));
+  });
+  el.querySelectorAll("select[name=scan_interval_min]").forEach((sel) => sel.onchange = async () => {
+    await autosave("scan_interval_min", Number(sel.value), sel.closest(".card").querySelector("[data-msg]"));
+    reload();
   });
   el.querySelectorAll("select[data-serial]").forEach((sel) => sel.onchange = async () => {
     const out = el.querySelector("[data-watch-msg]");
@@ -1536,8 +2393,7 @@ async function settingsGeneral(el) {
   });
   el.querySelectorAll("[data-save]").forEach((btn) => btn.onclick = async () => {
     const key = btn.dataset.save, card = btn.closest(".card"), out = card.querySelector("[data-msg]");
-    const field = key === "person_mode" ? card.querySelector("input[name=person_mode]:checked") : card.querySelector(`[name=${key}]`);
-    const value = key === "scan_interval_min" ? Number(field.value) : field.value;
+    const value = card.querySelector(`[name=${key}]`).value;
     try {
       await api("settings", { method: "PUT", body: JSON.stringify({ [key]: value }) });
       out.innerHTML = state("Saved", "ok");
@@ -1608,11 +2464,8 @@ async function settingsPeople(el) {
   const unassigned = person("_unassigned");
   el.innerHTML = `
     <div class="card">
-      <h3>People</h3>
-      ${hint(byFolder
-        ? "Each subfolder of the watched folder is one person; the folder name is the id. Drag rows to set the order used everywhere (person picker, compare, statistics). The first person is selected by default."
-        : "Drag rows to set the order used everywhere. The first person is selected by default. Watches are linked to people in Settings › General.")}
-      <div class="scroll"><table class="data people"><thead><tr><th></th><th>Icon</th><th>Color</th><th>Label</th><th>Id</th><th class="num">Activities</th></tr></thead>
+      <h3>People <span class="title-note">(drag rows to reorder)</span></h3>
+      <div class="scroll"><table class="data people"><thead><tr><th></th><th>Icon</th><th>Color</th><th>Label</th><th>Id</th><th class="num">Activities</th><th>Training thresholds</th><th></th></tr></thead>
       <tbody id="people-rows">${people.map((p, i) => `<tr draggable="true" data-row="${esc(p.id)}">
         <td class="grip" title="Drag to reorder">${ICON.grip}</td>
         <td><select data-icon="${esc(p.id)}" class="icon-select">${PERSON_ICONS.map((ic) =>
@@ -1621,17 +2474,17 @@ async function settingsPeople(el) {
           `<button class="swatch ${c === personColor(p, i) ? "active" : ""}" style="background:${c}" data-color="${c}" data-pid="${esc(p.id)}" aria-label="Color ${c}"></button>`).join("")}</span></td>
         <td><input data-label="${esc(p.id)}" value="${esc(p.label)}"></td>
         <td><code>${esc(p.id)}</code></td>
-        <td class="num">${num(p.activities)}</td></tr>`).join("") || `<tr><td colspan="6" class="hint">No people yet.</td></tr>`}
-      ${unassigned && unassigned.activities ? `<tr><td></td><td></td><td></td><td>${state("Unassigned", "warn")}</td><td><code>—</code></td><td class="num">${num(unassigned.activities)}</td></tr>` : ""}
+        <td class="num">${num(p.activities)}</td>
+        <td class="th-cell" data-th-sum="${esc(p.id)}"><span class="hint">…</span></td>
+        <td class="actions"><button class="icon" data-th-edit="${esc(p.id)}" title="Edit training thresholds" aria-label="Edit training thresholds">${ICON_PENCIL}</button></td></tr>
+        <tr class="th-row" data-th-row="${esc(p.id)}" hidden><td colspan="8"><div data-th-box></div></td></tr>`).join("") || `<tr><td colspan="8" class="hint">No people yet.</td></tr>`}
+      ${unassigned && unassigned.activities ? `<tr><td></td><td></td><td></td><td>${state("Unassigned", "warn")}</td><td><code>—</code></td><td class="num">${num(unassigned.activities)}</td><td></td><td></td></tr>` : ""}
       </tbody></table></div>
-      <div class="card-row" style="margin-top:12px"><input id="new-label" placeholder="New person's name"><button id="add" class="primary">Add person</button></div>
+      <div class="card-row add-row"><input id="new-label" placeholder="New person's name"><button id="add" class="primary">Add person</button></div>
       <div class="card-row" style="margin-top:8px"><span id="people-msg"></span></div>
     </div>
     <div class="card" hidden>
-      <h3>Watches</h3>
-      ${hint("FIT files contain no Garmin account id, but every file carries the serial number of the watch that recorded it.")}
-      <div class="note"><b>Linking a watch applies to files imported from now on.</b> Activities that already have a person stay where they are; only activities still <i>Unassigned</i> move to the linked person.
-        ${byFolder ? "In “one subfolder per person” mode the folder decides; a watch only matters for files lying directly in the watched folder." : ""}</div>
+      <h3>Watches <span class="title-note">(new files only)</span></h3>
       <div class="scroll"><table class="data"><thead><tr><th>Serial</th><th>Model</th><th>Person</th>
         <th>Found in folders</th><th class="num">Activities</th><th class="num">Files</th><th>Last seen</th></tr></thead>
       <tbody>${devices.map((d) => `<tr><td><code>${d.serial}</code></td><td>${esc(d.product_name || "–")}</td>
@@ -1670,6 +2523,7 @@ async function settingsPeople(el) {
     };
     row.ondrop = async (e) => {
       e.preventDefault();
+      tbody.querySelectorAll("tr[data-row]").forEach((r) => { const d = tbody.querySelector(`[data-th-row="${r.dataset.row}"]`); if (d) r.after(d); });
       const ids = [...tbody.querySelectorAll("tr[data-row]")].map((r) => r.dataset.row);
       try {
         await api("persons/order", { method: "PUT", body: JSON.stringify({ ids }) });
@@ -1694,8 +2548,22 @@ async function settingsPeople(el) {
       msg("Person added");
     } catch (e) { msg(e.message, "bad"); }
   };
-  el.insertAdjacentHTML("beforeend", `<div data-thresholds></div>`);
-  await renderThresholds(el.querySelector("[data-thresholds]"));
+  // Training thresholds: values in use per person, the pencil opens the editor below the row.
+  const loadSummary = async (pid) => {
+    const cell = el.querySelector(`[data-th-sum="${pid}"]`);
+    if (!cell) return;
+    try { cell.innerHTML = thresholdSummary(await api("thresholds/" + encodeURIComponent(pid))); }
+    catch { cell.innerHTML = `<span class="hint">–</span>`; }
+  };
+  await Promise.all(people.map((p) => loadSummary(p.id)));
+  el.querySelectorAll("[data-th-edit]").forEach((b) => b.onclick = async () => {
+    const pid = b.dataset.thEdit;
+    const row = el.querySelector(`[data-th-row="${pid}"]`);
+    const open = row.hidden;
+    row.hidden = !open;
+    b.classList.toggle("active", open);
+    if (open) await renderThresholds(row.querySelector("[data-th-box]"), pid, () => loadSummary(pid));
+  });
 }
 
 const FILE_PAGE = 100;
@@ -1704,13 +2572,15 @@ const STATUS_KIND = { error: "bad", missing: "warn", imported: "ok", skipped: "m
 
 function fileContent(f) {
   if (f.activity_id && f.status !== "duplicate") {
-    return `<a class="tb-activity-name" href="#/activity/${f.activity_id}">${typeIcon(f.activity_type)}<span>${esc(f.name || typeLabel(f.activity_type))}</span></a>
-      <span class="hint">${esc(typeLabel(f.activity_type))}</span>`;
+    return `<a class="tb-activity-name" href="#/activity/${f.activity_id}">${typeIcon(f.activity_type)}<span>${esc(f.name || typeLabel(f.activity_type))}</span></a>${f.name ? `
+      <span class="hint">${esc(typeLabel(f.activity_type))}</span>` : ""}`;
   }
   if (f.status === "duplicate" && f.activity_id) {
     return `duplicate of <a href="#/activity/${f.activity_id}">activity ${f.activity_id}</a>`;
   }
-  return `${esc(f.skip_reason || f.fit_type || "")}${f.error ? " " + state(esc(f.error), "bad") : ""}`;
+  const text = esc(f.skip_reason || f.fit_type || "");
+  const icon = metricIcon(FIT_TYPE_ICON[f.fit_type] || "other");
+  return `${text ? `<span class="tb-metric-name">${icon}<span>${text}</span></span>` : ""}${f.error ? " " + state(esc(f.error), "bad") : ""}`;
 }
 
 function fileActions(f) {
@@ -1723,33 +2593,36 @@ function fileActions(f) {
   ].join(" ");
 }
 
+// Settings › Imported: the current data connection, the last run and — only when running it
+// can change something — one button.
 function scanCard(st) {
   const p = st.progress;
   const src = st.data_source || "folder";
+  const sourceName = { folder: "Watch a folder", garmin: "Garmin Connect", upload: "Upload a ZIP" }[src];
+  const sourceText = src === "folder" ? `${sourceName} · <code>${esc(st.root || "no folder set")}</code>` : sourceName;
+  const every = (m) => (m < 60 ? `${m} min` : m === 60 ? "1 hour" : `${m / 60} hours`);
+  const auto = src === "upload" ? ""
+    : st.scan_interval_min && st.next_scan_at ? `every ${every(st.scan_interval_min)} · next ${browserTime(st.next_scan_at)}` : "off";
+  const counts = (r) => [["imported", r.imported], ["skipped", r.skipped], ["duplicates", r.duplicates], ["errors", r.errors], ["missing", r.missing]]
+    .filter(([, n]) => n).map(([k, n]) => `${num(n)} ${k}`).join(", ") || "nothing new";
   const last = st.running || p.state === "running"
-    ? (p.phase === "garmin"
-      ? state(`Downloading from Garmin: ${num(p.done ?? 0)} activities${p.current ? ` · ${esc(p.current)}` : ""}`, "warn")
-      : state(`Running: ${esc(p.phase || "")} ${num(p.done ?? 0)} / ${p.total != null ? num(p.total) : "?"} files`, "warn"))
-    : p.state === "failed" ? state(`Last run failed: ${esc(p.error)}`, "bad")
-    : p.state === "finished" ? state(`Last run ${browserTime(p.finished_at)} — ${num(p.scanned)} files checked, ${num(p.imported)} imported, ${num(p.skipped)} skipped, ${num(p.duplicates)} duplicates, ${num(p.errors)} errors, ${num(p.missing)} missing`)
-    : state("No scan yet");
-  const next = src === "upload" ? ""
-    : st.scan_interval_min && st.next_scan_at
-      ? state(`Automatic ${src === "garmin" ? "download" : "scan"} every ${st.scan_interval_min} min · next at ${browserTime(st.next_scan_at)}`)
-      : state(`Automatic ${src === "garmin" ? "download" : "scan"} is off`, "warn");
-  const title = { folder: "Folder scan", garmin: "Garmin Connect download", upload: "Uploads" }[src];
-  const where = src === "folder" ? `<code>${esc(st.root || "No folder configured")}</code>`
-    : src === "garmin" ? `<span class="hint">Activities of every connected person</span>` : `<span class="hint">ZIP and FIT files uploaded in Settings › General</span>`;
-  const label = { folder: "Scan folder now", garmin: "Download now", upload: "Process queued uploads" }[src];
+    ? state(p.phase === "garmin"
+      ? `Downloading from Garmin: ${num(p.done ?? 0)} activities`
+      : `Running: ${esc(p.phase || "")} ${num(p.done ?? 0)} / ${p.total != null ? num(p.total) : "?"}`, "warn")
+    : p.state === "failed" ? state(`Failed ${browserTime(p.finished_at)}: ${esc(p.error)}`, "bad")
+    : p.state === "finished" ? `${browserTime(p.finished_at)} — ${counts(p)}`
+    : "never";
+  const queued = st.files?.new || 0;
+  const useful = !st.running && (src === "folder" ? !!st.root : src === "garmin" ? st.garmin_connected > 0 || queued : queued > 0);
+  const label = { folder: "Scan now", garmin: "Download now", upload: `Import ${num(queued)} queued file${queued === 1 ? "" : "s"}` }[src];
   return `<div class="card">
-    <h3>${title}</h3>
-    <div class="card-row">${where}<a href="#/settings/general">Change</a></div>
-    <div class="card-row">${last}</div>
-    <div class="card-row">
-      <button id="scan" class="primary" ${st.running || (src === "folder" && !st.root) ? "disabled" : ""}>${label}</button>
-      ${next}
-      ${st.missing_to_review ? state(`${num(st.missing_to_review)} missing file(s) to review`, "warn") : ""}
-    </div>
+    <dl class="kv">
+      <dt>Current setting</dt><dd>${sourceText} <a href="#/settings/general">Change</a></dd>
+      ${auto ? `<dt>Automatic</dt><dd>${auto}</dd>` : ""}
+      <dt>Last run</dt><dd>${last}</dd>
+      ${st.missing_to_review ? `<dt>To review</dt><dd>${state(`${num(st.missing_to_review)} missing file(s)`, "warn")}</dd>` : ""}
+    </dl>
+    ${useful ? `<div class="card-row" style="margin-top:12px"><button id="scan" class="primary">${label}</button></div>` : ""}
   </div>`;
 }
 
@@ -1767,7 +2640,7 @@ async function settingsImport(el, params) {
     { key: "file", label: "File", sort: true, wrap: true, filter: { type: "text" },
       render: (f) => esc(f.rel_path) + (f.zip_member ? " › " + esc(f.zip_member) : "") },
     { key: "person", label: "Person", sort: true, filter: { type: "select", options: personOptions() },
-      render: (f) => esc(personLabel(f.person_id)) },
+      render: (f) => f.person_id ? `${avatar(person(f.person_id), 18)} ${esc(personLabel(f.person_id))}` : "" },
     { key: "content", label: "Activity / content", sort: true, wrap: true, filter: { type: "text", placeholder: "walk, sleep…" },
       render: (f) => fileContent(f) + (f.status === "missing"
         ? ` <span class="hint">missing since ${browserTime(f.missing_since)}${f.dismissed ? ", reviewed" : ""}</span>` : "") },
@@ -1786,7 +2659,8 @@ async function settingsImport(el, params) {
   });
   const reload = () => settingsImport(el, params);
   const bindScan = () => {
-    el.querySelector("#scan").onclick = async () => {
+    const btn = el.querySelector("#scan");
+    if (btn) btn.onclick = async () => {
       await api("import/scan", { method: "POST" }).catch((e) => alert(e.message));
       pollScan();
     };
@@ -1818,36 +2692,6 @@ async function settingsImport(el, params) {
   };
 }
 
-function settingsTypes(el, params) {
-  const group = params.group || "", text = (params.q || "").toLowerCase();
-  const rows = TYPES.types.filter((t) => (!group || t.group === group) &&
-    (!text || [t.key, t.en, t.pl, ...t.fit].join(" ").toLowerCase().includes(text)));
-  el.innerHTML = `<div class="card">
-    <h3>Activity types</h3>
-    ${hint("Every activity gets a <b>type</b> (detailed, for analysis) inside a <b>group</b> (broad, for totals). The type is chosen from the sport and sub-sport written by the watch into the FIT file — the last column shows which combinations lead to each type (* = any). You can change the type of a single activity on its page.")}
-    ${hint("Editing names and the mapping itself is planned; for now the list is read-only.")}
-    <div class="tile-filters" style="margin-top:12px">
-      <select id="tgroup"><option value="">All groups</option>${TYPES.groups.map((g) => `<option value="${g.key}" ${g.key === group ? "selected" : ""}>${esc(g.en)}</option>`).join("")}</select>
-      <input id="tq" placeholder="Search type or FIT sport…" value="${esc(params.q || "")}">
-    </div>
-    <div class="scroll"><table class="data">
-      <thead><tr><th>Group</th><th>Type</th><th>Polish name</th><th>Indoor</th><th>FIT sport / sub-sport</th><th class="num">Your activities</th></tr></thead>
-      <tbody>${rows.map((t) => `<tr>
-        <td>${esc(groupLabel(t.group))}</td><td><span class="tb-activity-name">${typeIcon(t.key)}<b>${esc(t.en)}</b></span> <code class="hint">${t.key}</code></td>
-        <td>${esc(t.pl)}</td><td>${t.indoor ? state("indoor", "muted") : ""}</td>
-        <td class="wrap"><span class="hint">${t.fit.map(esc).join(" · ") || "–"}</span></td>
-        <td class="num">${t.activities ? num(t.activities) : `<span class="hint">0</span>`}</td></tr>`).join("")
-        || `<tr><td colspan="6" class="hint">Nothing matches.</td></tr>`}</tbody></table></div></div>`;
-  const go = (changes) => {
-    const p = Object.fromEntries(Object.entries({ group, q: params.q || "", ...changes }).filter(([, v]) => v));
-    location.hash = "#/settings/types?" + new URLSearchParams(p);
-  };
-  el.querySelector("#tgroup").onchange = (e) => go({ group: e.target.value });
-  const tq = el.querySelector("#tq");
-  tq.onkeydown = (e) => { if (e.key === "Enter") go({ q: tq.value.trim() }); };
-  tq.onblur = () => { if (tq.value.trim() !== (params.q || "")) go({ q: tq.value.trim() }); };
-}
-
 // ---- Router ------------------------------------------------------------------------
 
 // The page header frame sticks right below the top bar, whose height changes when it wraps.
@@ -1869,10 +2713,16 @@ async function route() {
     PERSONS = await api("persons");
     if (CURRENT === null || (CURRENT !== "all" && !person(CURRENT))) CURRENT = pickDefaultPerson();
     let section = parts[0] === "activity" ? "activities" : parts[0] === "segment" ? "segments" : parts[0] || "activities";
+    if (section !== LAST_SECTION) { for (const k of Object.keys(TAB)) delete TAB[k]; LAST_SECTION = section; }
+    if (UI.person !== CURRENT) {
+      UI.data = await api("ui-settings?" + new URLSearchParams({ person: CURRENT || "all" })).catch(() => ({}));
+      UI.person = CURRENT;
+    }
     // Views that only make sense for one person / for everyone.
     if (CURRENT === "all" && (section === "fitness" || section === "stats" || section === "wellbeing")) { location.hash = "#/compare"; return; }
     if (CURRENT !== "all" && section === "compare") { location.hash = "#/activities"; return; }
-    TYPE_COUNTS = await api("types/counts" + (CURRENT && CURRENT !== "all" ? "?" + new URLSearchParams({ person: CURRENT }) : ""));
+    const who = CURRENT && CURRENT !== "all" ? "?" + new URLSearchParams({ person: CURRENT }) : "";
+    [TYPE_COUNTS, TIME_RANGE] = await Promise.all([api("types/counts" + who), api("time-range" + who).catch(timeRangeFallback)]);
     renderHeader(section);
     setHeaderHeight();
     if (parts[0] === "activity") await renderActivity(parts[1]);
@@ -1887,6 +2737,9 @@ async function route() {
     else if (section === "stats") await renderStats(params);
     else if (PLANNED[section]) renderPlanned(section);
     else await renderActivities(params);
+    // The back button matches the page header's height.
+    const head = view.querySelector(".page-head");
+    if (head) document.documentElement.style.setProperty("--head-h", head.offsetHeight + "px");
   } catch (e) {
     view.innerHTML = `<div class="card">${state("Error: " + esc(e.message), "bad")}</div>`;
   }

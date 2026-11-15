@@ -10,9 +10,12 @@ Training load, first method that has the data (SPEC §7.3):
   2. pace rTSS   — running types, speed + threshold pace
   3. hrTSS       — heart rate + threshold HR (TRIMP-based, Banister)
   4. none
-Thresholds come from `person_thresholds` (latest row valid on the activity day); missing
-HR values are estimated from the person's own data (HR max = highest max HR recorded,
-HR rest = 60 bpm, threshold HR = 90 % of HR max).
+Thresholds, per field (SPEC §7.3): a value the person set in Settings (`person_thresholds`,
+latest row valid on the activity day) replaces the one from the watch; the watch value
+comes from the activity's own FIT file (`watch_*` columns), or from the person's nearest
+activity that has one; what is still missing is estimated (HR max = highest max HR
+recorded, HR rest = 60 bpm, threshold HR = 90 % of HR max). An activity whose load used an
+estimated value is flagged `load_estimated`.
 
 Fitness (CTL/ATL/TSB) is computed on request from the daily loads: a few thousand days
 take a few milliseconds, and nothing can get stale.
@@ -28,12 +31,33 @@ from datetime import UTC, date, datetime, timedelta
 
 from . import streams
 
-ANALYSIS_VERSION = 1
+# v2: watch thresholds, load_estimated; v3: effort positions, ride; v4: 30 km ride;
+# v5: power over pauses, up to 5 h
+ANALYSIS_VERSION = 5
 
 # Best efforts (SPEC §7.5). Pace: metres → best time in s. Power / HR: seconds → best mean.
+# Ride: kilometres → best time in s (kind "ride"). Efforts also keep where they happened
+# (start_s, end_s: seconds from the start) so the activity page can highlight them.
 PACE_DISTANCES_M = (400, 1000, 1609.344, 5000, 10000, 21097.5, 42195)
-POWER_DURATIONS_S = (5, 15, 30, 60, 300, 600, 1200, 3600)
-HR_DURATIONS_S = (60, 300, 1200, 3600)
+RIDE_DISTANCES_M = (5000, 10000, 20000, 30000, 40000, 50000, 100000)
+POWER_DURATIONS_S = (
+    5,
+    15,
+    30,
+    60,
+    120,
+    300,
+    600,
+    1200,
+    1800,
+    3600,
+    5400,
+    7200,
+    10800,
+    14400,
+    18000,
+)
+HR_DURATIONS_S = (10, 30, 60, 120, 300, 600, 1200, 1800, 3600)
 MAX_GAP_S = 10  # longer gaps in a stream break a window (pause, lost signal)
 
 DEFAULT_HR_REST = 60
@@ -58,7 +82,7 @@ class Thresholds:
     lthr: float | None = None
     ftp: float | None = None
     threshold_pace: float | None = None  # s/km
-    sources: dict | None = None  # field → "set" | "auto" | "default"
+    sources: dict | None = None  # field → "set" | "watch" | "auto" | "default"
 
 
 def auto_hr_max(conn: sqlite3.Connection, person_id: str) -> int | None:
@@ -77,8 +101,52 @@ def threshold_rows(conn: sqlite3.Connection, person_id: str) -> list[sqlite3.Row
     ).fetchall()
 
 
-def thresholds_for(rows: list[sqlite3.Row], day: str, auto_max: int | None) -> Thresholds:
-    """Thresholds valid on `day` (YYYY-MM-DD); each field from the latest row that sets it."""
+WATCH_FIELDS = ("hr_max", "hr_rest", "lthr", "ftp", "weight")
+
+
+def watch_history(conn: sqlite3.Connection, person_id: str) -> list[tuple[str, dict]]:
+    """(local day, watch thresholds) of the person's activities that have any, by day."""
+    cols = ", ".join(f"watch_{k}" for k in WATCH_FIELDS)
+    out = []
+    for r in conn.execute(
+        f"""SELECT {LOCAL_DAY_SQL} AS day, {cols} FROM activities
+            WHERE person_id = ? AND ({" OR ".join(f"watch_{k} IS NOT NULL" for k in WATCH_FIELDS)})
+            ORDER BY start_time_utc""",
+        (person_id,),
+    ):
+        out.append((r[0], {k: r[i + 1] for i, k in enumerate(WATCH_FIELDS)}))
+    return out
+
+
+def watch_days(history: list[tuple[str, dict]], day: str) -> tuple[dict, dict]:
+    """Watch thresholds valid on `day`: per field the latest value on or before the day,
+    else the earliest one after it. Returns (values, field → day the value comes from)."""
+    values: dict = {}
+    days: dict = {}
+    for d, v in history:
+        if d > day:
+            break
+        for k, x in v.items():
+            if x is not None:
+                values[k], days[k] = x, d
+    for d, v in history:  # fields never set before the day: the first later value
+        for k, x in v.items():
+            if x is not None and k not in values:
+                values[k], days[k] = x, d
+    return values, days
+
+
+def watch_on(history: list[tuple[str, dict]], day: str) -> tuple[dict, str | None]:
+    """Watch thresholds valid on `day` and the day of the newest value used."""
+    values, days = watch_days(history, day)
+    before = [d for d in days.values() if d <= day]
+    return values, max(before) if before else None
+
+
+def thresholds_for(
+    rows: list[sqlite3.Row], day: str, auto_max: int | None, watch: dict | None = None
+) -> Thresholds:
+    """Thresholds valid on `day` (YYYY-MM-DD): set in Settings > from the watch > estimated."""
     values: dict = {}
     sources: dict = {}
     for r in rows:
@@ -88,6 +156,9 @@ def thresholds_for(rows: list[sqlite3.Row], day: str, auto_max: int | None) -> T
             if r[f] is not None:
                 values[f] = r[f]
                 sources[f] = "set"
+    for f, v in (watch or {}).items():
+        if v is not None and values.get(f) is None:
+            values[f], sources[f] = v, "watch"
     if values.get("hr_max") is None and auto_max:
         values["hr_max"], sources["hr_max"] = auto_max, "auto"
     if values.get("hr_rest") is None:
@@ -131,10 +202,17 @@ def resample_1hz(time: list, values: list, max_gap: float = MAX_GAP_S) -> list[f
 
 def best_mean(series: list[float | None], window: int) -> float | None:
     """Highest mean over `window` consecutive seconds without missing samples."""
+    r = best_mean_at(series, window)
+    return r[0] if r else None
+
+
+def best_mean_at(series: list[float | None], window: int) -> tuple[float, int] | None:
+    """Like `best_mean`, with the second the best window starts: (mean, start)."""
     n = len(series)
     if n < window or window <= 0:
         return None
     best = None
+    start = 0
     total = 0.0
     missing = 0
     for i, v in enumerate(series):
@@ -151,16 +229,25 @@ def best_mean(series: list[float | None], window: int) -> float | None:
         if i >= window - 1 and missing == 0:
             mean = total / window
             if best is None or mean > best:
-                best = mean
-    return best
+                best, start = mean, i - window + 1
+    return (best, start) if best is not None else None
 
 
 def best_time_for_distance(time: list, distance: list, metres: float) -> float | None:
     """Shortest time (s) to cover `metres` (two pointers over the distance stream)."""
+    r = best_time_for_distance_at(time, distance, metres)
+    return r[0] if r else None
+
+
+def best_time_for_distance_at(
+    time: list, distance: list, metres: float
+) -> tuple[float, float] | None:
+    """Like `best_time_for_distance`, with the time the best stretch starts: (s, start)."""
     pts = [(t, d) for t, d in zip(time, distance, strict=False) if t is not None and d is not None]
     if len(pts) < 2 or pts[-1][1] - pts[0][1] < metres:
         return None
     best = None
+    start = 0.0
     j = 0
     for i in range(len(pts)):
         while j < len(pts) and pts[j][1] - pts[i][1] < metres:
@@ -174,8 +261,8 @@ def best_time_for_distance(time: list, distance: list, metres: float) -> float |
         frac = 0.0 if d1 == d0 else (need - d0) / (d1 - d0)
         elapsed = (t0 + frac * (t1 - t0)) - pts[i][0]
         if elapsed > 0 and (best is None or elapsed < best):
-            best = elapsed
-    return best
+            best, start = elapsed, pts[i][0]
+    return (best, start) if best is not None else None
 
 
 def normalized_power(power_1hz: list[float | None]) -> float | None:
@@ -228,7 +315,7 @@ class Analysis:
     load: float | None
     method: str | None
     np_power: float | None
-    efforts: list[tuple[str, float, float]]  # (kind, key, value)
+    efforts: list[tuple]  # (kind, key, value, start_s, end_s)
 
 
 def _local_day(row: sqlite3.Row) -> str:
@@ -240,25 +327,32 @@ def analyse(activity: sqlite3.Row, ch: dict[str, list], th: Thresholds) -> Analy
     time = ch.get("time") or []
     duration = activity["moving_s"] or activity["timer_s"] or 0
     group = activity["category"]
-    efforts: list[tuple[str, float, float]] = []
+    efforts: list[tuple] = []
 
     power = resample_1hz(time, ch["power"]) if ch.get("power") and time else []
     hr = resample_1hz(time, ch["hr"]) if ch.get("hr") and time else []
 
     np_power = normalized_power(power) if power else None
+    t0 = next((t for t in time if t is not None), 0) or 0
+    # A stop (no samples) counts as 0 W, so long durations span pauses like the ride did.
+    power0 = [0.0 if v is None else v for v in power]
     for s in POWER_DURATIONS_S:
-        v = best_mean(power, s) if power else None
-        if v is not None and v > 0:
-            efforts.append(("power", s, round(v, 1)))
+        r = best_mean_at(power0, s) if power else None
+        if r is not None and r[0] > 0:
+            efforts.append(("power", s, round(r[0], 1), r[1] - int(t0), r[1] - int(t0) + s))
     for s in HR_DURATIONS_S:
-        v = best_mean(hr, s) if hr else None
-        if v is not None:
-            efforts.append(("hr", s, round(v, 1)))
-    if group in RUN_GROUPS and ch.get("distance") and time:
-        for m in PACE_DISTANCES_M:
-            v = best_time_for_distance(time, ch["distance"], m)
-            if v is not None:
-                efforts.append(("pace", m, round(v, 1)))
+        r = best_mean_at(hr, s) if hr else None
+        if r is not None:
+            efforts.append(("hr", s, round(r[0], 1), r[1] - int(t0), r[1] - int(t0) + s))
+    distances = (
+        ("pace", PACE_DISTANCES_M) if group in RUN_GROUPS
+        else ("ride", RIDE_DISTANCES_M) if group == "ride" else None
+    )  # fmt: skip
+    if distances and ch.get("distance") and time:
+        for m in distances[1]:
+            r = best_time_for_distance_at(time, ch["distance"], m)
+            if r is not None:
+                efforts.append((distances[0], m, round(r[0], 1), r[1] - t0, r[1] - t0 + r[0]))
 
     load = method = None
     if np_power and th.ftp and duration:
@@ -304,7 +398,7 @@ def backfill(conn: sqlite3.Connection, progress: ProgressFn | None = None) -> in
         "SELECT id FROM activities WHERE analysis_version < ? ORDER BY start_time_utc",
         (ANALYSIS_VERSION,),
     ).fetchall()
-    cache: dict[str, tuple[list, int | None]] = {}
+    cache: dict[str, tuple] = {}
     for i, (activity_id,) in enumerate(todo, 1):
         analyse_one(conn, activity_id, cache)
         if progress and (i % 20 == 0 or i == len(todo)):
@@ -322,27 +416,89 @@ def analyse_one(
     pid = a["person_id"]
     cache = {} if cache is None else cache
     if pid not in cache:
-        cache[pid] = (threshold_rows(conn, pid), auto_hr_max(conn, pid))
-    rows, auto_max = cache[pid]
-    th = thresholds_for(rows, _local_day(a), auto_max)
+        cache[pid] = (threshold_rows(conn, pid), auto_hr_max(conn, pid), watch_history(conn, pid))
+    rows, auto_max, history = cache[pid]
+    day = _local_day(a)
+    watch, _ = watch_on(history, day)
+    own = {k: a[f"watch_{k}"] for k in WATCH_FIELDS if a[f"watch_{k}"] is not None}
+    th = thresholds_for(rows, day, auto_max, {**watch, **own})
     result = analyse(a, _channels(conn, activity_id), th)
+    used = METHOD_FIELDS.get(result.method or "", ())
+    estimated = int(any((th.sources or {}).get(f) in ("auto", "default") for f in used))
     conn.execute("BEGIN")
     try:
         conn.execute("DELETE FROM best_efforts WHERE activity_id = ?", (activity_id,))
         conn.executemany(
-            "INSERT INTO best_efforts (activity_id, kind, key, value) VALUES (?, ?, ?, ?)",
-            [(activity_id, k, key, v) for k, key, v in result.efforts],
+            """INSERT INTO best_efforts (activity_id, kind, key, value, start_s, end_s)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            [(activity_id, *e) for e in result.efforts],
         )
         conn.execute(
-            """UPDATE activities SET load = ?, load_method = ?,
+            """UPDATE activities SET load = ?, load_method = ?, load_estimated = ?,
                       np_power = COALESCE(np_power, ?), analysis_version = ? WHERE id = ?""",
-            (result.load, result.method, result.np_power, ANALYSIS_VERSION, activity_id),
+            (result.load, result.method, estimated, result.np_power, ANALYSIS_VERSION, activity_id),
         )
         conn.execute("COMMIT")
     except Exception:
         conn.execute("ROLLBACK")
         raise
     return result
+
+
+# Thresholds each load method depends on (for `load_estimated`).
+METHOD_FIELDS = {
+    "power": ("ftp",),
+    "pace": ("threshold_pace",),
+    "hr": ("hr_max", "hr_rest", "lthr"),
+}
+
+
+# A watch value further away from the activity than this is flagged as borrowed.
+STALE_DAYS = 365
+
+
+def threshold_warnings(
+    conn: sqlite3.Connection,
+    person_id: str,
+    since: str = "",
+    until: str = "",
+    accepted: set[str] | frozenset = frozenset(),
+) -> list[dict]:
+    """Problems that can really distort the load of the period's activities (SPEC §7.2):
+    - `missing`: a value the load method needs has no basis in the person's data (resting
+      HR default, HR max from the highest recorded HR) and was not accepted as estimate;
+    - `stale`: a year whose activities borrow a watch value more than a year away.
+    Threshold HR derived from a watch HR max is a normal estimate, not a warning."""
+    rows = threshold_rows(conn, person_id)
+    auto_max = auto_hr_max(conn, person_id)
+    history = watch_history(conn, person_id)
+    missing: dict[str, dict] = {}
+    stale: dict[str, str] = {}  # year → farthest source day
+    for day, method in conn.execute(
+        f"""SELECT {LOCAL_DAY_SQL} AS d, load_method FROM activities
+            WHERE person_id = ? AND load IS NOT NULL
+              AND (? = '' OR {LOCAL_DAY_SQL} >= ?) AND (? = '' OR {LOCAL_DAY_SQL} <= ?)""",
+        (person_id, since, since, until, until),
+    ):
+        watch, wdays = watch_days(history, day)
+        th = thresholds_for(rows, day, auto_max, watch)
+        src = th.sources or {}
+        for f in METHOD_FIELDS.get(method or "", ()):
+            weak = src.get(f) == "default" or (f == "hr_max" and src.get(f) == "auto")
+            if weak and f not in accepted:
+                missing.setdefault(f, {"kind": "missing", "field": f, "value": getattr(th, f),
+                                       "source": src.get(f)})  # fmt: skip
+            if src.get(f) == "watch":
+                gap = abs((date.fromisoformat(day) - date.fromisoformat(wdays[f])).days)
+                if gap > STALE_DAYS:
+                    y = day[:4]
+                    far = stale.get(y)
+                    if far is None or abs(int(wdays[f][:4]) - int(y)) > abs(int(far[:4]) - int(y)):
+                        stale[y] = wdays[f]
+    return [
+        *missing.values(),
+        *({"kind": "stale", "year": y, "from": d} for y, d in sorted(stale.items())),
+    ]
 
 
 def reset_person(conn: sqlite3.Connection, person_id: str) -> int:

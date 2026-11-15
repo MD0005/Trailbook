@@ -62,6 +62,24 @@ def cmd_scan(conn, args) -> int:
         for name in scan.ignored:
             out(f"  ignored (not in a person folder or unreadable): {name}")
 
+        # One archive for every source: copy new folder files next to the database.
+        jobs.write_progress(conn, state="running", phase="archive", started_at=started, done=0)
+
+        def archive_progress(i, total, name):
+            if i % 20 == 0 or i == total:
+                jobs.write_progress(
+                    conn, state="running", phase="archive", started_at=started,
+                    done=i, total=total, current=name,
+                )  # fmt: skip
+
+        # Also when the source is no longer the folder: files imported from it earlier are
+        # archived as long as the folder is still there.
+        archived = importer.archive_folder(
+            conn, root or db.get_setting(conn, "root"), uploads_dir, progress=archive_progress
+        )
+        if archived:
+            out(f"Archived {archived} folder files.")
+
         if source == "garmin" and not args.no_garmin:
             jobs.write_progress(conn, state="running", phase="garmin", started_at=started, done=0)
 
@@ -111,6 +129,13 @@ def cmd_scan(conn, args) -> int:
                     conn, state="running", phase="analysis", started_at=started, done=i, total=total
                 )
 
+            def watch_progress(i, total):
+                jobs.write_progress(
+                    conn, state="running", phase="thresholds", started_at=started, done=i,
+                    total=total,
+                )  # fmt: skip
+
+            importer.backfill_watch(conn, root, uploads_dir, progress=watch_progress)
             analysed = analysis.backfill(conn, progress=analysis_progress)
 
             def segment_progress(i, total):
@@ -218,7 +243,7 @@ def cmd_restore(conn, args) -> int:
     done = _job(
         args.db, "restore",
         lambda progress: backup.restore(
-            args.db, args.archive, root=args.root, replace=args.yes, progress=progress
+            args.db, args.archive, replace=args.yes, progress=progress
         ),
         args.quiet,
     )  # fmt: skip
@@ -228,8 +253,7 @@ def cmd_restore(conn, args) -> int:
         return 1
     started, r = done
     if not args.quiet:
-        print(f"Restored {r.activities} activities and {r.files} files"
-              + (f" (folder: {r.root})" if r.root else ""))  # fmt: skip
+        print(f"Restored {r.activities} activities and {r.files} files")
     status = 0
     if not args.no_scan:
         backup.write_progress(args.db, "restore", state="running", started_at=started, phase="scan")
@@ -242,7 +266,7 @@ def cmd_restore(conn, args) -> int:
             status = cmd_scan(c2, scan_args)
     backup.write_progress(
         args.db, "restore", state="finished", started_at=started, finished_at=backup.now_iso(),
-        files=r.files, activities=r.activities, root=r.root,
+        files=r.files, activities=r.activities,
     )  # fmt: skip
     return status
 
@@ -465,7 +489,6 @@ def main(argv: list[str] | None = None) -> int:
 
     p = sub.add_parser("restore", help="restore a migration archive (replaces the database)")
     p.add_argument("archive", help="trailbook-export-*.zip")
-    p.add_argument("--root", help="folder for the restored FIT files (default: current folder)")
     p.add_argument("--yes", action="store_true", help="replace an install that has data")
     p.add_argument("--no-scan", action="store_true", help="do not scan after restoring")
     p.add_argument("--low-priority", action="store_true", help="run with the lowest CPU priority")

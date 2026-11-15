@@ -6,8 +6,8 @@ Layout of an export::
     ├── manifest.json     format, versions, people, counts, size + sha256 + mtime per file
     ├── trailbook.db      consistent snapshot (SQLite online backup API)
     └── files/
-        ├── root/...      FIT/ZIP files of the watched folder, same structure
-        └── uploads/...   uploaded files and Garmin downloads
+        ├── root/...      watched-folder files not archived yet, same structure
+        └── uploads/...   the archive: uploads, Garmin downloads, folder copies (_folder/)
 
 Settings live in the database, so they travel with it. Garmin access tokens never do; Garmin
 API keys only when asked for. The archive is written and read in chunks (ZIP64), never held
@@ -29,7 +29,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 
-from . import __version__, db
+from . import __version__, db, importer
 
 FORMAT = "trailbook-export"
 FORMAT_VERSION = 1
@@ -198,10 +198,23 @@ def export(
 
     with closing(db.connect(db_path, apply_migrations=False)) as c:
         root_setting = db.get_setting(c, "root")
+        # Folder files already copied into the archive travel as `files/uploads/_folder/…`.
+        archived = {
+            r[0]
+            for r in c.execute(
+                "SELECT source_rel FROM files WHERE source_rel IS NOT NULL"
+                " AND rel_path LIKE '@uploads/%'"
+            )
+        }
     root = Path(root_setting) if root_setting else None
     items: list[tuple[Path, str]] = []
     if include_files:
-        items = _collect(root, "files/root") + _collect(uploads_dir(db_path), "files/uploads")
+        prefix = "files/root/"
+        root_items = [
+            (p, arc) for p, arc in _collect(root, "files/root")
+            if arc[len(prefix):] not in archived
+        ]  # fmt: skip
+        items = root_items + _collect(uploads_dir(db_path), "files/uploads")
     total_bytes = sum(p.stat().st_size for p, _ in items)
 
     try:
@@ -314,35 +327,32 @@ def is_empty_install(db_path: str | Path) -> bool:
         )
 
 
-def default_restore_root(db_path: str | Path) -> Path:
-    with closing(db.connect(db_path, apply_migrations=False)) as c:
-        current = db.get_setting(c, "root")
-    return Path(current) if current else data_dir(db_path) / "library"
-
-
 @dataclass
 class RestoreResult:
     files: int = 0
     persons: list[str] = field(default_factory=list)
     activities: int = 0
-    root: str | None = None
 
 
 def restore(
     db_path: str | Path,
     archive: str | Path,
     *,
-    root: str | Path | None = None,
     replace: bool = False,
     progress: ProgressFn | None = None,
 ) -> RestoreResult:
-    """Validate, restore files, then replace the database contents and migrate it."""
+    """Validate, restore files, then replace the database contents and migrate it.
+
+    Every file goes into the archive next to the database (`uploads/`): watched-folder files
+    that were not archived yet on the old install (`files/root/…`) land in `uploads/_folder/`
+    and their rows point there. So nothing depends on a folder of the old device; the watched
+    folder setting is kept only when that folder exists here.
+    """
     report = progress or (lambda **_: None)
     manifest = read_manifest(archive)
     if not replace and not is_empty_install(db_path):
         raise BackupError("this install already has data; confirm that it may be replaced")
     entries: dict[str, dict] = manifest["entries"]
-    root_path = Path(root) if root else default_restore_root(db_path)
     up_dir = uploads_dir(db_path)
     result = RestoreResult(persons=list(manifest.get("persons") or []))
 
@@ -352,17 +362,17 @@ def restore(
         if missing:
             raise BackupError(f"the archive is incomplete ({len(missing)} files missing)")
         plan: list[tuple[str, Path]] = []
+        folder_files: list[str] = []  # watched-folder paths restored into the archive
         for arcname in entries:
             if arcname == DB_NAME:
                 continue
             if (rel := _safe_rel(arcname, "files/root")) is not None:
-                plan.append((arcname, root_path.joinpath(*rel.parts)))
+                plan.append((arcname, up_dir.joinpath(importer.FOLDER_ARCHIVE, *rel.parts)))
+                folder_files.append(rel.as_posix())
             elif (rel := _safe_rel(arcname, "files/uploads")) is not None:
                 plan.append((arcname, up_dir.joinpath(*rel.parts)))
             else:
                 raise BackupError(f"unexpected path in the archive: {arcname}")
-        if any(a.startswith("files/root/") for a, _ in plan):
-            root_path.mkdir(parents=True, exist_ok=True)
 
         # 1. Files first: a damaged archive stops before the database is touched.
         report(phase="files", done=0, total=len(plan))
@@ -387,11 +397,13 @@ def restore(
             tmp.unlink(missing_ok=True)
 
     with closing(db.connect(db_path)) as c:  # runs migrations if the export is older
-        if manifest.get("include_files") and result.files:
-            had_root = any(a.startswith("files/root/") for a, _ in plan)
-            if had_root or manifest.get("source", {}).get("root"):
-                db.set_setting(c, "root", str(root_path.resolve()))
-                result.root = str(root_path.resolve())
+        c.executemany(
+            "UPDATE files SET rel_path = ? WHERE source_rel = ? AND rel_path = source_rel",
+            [(importer.folder_archive_rel(rel), rel) for rel in folder_files],
+        )
+        root = db.get_setting(c, "root")
+        if root and not Path(root).is_dir():
+            db.set_setting(c, "root", None)  # a folder of the old device: choose one here
         for key in TRANSIENT_SETTINGS:
             db.set_setting(c, key, None)
         result.activities = c.execute("SELECT COUNT(*) FROM activities").fetchone()[0]

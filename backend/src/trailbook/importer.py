@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import shutil
 import sqlite3
 import zipfile
 from collections.abc import Callable, Iterator
@@ -17,6 +18,7 @@ TRACK_TOLERANCE_M = 5.0
 
 # Bump when the tile computation changes; activities are then re-tiled from stored streams.
 TILES_VERSION = 1
+WATCH_VERSION = 1  # watch thresholds read from the FIT file, see backfill_watch
 
 STATUSES = ("new", "imported", "skipped", "duplicate", "error", "missing", "removed")
 
@@ -27,10 +29,14 @@ STATUSES = ("new", "imported", "skipped", "duplicate", "error", "missing", "remo
 PERSON_MODES = ("folders", "devices")
 
 # Where new data comes from (setting `data_source`): a watched folder, one-time ZIP/FIT
-# uploads, or (planned) the Garmin Connect personal API. Uploads are kept next to the
-# database and tracked in `files` with this path prefix.
+# uploads, or the Garmin Connect personal API. Every source ends in the same archive: the
+# `uploads` folder next to the database, tracked in `files` with this path prefix. Garmin
+# downloads and uploads are saved there directly; files of the watched folder are copied
+# there by `archive_folder` (under `_folder/`, same layout), so later importer versions can
+# always re-read every file, even after it was deleted from the folder.
 DATA_SOURCES = ("folder", "upload", "garmin")
 UPLOADS_PREFIX = "@uploads/"
+FOLDER_ARCHIVE = "_folder"
 UNASSIGNED = "_unassigned"
 
 # Statuses that describe a finished outcome for a file.
@@ -152,7 +158,8 @@ def scan(conn: sqlite3.Connection, root: str | Path, mode: str | None = None) ->
     result = ScanResult()
     stamp = now_iso()
     known = {
-        (r["rel_path"], r["zip_member"]): r for r in conn.execute("SELECT * FROM files").fetchall()
+        (r["source_rel"], r["zip_member"]): r
+        for r in conn.execute("SELECT * FROM files WHERE source_rel IS NOT NULL").fetchall()
     }
     persons = {r["id"] for r in conn.execute("SELECT id FROM persons")}
     seen: set[tuple[str, str]] = set()
@@ -179,11 +186,14 @@ def scan(conn: sqlite3.Connection, root: str | Path, mode: str | None = None) ->
             row = known.get(key)
             if row is None:
                 conn.execute(
-                    """INSERT INTO files (person_id, rel_path, zip_member, size, mtime,
-                                          status, first_seen, last_seen)
-                       VALUES (?, ?, ?, ?, ?, 'new', ?, ?)""",
-                    (e.person_id, e.rel_path, e.zip_member, e.size, e.mtime, stamp, stamp),
-                )
+                    """INSERT INTO files (person_id, rel_path, source_rel, zip_member, size,
+                                          mtime, status, first_seen, last_seen)
+                       VALUES (?, ?, ?, ?, ?, ?, 'new', ?, ?)""",
+                    (
+                        e.person_id, e.rel_path, e.rel_path, e.zip_member, e.size, e.mtime,
+                        stamp, stamp,
+                    ),
+                )  # fmt: skip
                 result.new += 1
                 continue
 
@@ -202,17 +212,19 @@ def scan(conn: sqlite3.Connection, root: str | Path, mode: str | None = None) ->
                 # Nothing to write: keeps repeated scans cheap and spares the eMMC/SD card.
                 continue
             else:
+                # Changed in the folder: read it from the folder and archive the new version.
                 result.changed += 1
                 conn.execute(
                     """UPDATE files SET status = 'new', sha256 = NULL, error = NULL,
-                              skip_reason = NULL, size = ?, mtime = ?, last_seen = ?
+                              skip_reason = NULL, size = ?, mtime = ?, last_seen = ?,
+                              rel_path = source_rel
                        WHERE id = ?""",
                     (e.size, e.mtime, stamp, row["id"]),
                 )
 
         for key, row in known.items():
-            if key[0].startswith(UPLOADS_PREFIX):
-                continue  # uploads are not part of the watched folder
+            if row["rel_path"].startswith(UPLOADS_PREFIX):
+                continue  # archived: gone from the folder, but nothing is lost
             if key not in seen and row["status"] != "missing":
                 result.missing += 1
                 conn.execute(
@@ -226,6 +238,55 @@ def scan(conn: sqlite3.Connection, root: str | Path, mode: str | None = None) ->
         conn.execute("ROLLBACK")
         raise
     return result
+
+
+def folder_archive_rel(source_rel: str) -> str:
+    """`files.rel_path` of the archived copy of a watched-folder file."""
+    return f"{UPLOADS_PREFIX}{FOLDER_ARCHIVE}/{source_rel}"
+
+
+def archive_folder(
+    conn: sqlite3.Connection,
+    root: str | Path | None,
+    uploads_dir: Path,
+    progress: Callable[[int, int, str], None] | None = None,
+) -> int:
+    """Copy watched-folder files that are not archived yet into the archive.
+
+    Every file is kept (activities, but also sleep, monitoring and other files skipped
+    today), so a later importer can read it again. A ZIP is copied once for all its members.
+    The copy keeps the file's mtime and is written as `.part` and renamed when complete.
+    Files that vanished before they were copied are left to the scan (`missing`).
+    Returns the number of files copied.
+    """
+    if not root:
+        return 0
+    root = Path(root)
+    pending = [
+        r[0]
+        for r in conn.execute(
+            """SELECT DISTINCT source_rel FROM files
+               WHERE source_rel IS NOT NULL AND rel_path = source_rel AND status != 'missing'
+               ORDER BY source_rel"""
+        )
+    ]
+    copied = 0
+    for i, source_rel in enumerate(pending, start=1):
+        src = root / source_rel
+        if src.is_file():
+            target = uploads_dir / FOLDER_ARCHIVE / source_rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            part = target.with_name(target.name + ".part")
+            shutil.copy2(src, part)
+            os.replace(part, target)
+            conn.execute(
+                "UPDATE files SET rel_path = ? WHERE source_rel = ? AND rel_path = source_rel",
+                (folder_archive_rel(source_rel), source_rel),
+            )
+            copied += 1
+        if progress:
+            progress(i, len(pending), source_rel)
+    return copied
 
 
 # --------------------------------------------------------------------------------------
@@ -242,6 +303,42 @@ class ImportResult:
 
 
 ProgressFn = Callable[[int, int, sqlite3.Row, str], None]
+
+
+WATCH_FIELDS = ("hr_max", "hr_rest", "lthr", "ftp", "weight")
+
+
+def backfill_watch(
+    conn: sqlite3.Connection, root: Path | None, uploads_dir: Path | None = None, progress=None
+) -> int:
+    """Read the watch thresholds of activities imported before they were stored. Each file
+    is decoded once; an activity whose file cannot be read is marked done without values.
+    The load of an activity that got values is computed again."""
+    rows = conn.execute(
+        """SELECT a.id, f.rel_path, f.zip_member FROM activities a
+           LEFT JOIN files f ON f.id = (SELECT MIN(id) FROM files
+                                        WHERE activity_id = a.id AND status = 'imported')
+           WHERE a.watch_version < ?""",
+        (WATCH_VERSION,),
+    ).fetchall()
+    for i, r in enumerate(rows, start=1):
+        values: dict = {}
+        if r["rel_path"]:
+            try:
+                data = read_file_bytes(root, r["rel_path"], r["zip_member"] or "", uploads_dir)
+                values = fitfile.parse_watch_thresholds(data)
+            except Exception:  # missing file or a decoder error: keep the activity as it is
+                values = {}
+        found = any(v is not None for v in values.values())
+        conn.execute(
+            f"""UPDATE activities SET {", ".join(f"watch_{k} = ?" for k in WATCH_FIELDS)},
+                       watch_version = ?{", analysis_version = 0" if found else ""}
+                WHERE id = ?""",
+            (*(values.get(k) for k in WATCH_FIELDS), WATCH_VERSION, r["id"]),
+        )
+        if progress:
+            progress(i, len(rows))
+    return len(rows)
 
 
 def read_file_bytes(
@@ -364,6 +461,37 @@ def import_file(
     conn: sqlite3.Connection, root: Path | None, row: sqlite3.Row, uploads_dir: Path | None = None
 ) -> str:
     """Import one file row. Returns the resulting status."""
+    status = _import_file(conn, root, row, uploads_dir)
+    if status in ("imported", "duplicate"):
+        apply_connect_name(conn, row["id"])
+    return status
+
+
+def apply_connect_name(conn: sqlite3.Connection, file_id: int) -> None:
+    """Give the file's activity its Garmin Connect title, when the file came from Garmin.
+
+    FIT files carry no title, so activities are unnamed (the UI shows the type) until a
+    Connect title arrives — also later, when Garmin delivers an activity already imported
+    from a folder (a duplicate). A name the user set is kept.
+    """
+    conn.execute(
+        """UPDATE activities SET name = (
+               SELECT g.name FROM files f
+               JOIN garmin_activities g ON g.person_id = f.person_id AND g.file_rel = f.rel_path
+               WHERE f.id = ? AND COALESCE(g.name, '') != '')
+           WHERE id = (SELECT activity_id FROM files WHERE id = ?)
+             AND name_overridden = 0
+             AND EXISTS (
+               SELECT 1 FROM files f
+               JOIN garmin_activities g ON g.person_id = f.person_id AND g.file_rel = f.rel_path
+               WHERE f.id = ? AND COALESCE(g.name, '') != '')""",
+        (file_id, file_id, file_id),
+    )
+
+
+def _import_file(
+    conn: sqlite3.Connection, root: Path | None, row: sqlite3.Row, uploads_dir: Path | None
+) -> str:
     file_id = row["id"]
     try:
         data = read_file_bytes(root, row["rel_path"], row["zip_member"], uploads_dir)
@@ -536,6 +664,7 @@ def _set_status(
 _ACTIVITY_COLUMNS = (
     "elapsed_s timer_s moving_s distance_m ascent_m descent_m avg_hr max_hr avg_speed "
     "max_speed avg_power max_power np_power avg_cadence max_cadence calories has_gps "
+    "zones metabolic_calories devices "
     "start_lat start_lon bbox_min_lat bbox_min_lon bbox_max_lat bbox_max_lon"
 ).split()
 
@@ -564,12 +693,14 @@ def _store_activity(
         "category": p.category,
         "activity_type": p.activity_type,
         "indoor": int(p.indoor),
-        "name": p.name,
+        "name": None,  # FIT has no title; a Garmin Connect title is set after import
         "device": p.device,
         "importer_version": IMPORTER_VERSION,
         "analysis_version": 0,  # load and best efforts are computed after import
         "segments_version": 0,  # segment efforts too
         **{c: p.summary.get(c) for c in _ACTIVITY_COLUMNS},
+        **{f"watch_{k}": p.profile.get(k) for k in WATCH_FIELDS},
+        "watch_version": WATCH_VERSION,
     }
 
     if replace_id is None:
@@ -620,8 +751,9 @@ def _store_activity(
         conn.execute(
             """INSERT INTO laps (activity_id, idx, start_offset_s, elapsed_s, timer_s,
                                  distance_m, avg_hr, max_hr, avg_speed, max_speed, avg_power,
-                                 avg_cadence, ascent_m, descent_m, intensity)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                 avg_cadence, ascent_m, descent_m, intensity,
+                                 target, target_low, target_high)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 activity_id,
                 lap.idx,
@@ -638,6 +770,9 @@ def _store_activity(
                 lap.ascent_m,
                 lap.descent_m,
                 lap.intensity,
+                lap.target,
+                lap.target_low,
+                lap.target_high,
             ),
         )
     return activity_id

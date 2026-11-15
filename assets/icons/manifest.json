@@ -1192,5 +1192,9 @@
       "file": "svg/other.svg",
       "symbol": "tb-other"
     }
+  ],
+  "sizes": [
+    20,
+    32
   ]
 }

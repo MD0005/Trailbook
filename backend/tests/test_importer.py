@@ -289,3 +289,183 @@ def test_forget_imported_file_rebuilds_activity(conn, tmp_path):
         ).fetchone()[0]
         == 1
     )
+
+
+def test_folder_files_are_archived_and_survive_deletion(conn, tmp_path):
+    root = tmp_path / "root"
+    uploads = tmp_path / "uploads"
+    (root / "alice").mkdir(parents=True)
+    src = root / "alice" / "sleep.fit"
+    src.write_bytes(make_fit(49))
+    os.utime(src, (1_700_000_000, 1_700_000_000))
+
+    importer.scan(conn, root)
+    assert importer.archive_folder(conn, root, uploads) == 1
+    copy = uploads / importer.FOLDER_ARCHIVE / "alice" / "sleep.fit"
+    assert copy.read_bytes() == src.read_bytes()
+    assert copy.stat().st_mtime == src.stat().st_mtime  # mtime kept
+    row = conn.execute("SELECT rel_path, source_rel FROM files").fetchone()
+    assert (row["rel_path"], row["source_rel"]) == (
+        "@uploads/_folder/alice/sleep.fit", "alice/sleep.fit",
+    )  # fmt: skip
+    # Skipped files (sleep, monitoring, …) are archived too, so they can be read later.
+    importer.run_queue(conn, root, uploads_dir=uploads)
+    assert conn.execute("SELECT status FROM files").fetchone()[0] == "skipped"
+
+    # Nothing to copy again; deleting the file from the folder loses nothing.
+    assert importer.archive_folder(conn, root, uploads) == 0
+    src.unlink()
+    result = importer.scan(conn, root)
+    assert result.missing == 0
+    assert conn.execute("SELECT status FROM files").fetchone()[0] == "skipped"
+    assert importer.forget_file(conn, conn.execute("SELECT id FROM files").fetchone()[0])
+
+
+def test_changed_folder_file_is_archived_again(conn, tmp_path):
+    root = tmp_path / "root"
+    uploads = tmp_path / "uploads"
+    (root / "alice").mkdir(parents=True)
+    src = root / "alice" / "x.fit"
+    src.write_bytes(make_fit(49))
+    importer.scan(conn, root)
+    importer.archive_folder(conn, root, uploads)
+
+    src.write_bytes(make_fit(32))  # now a monitoring file of another size
+    os.utime(src, (1_700_000_500, 1_700_000_500))
+    result = importer.scan(conn, root)
+    assert result.changed == 1
+    assert conn.execute("SELECT rel_path FROM files").fetchone()[0] == "alice/x.fit"
+    assert importer.archive_folder(conn, root, uploads) == 1
+    copy = uploads / importer.FOLDER_ARCHIVE / "alice" / "x.fit"
+    assert copy.read_bytes() == make_fit(32)
+
+
+def test_zip_in_folder_is_archived_once(conn, tmp_path):
+    root = tmp_path / "root"
+    uploads = tmp_path / "uploads"
+    (root / "alice").mkdir(parents=True)
+    with zipfile.ZipFile(root / "alice" / "export.zip", "w") as zf:
+        zf.writestr("a.fit", make_fit(49))
+        zf.writestr("b.fit", make_fit(32))
+    importer.scan(conn, root)
+    assert importer.archive_folder(conn, root, uploads) == 1
+    paths = {r[0] for r in conn.execute("SELECT rel_path FROM files")}
+    assert paths == {"@uploads/_folder/alice/export.zip"}
+    importer.run_queue(conn, root, uploads_dir=uploads)
+    assert {r[0] for r in conn.execute("SELECT status FROM files")} == {"skipped"}
+
+
+def test_watch_thresholds_from_fit_messages():
+    from trailbook import fitfile
+
+    messages = {
+        "zones_target_mesgs": [
+            {"max_heart_rate": 190, "threshold_heart_rate": 0, "functional_threshold_power": 200}
+        ],
+        "user_profile_mesgs": [{"resting_heart_rate": 47, "weight": 63.0}],
+    }
+    assert fitfile.watch_thresholds(messages) == {
+        "hr_max": 190, "hr_rest": 47, "lthr": None, "ftp": 200, "weight": 63.0,
+    }  # fmt: skip
+    # Older files: values only in the session's time_in_zone message.
+    tiz = {"time_in_zone_mesgs": [{"reference_mesg": "session", "max_heart_rate": 188}]}
+    assert fitfile.watch_thresholds(tiz)["hr_max"] == 188
+
+
+def test_connect_title_names_the_activity(conn):
+    conn.execute("INSERT INTO persons (id, label) VALUES ('anna', 'Anna')")
+
+    def activity(uid, name=None, overridden=0):
+        return conn.execute(
+            """INSERT INTO activities (person_id, fit_uid, start_time_utc, category,
+                   activity_type, name, name_overridden, importer_version)
+               VALUES ('anna', ?, '2026-01-01T07:00:00Z', 'run', 'run', ?, ?, 1)""",
+            (uid, name, overridden),
+        ).lastrowid
+
+    def file(rel, activity_id):
+        return conn.execute(
+            """INSERT INTO files (person_id, rel_path, size, mtime, status, activity_id,
+                   first_seen, last_seen)
+               VALUES ('anna', ?, 1, 0, 'imported', ?, 'x', 'x')""",
+            (rel, activity_id),
+        ).lastrowid
+
+    def title(rel, name, aid):
+        conn.execute(
+            """INSERT INTO garmin_activities (person_id, activity_id, name, status, file_rel,
+                   fetched_at) VALUES ('anna', ?, ?, 'downloaded', ?, 'x')""",
+            (aid, name, rel),
+        )
+
+    plain = activity("u1")  # from a folder: no title, the UI shows the type
+    importer.apply_connect_name(conn, file("anna/a.fit", plain))
+    renamed = activity("u2")  # later delivered by Garmin: the title replaces the empty name
+    title("@uploads/anna/garmin-2.zip", "Morning Run", 2)
+    importer.apply_connect_name(conn, file("@uploads/anna/garmin-2.zip", renamed))
+    kept = activity("u3", "My name", overridden=1)  # the user's own name stays
+    title("@uploads/anna/garmin-3.zip", "Connect title", 3)
+    importer.apply_connect_name(conn, file("@uploads/anna/garmin-3.zip", kept))
+
+    names = dict(conn.execute("SELECT id, name FROM activities").fetchall())
+    assert names == {plain: None, renamed: "Morning Run", kept: "My name"}
+
+
+def test_workout_targets_are_read_per_step():
+    from trailbook.fitfile import workout_targets
+
+    steps = [
+        {"message_index": 0, "target_type": "power_lap", "custom_target_value_low": 149,
+         "custom_target_value_high": 202},
+        {"message_index": 1, "target_type": "power", "custom_target_value_low": 1250,
+         "custom_target_value_high": 1300},
+        {"message_index": 2, "target_type": "heart_rate", "custom_target_value_low": 134,
+         "custom_target_value_high": 152},
+        {"message_index": 3, "target_type": "heart_rate", "custom_target_value_low": 70,
+         "custom_target_value_high": 80},
+        {"message_index": 4, "target_type": "speed", "custom_target_value_low": 2758,
+         "custom_target_value_high": 2856, "custom_target_speed_low": 2.758,
+         "custom_target_speed_high": 2.856},
+        {"message_index": 5, "target_type": "cadence", "custom_target_value_low": 85,
+         "custom_target_value_high": 90},
+        {"message_index": 6, "target_type": "open"},
+        {"message_index": 7, "target_type": "heart_rate", "target_value": 3},
+    ]  # fmt: skip
+    msgs = {"workout_step_mesgs": steps, "zones_target_mesgs": [{"max_heart_rate": 200}]}
+    t = workout_targets(msgs, on_foot=True)
+    assert t[0] == ("power", 149, 202)
+    assert t[1] == ("power", 250, 300)
+    assert t[2] == ("hr", 134, 152)
+    assert t[3] == ("hr", 140, 160)
+    assert t[4] == ("speed", 2.758, 2.856)
+    assert t[5] == ("cadence", 170, 180)
+    assert 6 not in t and 7 not in t
+
+
+def test_time_in_zones_from_the_session():
+    import json
+
+    from trailbook.fitfile import time_in_zones
+
+    msgs = {"time_in_zone_mesgs": [
+        {"reference_mesg": "session", "time_in_hr_zone": [10.0, 20.0, 30.0, 0, 0, 0, 0],
+         "hr_zone_high_boundary": [95, 112, 131, 151, 168, 187],
+         "time_in_power_zone": [5.0, 6.0, 0, 0, 0, 0, 0],
+         "power_zone_high_boundary": [200, 250, 300, 350, 400, 4000, None]},
+        {"reference_mesg": "lap", "time_in_hr_zone": [99.0]},
+    ]}  # fmt: skip
+    z = json.loads(time_in_zones(msgs))
+    assert z["hr"] == {"times": [10, 20, 30, 0, 0, 0, 0], "bounds": [95, 112, 131, 151, 168, 187]}
+    assert z["power"]["bounds"] == [200, 250, 300, 350, 400, 4000]
+    assert time_in_zones({}) is None
+
+
+def test_device_names_are_readable():
+    from trailbook.fitfile import device_name
+
+    assert device_name("garmin", "fr965") == "Forerunner 965"
+    assert device_name("garmin", "edge_850") == "Edge 850"
+    assert device_name("garmin", "venu3s") == "Venu 3S"
+    assert device_name("garmin", "hrm_dual") == "HRM-Dual"
+    assert device_name("favero_electronics", "assioma_uno") == "Assioma Uno"
+    assert device_name("garmin", 3592) is None

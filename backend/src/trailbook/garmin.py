@@ -4,6 +4,11 @@ Every person connects their own Garmin account with a *personal API key* (self-s
 Garmin Connect; it expires after 30 days to 1 year). The key is exchanged for an access
 token (valid 24 h, no refresh tokens: a new one is requested when needed).
 
+Activities that are already here (imported from a folder) are matched by their start time
+and not downloaded again: only their list entry (title, training effect, body battery…) is
+kept. Activity details (body battery, grade adjusted speed, Garmin's elevation) are fetched
+once per activity, one request each, within the same budget.
+
 Downloads are slow on purpose: one request every few seconds, a limited number of
 downloads per run (the history is filled in over several runs) and a full stop on any
 refusal or server error, so the next scheduled run tries again later. Downloaded files are
@@ -16,6 +21,7 @@ Only the standard library is used (urllib), no extra dependencies.
 
 from __future__ import annotations
 
+import bisect
 import json
 import re
 import sqlite3
@@ -29,11 +35,12 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from . import __version__, importer
+from . import __version__, importer, streams
 
 BASE_URL = "https://personal.connectapi.garmin.com"
 TOKEN_PATH = "/personalapitoken-service/personal-api/personal-api-key/token"
 SEARCH_PATH = "/activitylist-service/activities/search/activities"
+DETAILS_PATH = "/activity-service/activity/{id}/details"
 DOWNLOAD_PATH = "/download-service/files/activity/{id}"
 PROFILE_PATH = "/userprofile-service/userprofile/settings"
 USER_AGENT = f"Trailbook/{__version__} (self-hosted training log)"
@@ -273,10 +280,113 @@ def _set_status(conn: sqlite3.Connection, person_id: str, status: str, error: st
 @dataclass
 class SyncResult:
     downloaded: int = 0
+    matched: int = 0  # already here (e.g. from a folder): list data and title only
     queued_files: int = 0
     errors: int = 0
     stopped: str | None = None  # reason the whole run stopped early
     persons: list[str] = field(default_factory=list)
+
+
+# Fields of the activity list entry kept with the activity (FIT files do not have them).
+SUMMARY_FIELDS = (
+    "activityName", "locationName", "aerobicTrainingEffect", "anaerobicTrainingEffect",
+    "aerobicTrainingEffectMessage", "anaerobicTrainingEffectMessage", "trainingEffectLabel",
+    "activityTrainingLoad", "differenceBodyBattery", "elevationCorrected", "bmrCalories",
+    "moderateIntensityMinutes", "vigorousIntensityMinutes", "waterEstimated", "pr",
+)  # fmt: skip
+# Activity detail metrics → stream channels stored in `connect_streams`.
+DETAIL_CHANNELS = {"directBodyBattery": "body_battery", "directGradeAdjustedSpeed": "gap_speed",
+                   "directElevation": "altitude_connect"}  # fmt: skip
+MATCH_S = 90  # a local activity starting this close to a Connect one is the same activity
+
+
+def _summary(item: dict) -> str:
+    return json.dumps({k: item.get(k) for k in SUMMARY_FIELDS if item.get(k) is not None})
+
+
+def _match_local(conn: sqlite3.Connection, person_id: str, item: dict) -> int | None:
+    """The local activity with the same start (± MATCH_S), e.g. imported from a folder."""
+    start = item.get("startTimeGMT")
+    if not start:
+        return None
+    row = conn.execute(
+        """SELECT id FROM activities WHERE person_id = ?
+               AND ABS(CAST(strftime('%s', start_time_utc) AS INTEGER)
+                       - CAST(strftime('%s', ?) AS INTEGER)) <= ?
+           ORDER BY ABS(CAST(strftime('%s', start_time_utc) AS INTEGER)
+                        - CAST(strftime('%s', ?) AS INTEGER)) LIMIT 1""",
+        (person_id, start, MATCH_S, start),
+    ).fetchone()
+    return row[0] if row else None
+
+
+def _store_matched(conn: sqlite3.Connection, person_id: str, item: dict, local_id: int) -> None:
+    """A Connect activity we already have: keep its list data and its title, no download."""
+    conn.execute(
+        """INSERT OR REPLACE INTO garmin_activities
+               (person_id, activity_id, start_gmt, name, type_key, status, error, fetched_at,
+                summary, trailbook_id)
+           VALUES (?, ?, ?, ?, ?, 'matched', NULL, ?, ?, ?)""",
+        (
+            person_id, int(item["activityId"]), item.get("startTimeGMT"), item.get("activityName"),
+            (item.get("activityType") or {}).get("typeKey"), importer.now_iso(), _summary(item),
+            local_id,
+        ),
+    )  # fmt: skip
+    if item.get("activityName"):
+        conn.execute(
+            "UPDATE activities SET name = ? WHERE id = ? AND name_overridden = 0",
+            (item["activityName"], local_id),
+        )
+
+
+def store_details(conn: sqlite3.Connection, local_id: int, details: dict) -> list[str]:
+    """Extra streams from Garmin's activity details, aligned to the activity's own samples
+    (nearest detail point within 5 s). Corrected elevation only when Garmin corrected it."""
+    a = conn.execute("SELECT start_time_utc FROM activities WHERE id = ?", (local_id,)).fetchone()
+    trow = conn.execute(
+        "SELECT encoding, data FROM streams WHERE activity_id = ? AND channel = 'time'",
+        (local_id,),
+    ).fetchone()
+    if not a or not trow:
+        return []
+    start = datetime.strptime(a[0], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC).timestamp()
+    times = streams.decode(trow[0], trow[1])
+    desc = {d.get("key"): d.get("metricsIndex") for d in details.get("metricDescriptors") or []}
+    ts_i = desc.get("directTimestamp")
+    rows = [m.get("metrics") or [] for m in details.get("activityDetailMetrics") or []]
+    if ts_i is None or not rows:
+        return []
+    pts = sorted((r[ts_i] / 1000 - start, r) for r in rows if len(r) > ts_i and r[ts_i] is not None)
+    keys = [p[0] for p in pts]
+    stored = []
+    for key, channel in DETAIL_CHANNELS.items():
+        idx = desc.get(key)
+        if idx is None:
+            continue
+        values: list[float | None] = []
+        for t in times:
+            if t is None:
+                values.append(None)
+                continue
+            k = bisect.bisect_left(keys, t)
+            best = min(
+                (j for j in (k - 1, k) if 0 <= j < len(keys)),
+                key=lambda j: abs(keys[j] - t),
+                default=None,
+            )
+            v = pts[best][1][idx] if best is not None and abs(keys[best] - t) <= 5 else None
+            values.append(float(v) if isinstance(v, (int, float)) else None)
+        if not any(v is not None for v in values):
+            continue
+        encoding, blob = streams.encode(values, "f32")
+        conn.execute(
+            """INSERT OR REPLACE INTO connect_streams (activity_id, channel, encoding, length, data)
+               VALUES (?, ?, ?, ?, ?)""",
+            (local_id, channel, encoding, len(values), blob),
+        )
+        stored.append(channel)
+    return stored
 
 
 def _known(conn: sqlite3.Connection, person_id: str, ids: list[int]) -> set[int]:
@@ -308,13 +418,13 @@ def _store_download(
     conn.execute(
         """INSERT OR REPLACE INTO garmin_activities
                (person_id, activity_id, start_gmt, name, type_key, status, file_rel, error,
-                fetched_at)
-           VALUES (?, ?, ?, ?, ?, 'downloaded', ?, NULL, ?)""",
+                fetched_at, summary)
+           VALUES (?, ?, ?, ?, ?, 'downloaded', ?, NULL, ?, ?)""",
         (
             person_id, activity_id, item.get("startTimeGMT"), item.get("activityName"),
             (item.get("activityType") or {}).get("typeKey"),
             importer.UPLOADS_PREFIX + target.relative_to(uploads_dir).as_posix(),
-            importer.now_iso(),
+            importer.now_iso(), _summary(item),
         ),
     )  # fmt: skip
     return queued
@@ -353,6 +463,11 @@ def sync_person(
         known = _known(conn, pid, [int(i["activityId"]) for i in unknown])
         for item in unknown:
             if int(item["activityId"]) in known:
+                continue
+            local = _match_local(conn, pid, item)
+            if local is not None:  # already here (e.g. from a folder): list data only
+                _store_matched(conn, pid, item, local)
+                result.matched += 1
                 continue
             if done >= budget:
                 return False
@@ -417,6 +532,13 @@ def sync_person(
             result.stopped = str(exc)
         result.errors += 1
         return done
+    try:
+        done += _fetch_details(conn, client, pid, budget - done)
+    except GarminError as exc:
+        _save_token(conn, pid, client)
+        _set_status(conn, pid, "error", str(exc))
+        result.errors += 1
+        return done
     _save_token(conn, pid, client)
     conn.execute(
         """UPDATE garmin_accounts SET status = 'ok', last_error = NULL, last_sync_at = ?
@@ -424,6 +546,40 @@ def sync_person(
         (importer.now_iso(), pid),
     )
     return done
+
+
+def _fetch_details(conn: sqlite3.Connection, client: Client, pid: str, budget: int) -> int:
+    """Activity details (body battery, grade adjusted speed, Garmin's elevation) for linked
+    activities that do not have them yet, newest first, one request each."""
+    # downloads get their local id once imported (same file)
+    conn.execute(
+        """UPDATE garmin_activities SET trailbook_id = (
+               SELECT f.activity_id FROM files f
+               WHERE f.person_id = garmin_activities.person_id
+                 AND f.rel_path = garmin_activities.file_rel)
+           WHERE person_id = ? AND trailbook_id IS NULL AND file_rel IS NOT NULL""",
+        (pid,),
+    )
+    todo = conn.execute(
+        """SELECT activity_id, trailbook_id FROM garmin_activities
+           WHERE person_id = ? AND trailbook_id IS NOT NULL AND details_at IS NULL
+           ORDER BY start_gmt DESC LIMIT ?""",
+        (pid, max(0, budget)),
+    ).fetchall()
+    n = 0
+    for gid, local in todo:
+        try:
+            body = client.get(DETAILS_PATH.format(id=gid), {"maxChartSize": 4000})
+            store_details(conn, local, json.loads(body or b"{}"))
+        except GarminError as exc:
+            if exc.stop_run:
+                raise
+        conn.execute(
+            "UPDATE garmin_activities SET details_at = ? WHERE person_id = ? AND activity_id = ?",
+            (importer.now_iso(), pid, gid),
+        )
+        n += 1
+    return n
 
 
 def sync_all(
@@ -446,6 +602,78 @@ def sync_all(
         result.persons.append(row["person_id"])
         sync_person(conn, row, uploads_dir, result, budget, progress, **client_kwargs)
     return result
+
+
+# History estimate: without real data assume 5 years with an activity every 3 days.
+TYPICAL_HISTORY_DAYS = 5 * 365
+TYPICAL_DAYS_PER_ACTIVITY = 3
+# One run: every download and a few list pages, one request every REQUEST_GAP_S.
+RUN_S = (MAX_DOWNLOADS_PER_RUN + 5) * REQUEST_GAP_S
+
+
+def _day(value: str | None):
+    try:
+        return datetime.strptime(str(value)[:10], "%Y-%m-%d").date()
+    except (TypeError, ValueError):
+        return None
+
+
+def _remaining(conn: sqlite3.Connection, row: sqlite3.Row | None, today) -> tuple[int, str]:
+    """(activities still to download, basis) for one account, or a new one when row is None.
+
+    The pace is measured from what was downloaded once it covers at least 30 days and 10
+    activities; otherwise one activity every 3 days. The history ends at *Download from* or,
+    when that is empty, 5 years back.
+    """
+    if row is not None and row["backfill_done"]:
+        return 0, "measured"
+    start = (_day(row["history_from"]) if row is not None else None) or (
+        today - timedelta(days=TYPICAL_HISTORY_DAYS)
+    )
+    rate, basis, oldest = 1 / TYPICAL_DAYS_PER_ACTIVITY, "typical", today
+    if row is not None:
+        got = conn.execute(
+            """SELECT COUNT(*) AS n, MIN(start_gmt) AS oldest FROM garmin_activities
+               WHERE person_id = ? AND status = 'downloaded'""",
+            (row["person_id"],),
+        ).fetchone()
+        first = _day(got["oldest"])
+        if first is not None:
+            oldest = min(first, today)
+            span = (today - oldest).days
+            if span >= 30 and got["n"] >= 10:
+                rate, basis = got["n"] / span, "measured"
+    return max(0, round((oldest - start).days * rate)), basis
+
+
+def history_estimate(conn: sqlite3.Connection, interval_min: int) -> dict:
+    """Rough time until the history of every connected person is downloaded.
+
+    The budget of MAX_DOWNLOADS_PER_RUN downloads per run is shared by all people; runs follow
+    each other `interval_min` after the end of the previous one (0 = only *Download now*).
+    `typical` is the same estimate for a person who has not connected yet.
+    """
+    today = datetime.now(UTC).date()
+
+    def timing(remaining: int) -> dict:
+        runs = -(-remaining // MAX_DOWNLOADS_PER_RUN)
+        seconds = runs * RUN_S + max(0, runs - 1) * interval_min * 60 if interval_min else None
+        return {"remaining": remaining, "runs": runs, "seconds": seconds}
+
+    persons = {}
+    for row in conn.execute("SELECT * FROM garmin_accounts WHERE status != 'auth_error'"):
+        remaining, basis = _remaining(conn, row, today)
+        persons[row["person_id"]] = {"remaining": remaining, "basis": basis}
+    total = sum(p["remaining"] for p in persons.values())
+    typical, _ = _remaining(conn, None, today)
+    return {
+        **timing(total),
+        "persons": persons,
+        "typical": timing(typical),
+        "per_run": MAX_DOWNLOADS_PER_RUN,
+        "request_gap_s": REQUEST_GAP_S,
+        "interval_min": interval_min,
+    }
 
 
 def accounts(conn: sqlite3.Connection) -> dict[str, dict]:

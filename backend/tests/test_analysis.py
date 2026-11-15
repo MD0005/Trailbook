@@ -118,7 +118,9 @@ def test_backfill_computes_load_and_efforts(tdb):
     rows = c.execute("SELECT activity_type, load, load_method FROM activities").fetchall()
     assert all(r["load_method"] == "hr" and r["load"] > 0 for r in rows)
     kinds = {r[0] for r in c.execute("SELECT DISTINCT kind FROM best_efforts")}
-    assert kinds == {"hr", "pace", "power"}
+    assert kinds == {"hr", "pace", "power", "ride"}
+    # every effort knows where it happened
+    assert c.execute("SELECT COUNT(*) FROM best_efforts WHERE end_s <= start_s").fetchone()[0] == 0
     five_k = c.execute(
         "SELECT MIN(value) FROM best_efforts WHERE kind = 'pace' AND key = 5000"
     ).fetchone()[0]
@@ -173,3 +175,64 @@ def test_training_api(tdb):
 
         detail = client.get("/api/activities/1").json()
         assert detail["best_efforts"] and "load" in detail
+        assert all("record" in e and "start_s" in e for e in detail["best_efforts"])
+        recs = client.get("/api/activities/1/records?range=all").json()["records"]
+        assert any(r["kind"] == "pace" and r["key"] == 5000 for r in recs)
+        assert client.get("/api/activities/1/records?range=30d").status_code == 200
+        assert client.get("/api/activities/1/records?range=bad").status_code == 400
+
+
+# ---- thresholds: set in Settings > watch > estimate ------------------------------------------
+
+
+def test_thresholds_priority_set_watch_estimate():
+    rows = [{"valid_from": "2026-01-01", **dict.fromkeys(analysis.THRESHOLD_FIELDS), "ftp": 250}]
+    watch = {"hr_max": 190, "hr_rest": 47, "ftp": 200, "lthr": None}
+    th = analysis.thresholds_for(rows, "2026-02-01", auto_max=200, watch=watch)
+    assert (th.ftp, th.sources["ftp"]) == (250, "set")  # own value replaces the watch
+    assert (th.hr_max, th.sources["hr_max"]) == (190, "watch")  # watch beats the estimate
+    assert (th.hr_rest, th.sources["hr_rest"]) == (47, "watch")
+    assert th.sources["lthr"] == "auto"  # not on the watch: estimated from HR max
+    assert th.lthr == round(190 * analysis.LTHR_SHARE_OF_MAX)
+
+
+def test_watch_on_takes_latest_value_before_the_day():
+    history = [
+        ("2026-01-10", {"hr_max": 185, "ftp": None}),
+        ("2026-03-01", {"hr_max": 190, "ftp": 210}),
+    ]
+    assert analysis.watch_on(history, "2026-02-01") == ({"hr_max": 185, "ftp": 210}, "2026-01-10")
+    assert analysis.watch_on(history, "2026-04-01")[0] == {"hr_max": 190, "ftp": 210}
+    assert analysis.watch_on(history, "2025-12-01") == ({"hr_max": 185, "ftp": 210}, None)
+
+
+def test_threshold_warnings_missing_accepted_and_stale(tdb):
+    from starlette.testclient import TestClient
+
+    from trailbook import api
+
+    path, c = tdb
+    analysis.backfill(c)
+    # No watch values: HR max from recorded HR and resting HR default are warnings.
+    w = analysis.threshold_warnings(c, "anna")
+    assert {x["field"] for x in w if x["kind"] == "missing"} == {"hr_max", "hr_rest"}
+    assert analysis.threshold_warnings(c, "anna", accepted={"hr_max", "hr_rest"}) == []
+    # Watch values only from two years later: the 2026 activities borrow them.
+    c.execute(
+        "UPDATE activities SET watch_hr_max = 190, watch_hr_rest = 48"
+        " WHERE start_time_utc > '2026-02'"
+    )
+    c.execute("UPDATE activities SET start_time_utc = '2028-02-01T08:00:00Z' WHERE watch_hr_max")
+    w = analysis.threshold_warnings(c, "anna")
+    assert w == [{"kind": "stale", "year": "2026", "from": "2028-02-01"}]
+
+    with TestClient(api.create_app(path)) as client:
+        assert client.put("/api/thresholds/anna/accept", json={"field": "ftp"}).status_code == 400
+        r = client.put("/api/thresholds/anna/accept", json={"field": "hr_rest"}).json()
+        assert r["accepted"] == ["hr_rest"]
+        f = client.get("/api/fitness?person=anna&to=2026-12-31").json()
+        assert [x["kind"] for x in f["warnings"]] == ["stale"]
+        r = client.put(
+            "/api/thresholds/anna/accept", json={"field": "hr_rest", "accepted": False}
+        ).json()
+        assert r["accepted"] == []

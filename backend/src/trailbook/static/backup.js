@@ -51,33 +51,27 @@ async function settingsBackup(el) {
 
   el.innerHTML = `
     <div class="card">
-      <h3>Export</h3>
-      ${hint("One ZIP with everything needed to move Trailbook to another device: the database (activities, people, settings, thresholds) and the FIT files. It is written in the background with low priority.")}
+      <h3>Export <span class="title-note">(to move Trailbook to another device)</span></h3>
       <div class="check-list">
-        <label><input type="checkbox" name="exp-files" checked> Include FIT files <span class="hint">— needed to move to another device; without them the archive holds only the database</span></label>
-        <label><input type="checkbox" name="exp-secrets"> Include Garmin API keys <span class="hint">— otherwise each person enters their key again after a restore; keep such an archive private</span></label>
+        <label><input type="checkbox" name="exp-files" checked> Include FIT files </label>
+        <label><input type="checkbox" name="exp-secrets"> Include Garmin API keys <span class="hint">— keep such a ZIP private</span></label>
       </div>
       <div class="card-row" style="margin-top:12px">
         <button class="primary" data-export ${busy ? "disabled" : ""}>Create export</button>
         <span data-export-state>${backupJobState(s.export, "export", s.running === "export")}</span>
       </div>
-      ${hint(`Saved in <code>${esc(s.exports_dir)}</code>.`)}
     </div>
 
     <div class="card">
-      <h3>Exports</h3>
+      <h3>Exports <span class="title-note">(${esc(s.exports_dir)})</span></h3>
       ${rows ? `<div class="scroll"><table class="data exports"><thead><tr><th>File</th><th>Created</th><th class="num">Size</th><th>Contents</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`
         : hint("No exports yet.")}
     </div>
 
     <div class="card">
       <h3>Restore from an export</h3>
-      ${hint("Upload an export made by Trailbook (on this or another device). The FIT files are restored into the folder below, then the database is replaced and the files are checked. An export from an older version is upgraded; one from a newer version is refused.")}
-      <div class="restore-form">
-        <label>Export file<input type="file" name="restore-file" accept=".zip"></label>
-        <label>Folder for the FIT files<input type="text" name="restore-root" value="${esc(s.default_root)}"></label>
-      </div>
-      ${s.empty ? "" : `<div class="note warn-note"><label><input type="checkbox" name="restore-confirm"><span><b>Replace all data in this install.</b> Activities, people and settings here are overwritten by the export. This cannot be undone — create an export first if you may need them.</span></label></div>`}
+      <div class="upload-row">${filePicker("restore-file", ".zip")}</div>
+      ${s.empty ? "" : `<div class="check-list"><label><input type="checkbox" name="restore-confirm"> Replace all data in this install <span class="hint">— cannot be undone</span></label></div>`}
       <div class="card-row" style="margin-top:12px">
         <button class="primary" data-restore ${busy ? "disabled" : ""}>Restore</button>
         <span data-restore-state>${backupJobState(s.restore, "restore", s.running === "restore")}</span>
@@ -100,8 +94,6 @@ async function settingsBackup(el) {
   const confirmed = () => s.empty || el.querySelector("[name=restore-confirm]").checked;
   const startRestore = async (query, body) => {
     const q = new URLSearchParams(query);
-    const root = el.querySelector("[name=restore-root]").value.trim();
-    if (root) q.set("root", root);
     if (!s.empty) q.set("confirm", "1");
     out("[data-restore-state]", state(body ? `Uploading ${fmtSize(body.size)}…` : "Starting…", "warn"));
     try {
@@ -119,7 +111,7 @@ async function settingsBackup(el) {
   el.querySelectorAll("[data-restore-name]").forEach((b) => b.onclick = () => {
     if (!confirmed()) {
       out("[data-restore-state]", state("Tick “Replace all data in this install” first", "warn"));
-      el.querySelector("[name=restore-confirm]").closest(".note").scrollIntoView({ block: "center" });
+      el.querySelector("[name=restore-confirm]").closest("label").scrollIntoView({ block: "center" });
       return;
     }
     startRestore({ name: b.dataset.restoreName });
