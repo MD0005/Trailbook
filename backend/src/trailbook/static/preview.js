@@ -1060,17 +1060,17 @@ function renderSettingsPanel() {
   const styleLabel = { density: "Density", coverage: "Coverage", glow: "Heat glow" }[H.style];
   const mapBody = row("Base map", pickList("map.source", [...(BASEMAPS || []).map((b) => [b.key, b.label]), ["none", "None"]], M.source))
     + row("Colours", pickList("map.tone", BASE_TONES.map(([k, l]) => [k, l]), M.tone));
-  const heatBody = row("Style", selectCtl("heatmap.style", [["density", "Density — overlaps get stronger"], ["coverage", "Coverage — solid lines"], ["glow", "Heat glow — colour gradient"]], H.style))
+  const heatBody = row("Style", pickList("heatmap.style", [["density", "Density — overlaps get stronger"], ["coverage", "Coverage — solid lines"], ["glow", "Heat glow — colour gradient"]], H.style))
     + row("Line colour", colorPicker("heatmap.color", H.color))
     + (heat.isAll ? row("People", checkCtl("heatmap.perPerson", H.perPerson, "A colour per person")) : "")
     + row("Gradient", rampPicker("heatmap.ramp", H.ramp))
     + row("Line width", `<input type="range" min="1" max="6" step="0.5" value="${H.width}" name="heatmap.width">`)
     + row("Overlap", `<input type="range" min="0.1" max="0.9" step="0.05" value="${H.intensity}" name="heatmap.intensity">`);
-  const tilesBody = row("Tile size", selectCtl("tiles.zoom", TILE_SIZES.map(([z, l]) => [z, `${l} · ${num(tileWidthKm(z, lat), z >= 16 ? 2 : 1)} km`]), T.zoom))
-    + row("Style", selectCtl("tiles.style", [["coverage", "Coverage"], ["heat", "By number of visits"]], T.style))
+  const tilesBody = row("Tile size", pickList("tiles.zoom", TILE_SIZES.map(([z, l]) => [z, `${l} · ${num(tileWidthKm(z, lat), z >= 16 ? 2 : 1)} km`]), T.zoom))
+    + row("Style", pickList("tiles.style", [["coverage", "Coverage"], ["heat", "By number of visits"]], T.style))
     + row("Tile colour", colorPicker("tiles.color", T.color))
     + row("Gradient", rampPicker("tiles.ramp", T.ramp))
-    + row("Display", selectCtl("tiles.display", [["grid", "Single tiles"], ["area", "One area"]], T.display))
+    + row("Display", pickList("tiles.display", [["grid", "Single tiles"], ["area", "One area"]], T.display))
     + row("Highlights", `<div class="checks">${checkCtl("tiles.square", T.square, "Max square", "Largest square made only of visited tiles")}
         ${checkCtl("tiles.cluster", T.cluster, "Cluster", "Largest connected group of tiles with visited tiles on all four sides")}
         ${checkCtl("tiles.routes", T.routes, "Routes")}</div>`);
@@ -1110,7 +1110,7 @@ function bindSettingsPanel(el) {
   });
   el.querySelectorAll("[data-pick]").forEach((b) => b.onclick = () => {
     const name = b.dataset.pick;
-    set(name, b.dataset.value);
+    set(name, name === "tiles.zoom" ? Number(b.dataset.value) : b.dataset.value);
     el.querySelectorAll(`[data-pick="${name}"]`).forEach((x) => {
       x.classList.toggle("on", x === b);
       x.setAttribute("aria-checked", String(x === b));
