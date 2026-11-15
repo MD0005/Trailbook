@@ -922,7 +922,8 @@ function bindBadges(root) {
   };
 }
 // Compact option rows: label on the left, control on the right.
-const row = (label, control) => `<div class="opt-row"><span class="opt-label">${label}</span><div class="opt-control">${control}</div></div>`;
+// `na`: a reason when the option does not apply to the current choice (shown greyed out).
+const row = (label, control, na = "") => `<div class="opt-row ${na ? "na" : ""}" ${na ? `title="${esc(na)}"` : ""}><span class="opt-label">${label}</span><div class="opt-control">${control}</div></div>`;
 const selectCtl = (name, options, current) => `<select name="${name}">${options.map(([v, l]) =>
   `<option value="${esc(v)}" ${String(v) === String(current) ? "selected" : ""}>${esc(l)}</option>`).join("")}</select>`;
 const segCtl = (name, options, current) => `<div class="seg">${options.map(([v, l]) =>
@@ -1058,18 +1059,19 @@ function renderSettingsPanel() {
   const toneLabel = (BASE_TONES.find(([k]) => k === M.tone) || BASE_TONES[0])[1];
   const sizeLabel = (TILE_SIZES.find(([z]) => z === T.zoom) || TILE_SIZES[1])[1];
   const styleLabel = { density: "Density", coverage: "Coverage", glow: "Heat glow" }[H.style];
+  const glow = H.style === "glow", byVisits = T.style === "heat";
   const mapBody = row("Base map", pickList("map.source", [...(BASEMAPS || []).map((b) => [b.key, b.label]), ["none", "None"]], M.source))
     + row("Colours", pickList("map.tone", BASE_TONES.map(([k, l]) => [k, l]), M.tone));
   const heatBody = row("Style", pickList("heatmap.style", [["density", "Density — overlaps get stronger"], ["coverage", "Coverage — solid lines"], ["glow", "Heat glow — colour gradient"]], H.style))
-    + row("Line colour", colorPicker("heatmap.color", H.color))
-    + (heat.isAll ? row("People", checkCtl("heatmap.perPerson", H.perPerson, "A colour per person")) : "")
-    + row("Gradient", rampPicker("heatmap.ramp", H.ramp))
+    + row("Line colour", colorPicker("heatmap.color", H.color), glow ? "Not used by Heat glow — it uses the gradient" : "")
+    + (heat.isAll ? row("People", checkCtl("heatmap.perPerson", H.perPerson, "A colour per person"), glow ? "Not used by Heat glow" : "") : "")
+    + row("Gradient", rampPicker("heatmap.ramp", H.ramp), glow ? "" : "Used only by Heat glow")
     + row("Line width", `<input type="range" min="1" max="6" step="0.5" value="${H.width}" name="heatmap.width">`)
     + row("Overlap", `<input type="range" min="0.1" max="0.9" step="0.05" value="${H.intensity}" name="heatmap.intensity">`);
   const tilesBody = row("Tile size", pickList("tiles.zoom", TILE_SIZES.map(([z, l]) => [z, `${l} · ${num(tileWidthKm(z, lat), z >= 16 ? 2 : 1)} km`]), T.zoom))
     + row("Style", pickList("tiles.style", [["coverage", "Coverage"], ["heat", "By number of visits"]], T.style))
-    + row("Tile colour", colorPicker("tiles.color", T.color))
-    + row("Gradient", rampPicker("tiles.ramp", T.ramp))
+    + row("Tile colour", colorPicker("tiles.color", T.color), byVisits ? "Not used by “By number of visits” — it uses the gradient" : "")
+    + row("Gradient", rampPicker("tiles.ramp", T.ramp), byVisits ? "" : "Used only by “By number of visits”")
     + row("Display", pickList("tiles.display", [["grid", "Single tiles"], ["area", "One area"]], T.display))
     + row("Highlights", `<div class="checks">${checkCtl("tiles.square", T.square, "Max square", "Largest square made only of visited tiles")}
         ${checkCtl("tiles.cluster", T.cluster, "Cluster", "Largest connected group of tiles with visited tiles on all four sides")}

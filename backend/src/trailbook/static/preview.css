@@ -655,3 +655,8 @@ svg.seg-trend { display: block; width: 100%; height: auto; }
 .opt-row:has(.ramp-pick) .opt-label { padding-top: 1px; }
 .opt-row:has(.pick-list) { align-items: start; }
 .opt-row:has(.pick-list) .opt-label { padding-top: 5px; }
+
+/* An option that does not apply to the current style: greyed out, still changeable */
+.opt-row.na .opt-label { color: var(--muted); opacity: .6; }
+.opt-row.na .opt-control { opacity: .35; filter: grayscale(1); }
+.opt-row.na .opt-control:hover { opacity: .6; }
