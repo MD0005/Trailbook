@@ -116,121 +116,328 @@ async function renderSegments(params) {
 
 // ---- detail -------------------------------------------------------------------------------
 
-function trendChart(rows, kind) {
-  const vals = rows.flatMap((r) => [r.best_s, r.avg_s]).filter((v) => v != null);
-  if (!vals.length) return hint(kind === "weeks" ? "No efforts in the last 12 weeks." : "No efforts in the last 12 months.");
-  const W = 1000, H = 230, P = { l: 56, r: 12, t: 14, b: 28 };
-  let lo = Math.min(...vals), hi = Math.max(...vals);
-  const pad = Math.max(5, (hi - lo) * 0.12);
-  lo -= pad; hi += pad;
-  const y = (v) => P.t + ((v - lo) / (hi - lo)) * (H - P.t - P.b); // faster = higher
-  const step = (W - P.l - P.r) / rows.length;
-  const x = (i) => P.l + (i + 0.5) * step;
-  const maxCount = Math.max(1, ...rows.map((r) => r.count));
-  const bars = rows.map((r, i) => (r.count ? `<rect x="${(x(i) - step * 0.3).toFixed(1)}" width="${(step * 0.6).toFixed(1)}" y="${(H - P.b - (r.count / maxCount) * 30).toFixed(1)}" height="${((r.count / maxCount) * 30).toFixed(1)}" class="seg-count"><title>${r.count} effort(s)</title></rect>` : "")).join("");
-  let line = "", prev = false;
-  rows.forEach((r, i) => {
-    if (r.avg_s == null) { prev = false; return; }
-    line += `${prev ? "L" : "M"}${x(i).toFixed(1)},${y(r.avg_s).toFixed(1)}`;
-    prev = true;
+let SEGMENT_CHART = null; // trend chart group of the page (destroyed on the next render)
+
+// Trend: every effort's time over the Time filter (chart standard, docs/CHARTS.md). Faster is higher.
+function segmentTrend(root, series) {
+  SEGMENT_CHART?.destroy();
+  SEGMENT_CHART = null;
+  if (!root || series.length < 2) return;
+  const x = series.map((e) => Date.parse(e.start_time_utc) / 1000 + (e.utc_offset_s || 0));
+  const v = series.map((e) => e.elapsed_s);
+  const avg = v.reduce((p, q) => p + q, 0) / v.length;
+  SEGMENT_CHART = chartGroup(root, {
+    x: { date: x }, kind: "date",
+    series: [{
+      key: "time", label: "Time", title: "Trend", icon: "elapsed_time", unit: "m:ss", values: v, fmt: mmss, points: true, fill: false,
+      invert: true, color: cssAccent(), tip: "The time of every effort in the chosen period. Faster is higher.",
+      stats: [["Best", mmss(Math.min(...v)), "min", "Fastest time in the period"],
+        ["Avg", mmss(avg), avg, "Average time in the period"],
+        ["Last", mmss(v[v.length - 1]), { ranges: [[v.length - 1, v.length - 1]] }, "The latest effort"]],
+    }],
   });
-  const dots = rows.map((r, i) => (r.best_s == null ? "" : `<circle cx="${x(i).toFixed(1)}" cy="${y(r.best_s).toFixed(1)}" r="5" class="seg-best"><title>${r.period}: best ${mmss(r.best_s)}, average ${mmss(r.avg_s)}, ${r.count} effort(s)</title></circle>`)).join("");
-  const ticks = [lo + pad, (lo + hi) / 2, hi - pad].map((v) => `<line x1="${P.l}" x2="${W - P.r}" y1="${y(v).toFixed(1)}" y2="${y(v).toFixed(1)}" class="grid"/><text x="${P.l - 8}" y="${(y(v) + 4).toFixed(1)}" class="ax" text-anchor="end">${mmss(v)}</text>`).join("");
-  const label = (r) => (kind === "weeks" ? `${MONTHS[+r.period.slice(5, 7) - 1].slice(0, 3)} ${+r.period.slice(8)}` : `${MONTHS[+r.period.slice(5, 7) - 1].slice(0, 3)}${r.period.slice(5, 7) === "01" ? " " + r.period.slice(2, 4) : ""}`);
-  const labels = rows.map((r, i) => `<text x="${x(i).toFixed(1)}" y="${H - 8}" class="ax" text-anchor="middle">${label(r)}</text>`).join("");
-  return `<svg class="fit-chart seg-trend" viewBox="0 0 ${W} ${H}">${ticks}${bars}<path d="${line}" class="seg-avg"/>${dots}${labels}</svg>
-    <div class="legend"><span><i class="seg-best-dot"></i>Best</span><span><i class="seg-avg-line"></i>Average</span><span><i class="seg-count-box"></i>Efforts</span><span class="hint">Faster is higher.</span></div>`;
 }
 
-function effortTable(rows, group, { rank = true } = {}) {
-  const isAll = CURRENT === "all";
-  return `<div class="scroll"><table class="data"><thead><tr>${rank ? "<th>#</th>" : ""}<th>Date</th>${isAll ? "<th>Person</th>" : ""}
-      <th class="num">Time</th><th class="num">${ON_FOOT.has(group) ? "Pace" : "Speed"}</th><th class="num">Avg HR</th><th class="num">Max HR</th>
-      <th class="num">Power</th><th>Activity</th></tr></thead><tbody data-rows>${rows.map((e) => effortRow(e, group, rank)).join("")}</tbody></table></div>`;
+// ---- weather of an effort: did it help? -------------------------------------------------
+//
+// The weather is the activity's (Open-Meteo, hourly, for the area: see weather.py). Wind
+// counts most: its component along the segment in the riding direction, averaged over the
+// length (each piece of the route weighted by its length), so a loop or an out-and-back
+// cancels out by itself. Positive = tailwind. Model wind at 10 m, km/h.
+function segWindAlong(polyline, reverse, w) {
+  if (w?.wind_speed == null || w.wind_dir == null || !polyline) return null;
+  let pts = decodePolyline(polyline);
+  if (reverse) pts = pts.slice().reverse();
+  const to = ((w.wind_dir + 180) * Math.PI) / 180; // where the wind blows to (bearing)
+  const wx = Math.sin(to), wy = Math.cos(to);
+  let along = 0, total = 0, both = 0;
+  for (let i = 1; i < pts.length; i++) {
+    const [la0, lo0] = pts[i - 1], [la1, lo1] = pts[i];
+    const dx = (lo1 - lo0) * Math.cos((la0 * Math.PI) / 180), dy = la1 - la0;
+    const len = Math.hypot(dx, dy);
+    if (!len) continue;
+    const a = dx * wx + dy * wy; // = len * cos(angle between the route and the wind)
+    along += a;
+    both += Math.abs(a);
+    total += len;
+  }
+  if (!total) return null;
+  // mixed: 0 when the whole segment runs one way to the wind, 1 when tail and head parts
+  // cancel out (a loop, out and back)
+  return { tail: (w.wind_speed * along) / total, mixed: both ? 1 - Math.abs(along) / both : 0 };
 }
-function effortRow(e, group, rank = true) {
-  return `<tr>${rank ? `<td>${e.rank ?? ""}</td>` : ""}<td>${localTime(e)}</td>
+// Weights per sport (docs/MANUAL.md, "Weather help"). Rides: wind counts fully, comfortable
+// 12–24 °C. Runs: about a third of the wind (lower speed, so less drag from it), cooler is
+// better (8–18 °C), heat costs more, rain less. Other sports and indoor or virtual
+// activities (trainer, Zwift, treadmill) get no verdict: the model weather is not theirs.
+const HELP_PROFILES = {
+  ride: { label: "riding", wind: 1, loop: 0.1, loopMax: 3, lo: 12, cold: 0.5, hi: 24, heat: 0.6, tempMax: 8,
+          rain: -3, rainHeavy: -5, snow: -5, storm: -4 },
+  run: { label: "running", wind: 0.35, loop: 0.035, loopMax: 1, lo: 8, cold: 0.3, hi: 18, heat: 0.8, tempMax: 10,
+         rain: -1, rainHeavy: -2, snow: -3, storm: -2 },
+};
+function helpProfile(activityType) {
+  const t = typeOf(activityType);
+  return !t || t.indoor ? null : HELP_PROFILES[t.group] || null;
+}
+const isIndoor = (activityType) => Boolean(typeOf(activityType)?.indoor);
+const isSnow = (code) => (code >= 71 && code <= 77) || code === 85 || code === 86;
+// The verdict in points (1 point ≈ 1 km/h of tailwind on a bike): wind along the route first,
+// a small cost for wind both ways (a loop is not quite neutral: headwind parts take longer
+// than tailwind parts save), then temperature and rain or snow. Returns { score, level
+// (-3..3), tip } with the breakdown of this case, or null without weather or a profile.
+const HELP_WORDS = { 3: "Helped a lot", 2: "Helped", 1: "Helped a little", 0: "About neutral",
+  "-1": "Held back a little", "-2": "Held back", "-3": "Held back a lot" };
+const signed = (v) => `${v >= 0.5 ? "+" : v <= -0.5 ? "−" : "±"}${num(Math.abs(v))}`;
+function weatherHelp(polyline, reverse, w, prof, what = "segment") {
+  if (!w || w.temp == null || !prof) return null;
+  const along = segWindAlong(polyline, reverse, w), tail = along?.tail ?? null;
+  const windTerm = (tail ?? 0) * prof.wind;
+  const loopTerm = along ? -Math.min(prof.loopMax, prof.loop * (w.wind_speed || 0) * along.mixed) : 0;
+  const t = w.temp, code = w.code ?? 0, wet = w.precip ?? 0;
+  const tempTerm = t < prof.lo ? -Math.min(prof.tempMax, (prof.lo - t) * prof.cold) : t > prof.hi ? -Math.min(prof.tempMax, (t - prof.hi) * prof.heat) : 0;
+  const wetTerm = isSnow(code) ? prof.snow : code >= 95 ? prof.storm : wet >= 3 ? prof.rainHeavy : wet >= 0.5 ? prof.rain : 0;
+  const score = windTerm + loopTerm + tempTerm + wetTerm;
+  const level = score >= 10 ? 3 : score >= 4 ? 2 : score >= 1.5 ? 1 : score > -1.5 ? 0 : score > -4 ? -1 : score > -10 ? -2 : -3;
+  const from = w.wind_dir != null ? COMPASS[Math.round(w.wind_dir / 45) % 8] : "";
+  const weight = prof.wind !== 1 ? ` (× ${num(prof.wind, 2)} for ${prof.label})` : "";
+  const windLine = tail == null ? "Wind: no data → ±0"
+    : `Wind: ${Math.abs(tail) < 3 ? "about neutral" : tail > 0 ? "tailwind" : "headwind"} ${num(Math.abs(tail))} km/h along the ${what} (${num(w.wind_speed)} km/h from the ${from})${weight} → ${signed(windTerm)}`;
+  const loopLine = loopTerm <= -0.5 ? `\nWind both ways (${num(along.mixed * 100)} % of the ${what} cancels out): headwind costs more than tailwind gives → ${signed(loopTerm)}` : "";
+  const tempLine = `Temperature: ${num(t)} °C${tempTerm ? (t < prof.lo ? ", cold" : ", hot") : ", comfortable"} for ${prof.label} (${prof.lo}–${prof.hi} °C) → ${signed(tempTerm)}`;
+  const wetLine = `${isSnow(code) ? "Snow" : code >= 95 ? "Thunderstorm" : "Rain"}: ${wet ? `${num(wet, 1)} mm` : "dry"} → ${signed(wetTerm)}`;
+  const tip = `${HELP_WORDS[level]} (${signed(score)})\n\n${windLine}${loopLine}\n${tempLine}\n${wetLine}\n\nPoints: 1 ≈ 1 km/h of tailwind on a bike. Hourly model weather for the area.`;
+  return { score, level, tip };
+}
+const parseWx = (e) => {
+  if (!e.weather) return undefined; // not looked up yet
+  try { const w = typeof e.weather === "string" ? JSON.parse(e.weather) : e.weather; return w?.points ? w : null; } catch { return null; }
+};
+// Diverging meter: from the middle axis to the right when the weather helped, to the left when
+// it held back (full half at 15 points); square at the axis, rounded at the end; the
+// breakdown on hover.
+function helpMeter(h) {
+  const f = Math.max(-1, Math.min(1, h.score / 15)), w = Math.max(Math.abs(f) * 50, 3);
+  // the bar covers the 1 px axis column, so it sits flush on the axis on either side
+  const pos = f >= 0 ? `left:50%;width:${w}%` : `right:calc(50% - 1px);width:calc(${w}% + 1px)`;
+  return `<span class="wx-meter l${h.level}" data-tip="${esc(h.tip)}" aria-label="${esc(h.tip.split("\n")[0])}"><b></b><i class="${f >= 0 ? "pos" : "neg"}" style="${pos}"></i></span>`;
+}
+// Weather cell: sky icon, temperature, wind arrow (where it blows) and speed, then the meter
+// (rides and runs outdoors only). Indoor and virtual activities: no weather at all.
+function weatherCell(w, polyline, reverse, activityType) {
+  if (isIndoor(activityType)) return ""; // indoor or virtual: outdoor weather does not apply
+  if (!w) return `<span class="hint">–</span>`;
+  const sky = WMO.find(([max]) => (w.code ?? 0) <= max) || WMO[WMO.length - 1];
+  const help = weatherHelp(polyline, reverse, w, helpProfile(activityType));
+  return `<span class="seg-wx"><svg class="seg-wx-sky" viewBox="0 0 24 24" fill="none" aria-label="${sky[1]}"><title>${sky[1]}</title>${SKY_SVG[sky[2]]}</svg>
+    <span class="seg-wx-temp">${num(w.temp)} °C</span>${w.wind_speed != null ? `<span class="seg-wx-wind"><svg viewBox="0 0 24 24" style="transform:rotate(${(w.wind_dir ?? 0) + 180}deg)"><path d="M12 3v16M12 3l-4.5 5M12 3l4.5 5" stroke="currentColor" stroke-width="2.4" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>${num(w.wind_speed)} km/h</span>` : `<span class="seg-wx-wind"></span>`}
+    ${help ? helpMeter(help) : ""}</span>`;
+}
+// The meter for a whole activity (under the weather widget on its route map), or "".
+function activityHelpHtml(a, polyline, w) {
+  const h = weatherHelp(polyline, false, w, helpProfile(a.activity_type), "route");
+  return h ? helpMeter(h) : "";
+}
+// Column widths of the effort tables, like the list tables: each column as wide as its content,
+// the spare width as equal visible gaps between columns (gapPlan). Tables with the same columns
+// get one set of widths, so tables one under another line up. Called after rendering, whenever
+// rows or weather are added, and on resize.
+function fitEffortCols(root) {
+  const groups = new Map();
+  root.querySelectorAll(".seg-table").forEach((t) => {
+    if (!t.offsetParent) return; // not laid out (hidden)
+    const key = [...t.tHead.rows[0].cells].map((th) => th.textContent.replace(/[▲▼↕]/g, "").trim()).join("|");
+    groups.set(key, [...(groups.get(key) || []), t]);
+  });
+  for (const tables of groups.values()) {
+    const cols = tables.map((t) => [...t.querySelectorAll("col")]);
+    tables.forEach((t, k) => { cols[k].forEach((c) => { c.style.width = ""; }); clearGapPads(t); Object.assign(t.style, { tableLayout: "auto", width: "max-content", minWidth: "0" }); });
+    const natural = [];
+    tables.forEach((t) => [...t.tHead.rows[0].cells].forEach((th, i) => {
+      natural[i] = Math.max(natural[i] || 0, Math.ceil(th.getBoundingClientRect().width));
+    }));
+    tables.forEach((t) => Object.assign(t.style, { tableLayout: "", width: "", minWidth: "" }));
+    const n = natural.length, total = natural.reduce((s, w) => s + w, 0);
+    const avail = Math.min(...tables.map((t) => t.parentElement.clientWidth));
+    const right = [...tables[0].tHead.rows[0].cells].map((th) => th.classList.contains("num"));
+    const { widths, pads } = gapPlan(natural, right, avail);
+    tables.forEach((t, k) => {
+      t.style.minWidth = `${total}px`; // narrow screen: scrolls instead of squeezing
+      cols[k].forEach((c, i) => { c.style.width = `${widths[i]}px`; });
+      setGapPads(t, pads);
+    });
+  }
+}
+let effortResize = 0;
+window.addEventListener("resize", () => {
+  cancelAnimationFrame(effortResize);
+  effortResize = requestAnimationFrame(() => { const v = document.getElementById("view"); if (v?.querySelector(".seg-table")) fitEffortCols(v); });
+});
+// Rows whose activity has no weather yet: look it up (one activity at a time; cached on the
+// server, so this happens once per activity).
+async function fillWeather(root) {
+  const cells = [...root.querySelectorAll("td[data-wx-pending]")];
+  const ids = [...new Set(cells.map((c) => c.dataset.wxPending))];
+  for (const id of ids) {
+    const w = await api(`activities/${id}/weather`).catch(() => null);
+    if (!root.isConnected) return;
+    root.querySelectorAll(`td[data-wx-pending="${id}"]`).forEach((td) => {
+      td.innerHTML = weatherCell(w && w.temp != null ? w : null, td.closest("table").dataset.polyline, td.dataset.rev === "1", td.dataset.type);
+      td.removeAttribute("data-wx-pending");
+    });
+    fitEffortCols(root.closest("#view") || root);
+  }
+}
+
+// Effort tables, the same everywhere (segment page, segment card on an activity): the header
+// (icon + label) of the activity list. Options: `sort` - the Date and Time headers sort the
+// table (All efforts); `power` - the Avg power column; `sections` - [[title, rows]] with a
+// small title row each; `thisId` - the effort of the open activity, marked; `polyline` -
+// the segment's line: adds the Weather column (with the help badge) as the last one.
+function effortTable(rows, group, { sort = null, power = SEG_HAS_POWER, sections = null, thisId = null, polyline = null } = {}) {
+  const head = (icon, label, key = null, isNum = true) => {
+    const inner = `<span class="th-icon">${icon ? metricIcon(icon) : ""}${label}</span>`;
+    if (!sort || !key) return `<th class="${isNum ? "num" : ""}">${inner}</th>`;
+    const on = sort === key;
+    return `<th class="${isNum ? "num" : ""}"><a href="#" class="sort ${on ? "active" : ""}" data-esort="${key}">${inner} <span class="arrow">${on ? (key === "date" ? "▼" : "▲") : "↕"}</span></a></th>`;
+  };
+  const onFoot = ON_FOOT.has(group), opts = { power, thisId, wx: Boolean(polyline), polyline };
+  const cols = 8 + (CURRENT === "all" ? 1 : 0) + (power ? 1 : 0) + (polyline ? 1 : 0);
+  const body = sections
+    ? sections.filter(([, list]) => list.length).map(([title, list]) =>
+      `${title ? `<tr class="seg-group"><td colspan="${cols}">${title}</td></tr>` : ""}${list.map((e) => effortRow(e, group, opts)).join("")}`).join("")
+    : rows.map((e) => effortRow(e, group, opts)).join("");
+  // Fixed column widths: several tables one under another line up.
+  const colgroup = `<colgroup><col class="c-rank"><col class="c-date">${CURRENT === "all" ? `<col class="c-person">` : ""}<col class="c-num"><col class="c-num"><col class="c-num"><col class="c-num"><col class="c-num">${power ? `<col class="c-num">` : ""}<col class="c-act">${polyline ? `<col class="c-wx">` : ""}</colgroup>`;
+  return `<div class="scroll"><table class="data seg-table${polyline ? " with-wx" : ""}${CURRENT === "all" ? " with-person" : ""}"${polyline ? ` data-polyline="${esc(polyline)}"` : ""}>${colgroup}<thead><tr><th>#</th>${head("date", "Date", "date", false)}
+      ${CURRENT === "all" ? head("", "Person", null, false) : ""}${head("elapsed_time", "Time", "time")}
+      ${head(onFoot ? "avg_pace" : "avg_speed", onFoot ? "Avg pace" : "Avg speed")}${head(onFoot ? "best_pace" : "max_speed", onFoot ? "Best pace" : "Max speed")}${head("avg_heart_rate", "Avg HR")}${head("max_heart_rate", "Max HR")}
+      ${power ? head("avg_power", "Avg power") : ""}${head("name", "Activity", null, false).replace("<th class=\"\">", "<th class=\"c-act\">")}${polyline ? head("weather", "Weather", null, false).replace("<th class=\"\">", "<th class=\"c-wx\">") : ""}</tr></thead>
+      <tbody data-rows>${body}</tbody></table></div>`;
+}
+let SEG_HAS_POWER = false; // the Avg power column only when some effort of the segment has power
+function effortRow(e, group, { power = SEG_HAS_POWER, thisId = null, wx = false, polyline = null } = {}) {
+  const mine = thisId != null && e.id === thisId;
+  const w = wx ? parseWx(e) : null;
+  const wxCell = !wx ? "" : w === undefined && !isIndoor(e.activity_type) ? `<td class="c-wx" data-wx-pending="${e.activity_id}" data-rev="${e.reverse ? 1 : 0}" data-type="${esc(e.activity_type || "")}"><span class="hint">…</span></td>`
+    : `<td class="c-wx">${weatherCell(w, polyline, e.reverse, e.activity_type)}</td>`;
+  return `<tr class="${mine ? "this" : ""}"><td>${e.rank ?? ""}</td><td>${localTime(e)}${e.reverse ? ` <span class="hint other-way" title="Ridden in the opposite direction">⇄</span>` : ""}</td>
     ${CURRENT === "all" ? `<td>${avatar(person(e.person_id), 18)} ${esc(personLabel(e.person_id))}</td>` : ""}
-    <td class="num"><b>${mmss(e.elapsed_s)}</b></td><td class="num">${segSpeed(e.avg_speed, group)}</td>
-    <td class="num">${bpm(e.avg_hr)}</td><td class="num">${bpm(e.max_hr)}</td><td class="num">${watts(e.avg_power)}</td>
-    <td><a href="#/activity/${e.activity_id}">${typeName(e.activity_type, e.activity_name || typeLabel(e.activity_type))}</a></td></tr>`;
+    <td class="num"><b>${mmss(e.elapsed_s)}</b></td><td class="num">${segSpeed(e.avg_speed, group)}</td><td class="num">${segSpeed(e.max_speed, group)}</td>
+    <td class="num">${bpm(e.avg_hr)}</td><td class="num">${bpm(e.max_hr)}</td>${power ? `<td class="num">${watts(e.avg_power)}</td>` : ""}
+    <td class="c-act">${mine ? `<span class="this-tag">This activity</span>` : `<a href="#/activity/${e.activity_id}">${typeName(e.activity_type, e.activity_name || typeLabel(e.activity_type))}</a>`}</td>${wxCell}</tr>`;
 }
 
-function effortCard(title, e, group) {
-  if (!e) return `<div class="card"><h3>${title}</h3>${hint("–")}</div>`;
-  const stat = (label, value) => `<div class="stat"><span class="hint">${label}</span><b>${value}</b></div>`;
-  return `<div class="card"><h3>${title}</h3>
-    <div class="card-row"><span class="hint">${localTime(e)}${personBit(e)} · <a href="#/activity/${e.activity_id}">${esc(e.activity_name || typeLabel(e.activity_type))}</a>${e.rank ? ` · rank ${e.rank}` : ""}</span></div>
-    <div class="grid">${stat("Time", mmss(e.elapsed_s))}${stat("Moving time", mmss(e.moving_s))}
-      ${stat(ON_FOOT.has(group) ? "Pace" : "Speed", segSpeed(e.avg_speed, group))}${stat("Avg HR", bpm(e.avg_hr))}
-      ${stat("Max HR", bpm(e.max_hr))}${stat("Avg power", watts(e.avg_power))}${stat("Cadence", cadence(e.avg_cadence, group))}</div></div>`;
+// Last / best effort: a card titled like the activity tiles, its values as small tiles.
+function effortCard(title, icon, e, group) {
+  const head = `<h3 class="tile-title">${icon}<span>${title}</span></h3>`;
+  if (!e) return `<div class="card seg-eff">${head}${hint("–")}</div>`;
+  const onFoot = ON_FOOT.has(group);
+  const tile = (ic, label, value) => (value == null || value === "–" ? ""
+    : `<div class="seg-eff-tile"><span class="tile-title">${metricIcon(ic, 18)}<span>${label}</span></span><b>${value}</b></div>`);
+  return `<div class="card seg-eff">${head}
+    <div class="hint seg-eff-sub">${localTime(e)}${personBit(e)} · <a href="#/activity/${e.activity_id}">${esc(e.activity_name || typeLabel(e.activity_type))}</a>${e.rank ? ` · rank ${e.rank}` : ""}</div>
+    <div class="seg-eff-tiles">${tile("elapsed_time", "Time", mmss(e.elapsed_s))}${tile("moving_time", "Moving time", mmss(e.moving_s))}
+      ${tile(onFoot ? "avg_pace" : "avg_speed", onFoot ? "Avg pace" : "Avg speed", segSpeed(e.avg_speed, group))}
+      ${tile(onFoot ? "best_pace" : "max_speed", onFoot ? "Best pace" : "Max speed", e.max_speed ? segSpeed(e.max_speed, group) : null)}
+      ${tile("avg_heart_rate", "Avg HR", e.avg_hr != null ? bpm(e.avg_hr) : null)}${tile("max_heart_rate", "Max HR", e.max_hr != null ? bpm(e.max_hr) : null)}
+      ${tile("avg_power", "Avg power", e.avg_power != null ? watts(e.avg_power) : null)}${tile("avg_cadence", "Cadence", e.avg_cadence != null ? cadence(e.avg_cadence, group) : null)}</div></div>`;
 }
 
 async function renderSegment(id, params) {
   const pq = new URLSearchParams({ ...personParam(), ...filterQuery(params) });
   const d = await api(`segments/${id}?${pq}`);
   const s = d.segment, g = s.category, sum = d.summary;
-  const trendKind = store.get("segment-trend") === "months" ? "months" : "weeks";
+  SEG_HAS_POWER = (d.top || []).some((e) => e.avg_power != null);
   const effortSort = params.sort === "date" ? "date" : "time";
   const allQ = { ...personParam(), ...filterQuery(params), sort: effortSort, limit: 50 };
   const first = await api(`segments/${id}/efforts?${new URLSearchParams(allQ)}`);
-  const grade = s.ascent_m != null && s.distance_m ? ` · ${num((s.ascent_m / s.distance_m) * 100, 1)} % avg climb` : "";
+  const grade = s.ascent_m != null && s.distance_m ? `${num((s.ascent_m / s.distance_m) * 100, 1)} % avg climb` : "";
+  const showSummary = UI.data["segment-summary"] ?? true; // remembered per person, on by default
+  // Edit: name, which activities count, delete.
+  const srcGroup = d.source?.category || typeOf(d.source?.activity_type)?.group || g;
+  const groupTypes = srcGroup ? TYPES.types.filter((t) => t.group === srcGroup).slice(0, 4).map((t) => t.en.toLowerCase()) : [];
+  const optLabel = (label, tip) => `${label}<small class="opt-hint">${tip}</small>`;
+  const editPanel = `<div class="opt-panel">
+      ${row("Name", `<input name="seg-name" value="${esc(s.name)}" maxlength="120">`)}
+      ${srcGroup ? row(optLabel("Counts", `${esc(groupLabel(srcGroup))} only: all its types (${esc(groupTypes.slice(0, 3).join(", "))}…)`),
+        pickList("seg-types", [["group", `${groupLabel(srcGroup)} only`], ["any", "Any activity type"]], g ? "group" : "any")) : ""}
+      ${row("", `<button class="badge danger" data-del>Delete segment</button>`)}</div>`;
+  const src = d.source ? `${localTime(d.source).slice(0, 10)}${d.source.location ? ` · ${esc(d.source.location)}` : ""}` : "";
+  const fq = new URLSearchParams(filterQuery(params)).toString();
   view.innerHTML = `
-    ${backLink(`#/segments${new URLSearchParams(filterQuery(params)).toString() ? "?" + new URLSearchParams(filterQuery(params)) : ""}`, "Segments")}
-    <div class="page-head"><h2 class="tb-activity-name">${s.category ? groupIcon(s.category, 24) : typeIcon("other", 24)}<span>${esc(s.name)}</span></h2>
-      <div class="badges">${timeBadge(params)}${typeBadge(params)}${s.pending ? state("matching…", "warn") : ""}</div><span class="spacer"></span>
-      <button data-rename>Rename</button><button class="danger" data-del>${ICON.trash} Delete</button></div>
-    <div class="card"><div id="seg-map" class="map"></div>
-      ${hint(`${s.category ? `Matches ${esc(groupLabel(s.category).toLowerCase())} activities` : "Matches activities of any type"} · created ${s.source === "map" ? "from map pins" : "from an activity"}${d.source ? ` (<a href="#/activity/${d.source.id}">${esc(d.source.name || typeLabel(d.source.activity_type))}</a>, ${localTime(d.source).slice(0, 10)})` : ""}.`)}
-      ${checkCtl("any-type", !s.category, "Match activities of any type")}</div>
-    ${statStrip([
+    ${backLink(`#/segments${fq ? "?" + fq : ""}`, "Segments")}
+    <div class="page-head"><h2 class="tb-activity-name">${g ? groupIcon(g, 24) : typeIcon("other", 24)}<span>${esc(s.name)}</span>${src ? `<a class="head-date" href="#/activity/${d.source.id}" title="Created from this activity">${src}</a>` : ""}</h2>
+      <div class="badges">${timeBadge(params)}${typeBadge(params, d.type_counts || {})}
+        ${badgeHtml("edit", "Edit", "", { panel: editPanel })}
+        <button class="badge ${showSummary ? "on" : ""}" data-summary-toggle>Summary</button>
+        ${s.pending ? state("matching…", "warn") : ""}</div><span class="spacer"></span></div>
+    <div class="card route-card"><div class="card-head"><h3 class="tile-title">${metricIcon("route", 18)}<span>Route</span></h3></div>
+      <div id="seg-map" class="map"></div></div>
+    <div data-summary ${showSummary ? "" : "hidden"}>${statStrip([
       ["Distance", km(s.distance_m), ""],
-      ["Elevation gain", meters(s.ascent_m), grade.slice(3)],
+      ["Elevation gain", meters(s.ascent_m), grade],
+      ["Direction", s.two_way ? "Both ways" : "One way", s.net_climb_m != null ? `end ${s.net_climb_m >= 0 ? "+" : "−"}${num(Math.abs(s.net_climb_m))} m vs start` : ""],
       ["Efforts", num(sum.count), CURRENT === "all" && d.people.length ? `${num(d.people.length)} ${d.people.length === 1 ? "person" : "people"}` : ""],
       ["Best", mmss(sum.best_s), d.best ? effortDay(d.best) : ""],
       ["Average", mmss(sum.avg_s), sum.median_s != null ? `median ${mmss(sum.median_s)}` : ""],
       ["Last", d.last ? mmss(d.last.elapsed_s) : "–", d.last ? effortDay(d.last) : ""],
-    ])}
+    ])}</div>
     ${sum.count ? `
-    <div class="cards">${effortCard("Last effort", d.last, g)}${effortCard("Best effort", d.best, g)}</div><br>
-    <div class="card"><div class="card-row"><h3 style="margin:0">Trend</h3><span class="spacer"></span>
-      ${switchHtml("trend", [["weeks", "Last 12 weeks"], ["months", "Last 12 months"]], trendKind)}</div>
-      ${trendChart(d.trend[trendKind], trendKind)}</div>
-    ${CURRENT === "all" && d.people.length ? `<div class="card"><h3>People</h3><div class="scroll"><table class="data"><thead><tr><th>Person</th>
-      <th class="num">Best</th><th class="num">Average</th><th class="num">Efforts</th><th>Last</th></tr></thead><tbody>
+    <div class="seg-eff-row">${effortCard("Last effort", metricIcon("date", 18), d.last, g)}${effortCard("Best effort", LAUREL_SVG, d.best, g)}</div>
+    <div class="charts" data-trend></div>
+    ${CURRENT === "all" && d.people.length ? `<div class="card"><h3>People</h3><div class="scroll"><table class="data"><thead><tr>${thIcon("", "Person", false)}
+      ${thIcon("elapsed_time", "Best")}${thIcon("elapsed_time", "Average")}<th class="num">Efforts</th>${thIcon("date", "Last", false)}</tr></thead><tbody>
       ${d.people.map((p) => `<tr><td>${avatar(person(p.person_id), 18)} ${esc(personLabel(p.person_id))}</td><td class="num"><b>${mmss(p.best_s)}</b></td>
         <td class="num">${mmss(p.avg_s)}</td><td class="num">${num(p.count)}</td><td>${mmss(p.last.elapsed_s)} <span class="hint">${effortDay(p.last)}</span></td></tr>`).join("")}
       </tbody></table></div></div>` : ""}
-    <div class="card"><h3>Top 10</h3>${effortTable(d.top, g)}</div>
-    <div class="card" data-all><div class="card-row"><h3 style="margin:0">All efforts</h3><span class="hint" data-count>${countText(first.items.length, first.total)}</span><span class="spacer"></span>
-      ${switchHtml("esort", [["time", "Fastest"], ["date", "Newest"]], effortSort)}</div>
-      ${effortTable(first.items, g)}
+    <div class="card" data-top10><h3>Top 10</h3>${effortTable(d.top, g, { polyline: s.polyline })}</div>
+    <div class="card" data-all><div class="card-row"><h3 style="margin:0">All efforts</h3><span class="hint" data-count>${countText(first.items.length, first.total)}</span></div>
+      ${effortTable(first.items, g, { sort: effortSort, polyline: s.polyline })}
       ${first.items.length < first.total ? `<div class="sentinel" data-sentinel><span class="hint">Loading…</span></div>` : ""}</div>`
-    : `<div class="card">${hint(s.pending ? "Looking for efforts in all activities…" : CURRENT === "all" ? "No activity covers this segment yet." : `${esc(personLabel(CURRENT))} has no effort on this segment yet.`)}</div>`}`;
+    : `<div class="card">${hint(s.pending ? "Looking for efforts in all activities…" : CURRENT === "all" ? "No activity covers this segment in this period." : `${esc(personLabel(CURRENT))} has no effort on this segment in this period.`)}</div>`}`;
 
-  bindBadges(view.querySelector(".page-head"));
-  bindFilterBadges(view.querySelector(".page-head"), `#/segment/${id}`, params);
-  view.querySelectorAll("[data-switch=trend]").forEach((b) => b.onclick = () => { store.set("segment-trend", b.dataset.value); renderSegment(id, params); });
-  view.querySelectorAll("[data-switch=esort]").forEach((b) => b.onclick = () => { location.hash = `#/segment/${id}?${new URLSearchParams({ ...filterQuery(params), ...(b.dataset.value === "date" ? { sort: "date" } : {}) })}`; });
+  const headEl = view.querySelector(".page-head");
+  bindBadges(headEl);
+  bindFilterBadges(headEl, `#/segment/${id}`, params);
+  segmentTrend(view.querySelector("[data-trend]"), d.series || []);
+  fitEffortCols(view);
+  fillWeather(view); // Top 10 first, then All efforts (one lookup per activity, cached)
+  view.querySelectorAll("[data-esort]").forEach((a) => a.onclick = (e) => {
+    e.preventDefault();
+    location.hash = `#/segment/${id}?${new URLSearchParams({ ...filterQuery(params), ...(a.dataset.esort === "date" ? { sort: "date" } : {}) })}`;
+  });
   const all = view.querySelector("[data-all]");
   if (all) infinite(all, first.items.length, first.total,
     async (offset) => (await api(`segments/${id}/efforts?${new URLSearchParams({ ...allQ, offset })}`)).items,
-    (items) => all.querySelector("[data-rows]").insertAdjacentHTML("beforeend", items.map((e) => effortRow(e, g)).join("")));
-  view.querySelector("[data-rename]").onclick = async () => {
-    const name = prompt("Segment name", s.name);
-    if (!name || name.trim() === s.name) return;
-    await api(`segments/${id}`, { method: "PATCH", body: JSON.stringify({ name }) }).catch((e) => alert(e.message));
+    (items) => { all.querySelector("[data-rows]").insertAdjacentHTML("beforeend", items.map((e) => effortRow(e, g, { wx: true, polyline: s.polyline })).join("")); fitEffortCols(view); fillWeather(all); });
+  view.querySelector("[data-summary-toggle]").onclick = (e) => {
+    const on = !e.currentTarget.classList.contains("on");
+    e.currentTarget.classList.toggle("on", on);
+    view.querySelector("[data-summary]").hidden = !on;
+    saveUi("segment-summary", on);
+  };
+  const panel = view.querySelector('[data-panel="edit"]');
+  const nameIn = panel.querySelector("[name=seg-name]");
+  nameIn.onkeydown = (e) => { if (e.key === "Enter") nameIn.blur(); };
+  nameIn.onchange = async () => {
+    const name = nameIn.value.trim();
+    if (!name || name === s.name) { nameIn.value = s.name; return; }
+    await api(`segments/${id}`, { method: "PATCH", body: JSON.stringify({ name }) }).catch((err) => alert(err.message));
     renderSegment(id, params);
   };
-  view.querySelector("input[name=any-type]").onchange = async (e) => {
-    await api(`segments/${id}`, { method: "PATCH", body: JSON.stringify({ any_type: e.target.checked }) }).catch((err) => alert(err.message));
+  panel.querySelectorAll('[data-pick="seg-types"]').forEach((b) => b.onclick = async () => {
+    if (b.classList.contains("on")) return;
+    await api(`segments/${id}`, { method: "PATCH", body: JSON.stringify({ any_type: b.dataset.value === "any" }) }).catch((err) => alert(err.message));
     renderSegment(id, params);
-  };
-  view.querySelector("[data-del]").onclick = async () => {
+  });
+  panel.querySelector("[data-del]").onclick = async () => {
     if (!confirm(`Delete the segment “${s.name}” and all its efforts?\n\nActivities are not touched.`)) return;
     await api(`segments/${id}`, { method: "DELETE" });
     location.hash = "#/segments";
   };
+  const mapEl = document.getElementById("seg-map"); // grip on the card's bottom edge: map height
+  cardResize(mapEl.closest(".card"), () => mapEl.offsetHeight, (h) => { mapEl.style.height = `${h}px`; activeMap?.resize(); }, 220, 1000);
   showRouteMap("seg-map", s.polyline).catch((e) => {
     document.getElementById("seg-map").outerHTML = state("Map unavailable: " + esc(e.message), "bad") + staticMap(s.polyline);
   });

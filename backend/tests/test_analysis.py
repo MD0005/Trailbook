@@ -236,3 +236,25 @@ def test_threshold_warnings_missing_accepted_and_stale(tdb):
             "/api/thresholds/anna/accept", json={"field": "hr_rest", "accepted": False}
         ).json()
         assert r["accepted"] == []
+
+
+def test_ftp_is_taken_from_the_same_sport_and_can_be_corrected(tdb):
+    _, c = tdb
+    run = _activity(c, "anna", "2026-03-01", power=390)
+    ride = _activity(c, "anna", "2026-03-02", group="ride", atype="virtual_ride", speed=8,
+                     power=200)  # fmt: skip
+    c.execute("UPDATE activities SET watch_ftp = 430 WHERE id = ?", (run,))  # running power FTP
+    c.execute("UPDATE activities SET watch_ftp = 260 WHERE id = (SELECT MIN(id) FROM activities"
+              " WHERE category = 'ride')")  # fmt: skip
+
+    def ftp(aid):
+        a = c.execute("SELECT * FROM activities WHERE id = ?", (aid,)).fetchone()
+        return analysis.activity_thresholds(c, a).ftp
+
+    # the ride has no FTP in its file: the nearest ride FTP, not the run's (one day away)
+    assert ftp(ride) == 260
+    assert ftp(run) == 430
+    c.execute("UPDATE activities SET ftp_override = 240 WHERE id = ?", (ride,))
+    assert ftp(ride) == 240
+    a = c.execute("SELECT * FROM activities WHERE id = ?", (ride,)).fetchone()
+    assert analysis.activity_thresholds(c, a).sources["ftp"] == "activity"

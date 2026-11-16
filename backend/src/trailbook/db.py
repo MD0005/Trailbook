@@ -386,6 +386,33 @@ MIGRATIONS: list[str] = [
         PRIMARY KEY (activity_id, channel)
     );
     """,
+    # v18 — workout kind (see workout.py): detected kind with the reason and the interval
+    # bouts (JSON), the person's choice (kept on reimport; NULL = the detected one), the
+    # per-activity medians the person's history is built from (JSON) and the detector version.
+    """
+    ALTER TABLE activities ADD COLUMN workout TEXT;
+    ALTER TABLE activities ADD COLUMN workout_detail TEXT;
+    ALTER TABLE activities ADD COLUMN workout_override TEXT;
+    ALTER TABLE activities ADD COLUMN workout_stats TEXT;
+    ALTER TABLE activities ADD COLUMN workout_version INTEGER NOT NULL DEFAULT 0;
+    CREATE INDEX ix_activities_workout ON activities(workout_version);
+    """,
+    # v19 — weather during the activity from Open-Meteo (JSON, see weather.py), cached.
+    """
+    ALTER TABLE activities ADD COLUMN weather TEXT;
+    """,
+    # v20 — segments: the end altitude minus the start altitude (flat segments count in both
+    # directions), the top speed of an effort and whether it was ridden the other way.
+    """
+    ALTER TABLE segments ADD COLUMN net_climb_m REAL;
+    ALTER TABLE segment_efforts ADD COLUMN max_speed REAL;
+    ALTER TABLE segment_efforts ADD COLUMN reverse INTEGER NOT NULL DEFAULT 0;
+    """,
+    # v21 — FTP the person set for one activity (its file has none or a wrong one; NULL = the
+    # file's or the person's FTP, see analysis.activity_thresholds). Kept on reimport.
+    """
+    ALTER TABLE activities ADD COLUMN ftp_override INTEGER;
+    """,
 ]
 
 SCHEMA_VERSION = len(MIGRATIONS)

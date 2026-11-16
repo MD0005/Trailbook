@@ -15,3 +15,5 @@
   always format through `num()` in `preview.js`, never `toFixed()` for displayed values.
 - UI rules (one button style, controls, maps, defaults) are in `docs/SPEC.md` › UI rules;
   charts in `docs/CHARTS.md`.
+- How computed values work (formulas, weights, limits) goes into `docs/MANUAL.md`; keep it in
+  sync when a calculation changes.

@@ -38,12 +38,12 @@ function typeSelection(params) {
   return out;
 }
 
-function typeLabelOf(params) {
+function typeLabelOf(params, counts = TYPE_COUNTS) {
   const sel = [...typeSelection(params)];
   if (!sel.length) return "All";
   const groups = [...new Set(sel.map((k) => typeOf(k)?.group))];
   if (groups.length === 1) {
-    const avail = TYPES.types.filter((t) => t.group === groups[0] && (TYPE_COUNTS[t.key] || sel.includes(t.key)));
+    const avail = TYPES.types.filter((t) => t.group === groups[0] && (counts[t.key] || sel.includes(t.key)));
     if (avail.length > 1 && avail.every((t) => sel.includes(t.key))) return groupLabel(groups[0]);
   }
   return sel.length <= 2 ? sel.map(typeLabel).join(", ") : `${sel.length} types`;
@@ -156,9 +156,11 @@ function bindTimePanel(root) {
 
 // ---- Type --------------------------------------------------------------------------------
 
-function typeBadge(params) {
+// `counts` ({type: n}) limits the list to the types a page actually covers (default: all
+// activities of the person).
+function typeBadge(params, counts = TYPE_COUNTS) {
   const sel = typeSelection(params);
-  const n = (k) => TYPE_COUNTS[k] || 0;
+  const n = (k) => counts[k] || 0;
   const groups = TYPES.groups.map((g) => {
     const types = TYPES.types.filter((t) => t.group === g.key && (n(t.key) > 0 || sel.has(t.key)));
     if (!types.length) return "";
@@ -171,7 +173,7 @@ function typeBadge(params) {
   }).join("");
   const panel = `<div class="tyf">${groups ? `<div class="tyf-list">${groups}</div>` : hint("No activities yet.")}
     ${filterActions("type", sel.size > 0)}</div>`;
-  return badgeHtml("type", "Type", typeLabelOf(params), { panel, on: sel.size > 0 });
+  return badgeHtml("type", "Type", typeLabelOf(params, counts), { panel, on: sel.size > 0 });
 }
 
 function bindTypePanel(root) {

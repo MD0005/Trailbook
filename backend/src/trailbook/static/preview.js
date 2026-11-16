@@ -47,10 +47,13 @@ const store = {
 const svg = (body, extra = "") => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ${extra}>${body}</svg>`;
 const ICON = {
   pencil: svg(`<path d="M4 20h4L19 9a2.8 2.8 0 0 0-4-4L4 16Z"/><path d="m13.5 6.5 4 4"/>`),
-  back: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17 4 6 12l11 8Z" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>`,
+  up: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 17 12 6l8 11Z" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>`,
+  prev: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17 4 6 12l11 8Z" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>`,
+  next: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4l11 8-11 8Z" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>`,
   trash: svg(`<path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/>`),
   sun: svg(`<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>`),
   moon: svg(`<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/>`),
+  help: svg(`<circle cx="12" cy="12" r="9.5"/><path d="M9.3 9.2a2.8 2.8 0 0 1 5.4 1c0 1.9-2.7 2.4-2.7 4.1"/><circle cx="12" cy="17.6" r=".4" fill="currentColor"/>`),
   gear: svg(`<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>`),
   list: svg(`<path d="M8 6h13M8 12h13M8 18h13"/><circle cx="3.5" cy="6" r="1"/><circle cx="3.5" cy="12" r="1"/><circle cx="3.5" cy="18" r="1"/>`),
   tilesSmall: svg(`<rect x="3" y="3" width="5" height="5" rx="1"/><rect x="10" y="3" width="5" height="5" rx="1"/><rect x="17" y="3" width="4" height="5" rx="1"/><rect x="3" y="10" width="5" height="5" rx="1"/><rect x="10" y="10" width="5" height="5" rx="1"/><rect x="17" y="10" width="4" height="5" rx="1"/><rect x="3" y="17" width="5" height="4" rx="1"/><rect x="10" y="17" width="5" height="4" rx="1"/><rect x="17" y="17" width="4" height="4" rx="1"/>`),
@@ -126,6 +129,9 @@ const browserTime = (iso) => {
 };
 const typeOf = (key) => TYPES?.types.find((t) => t.key === key);
 const typeLabel = (key) => typeOf(key)?.en ?? key;
+// Workout kind (Easy, Long, Tempo…): the person's choice, else the detected one.
+const workoutLabel = (key) => TYPES?.workouts?.find((w) => w.key === key)?.en ?? key;
+const workoutOf = (a) => a.workout_override || a.workout;
 // Activity type icons (assets/icons, “Trailbook B”): small next to names in lists and
 // filters, larger only in Activities › tiles. Unknown types fall back to “other”.
 const typeIcon = (key, size = 18) => (OWN_TYPE_ICONS[key]
@@ -261,6 +267,7 @@ function renderHeader(section) {
       </div>
     </div>
     <button id="theme" class="icon" aria-label="Switch theme"></button>
+    <a href="#/manual" class="icon-link ${section === "manual" ? "active" : ""}" title="Manual" aria-label="Manual">${ICON.help}</a>
     <a href="#/settings" class="icon-link ${section === "settings" ? "active" : ""}" title="Settings" aria-label="Settings">${ICON.gear}</a>`;
   const menu = document.getElementById("person-menu");
   document.getElementById("person-btn").onclick = (e) => { e.stopPropagation(); menu.hidden = !menu.hidden; };
@@ -310,19 +317,75 @@ function tableHtml(columns, rows, params, total) {
   const sort = params.sort, dir = params.dir || "desc";
   const head = columns.map((c) => {
     const label = c.icon ? `<span class="th-icon">${metricIcon(c.icon)}${esc(c.label)}</span>` : esc(c.label);
-    if (!c.sort) return `<th class="${c.num ? "num" : ""}">${label}</th>`;
+    const cls = c.num ? "num" : "";
+    if (!c.sort) return `<th class="${cls}">${label}</th>`;
     const active = sort === c.key;
     const arrow = active ? (dir === "asc" ? "▲" : "▼") : "↕";
-    return `<th class="${c.num ? "num" : ""}"><a href="#" class="sort ${active ? "active" : ""}" data-sort="${c.key}">${label} <span class="arrow">${arrow}</span></a></th>`;
+    return `<th class="${cls}"><a href="#" class="sort ${active ? "active" : ""}" data-sort="${c.key}">${label} <span class="arrow">${arrow}</span></a></th>`;
   }).join("");
   const filters = columns.map((c) => (c.filter ? `<th>${filterControl(c, params)}</th>` : "<th></th>")).join("");
   const body = rows.length ? rows.map((r) => rowHtml(columns, r)).join("")
     : `<tr><td colspan="${columns.length}" class="hint">Nothing matches the filters.</td></tr>`;
   return listBar(columns, params, rows.length, total) + `
-    <div class="scroll"><table class="data">
+    <div class="scroll"><table class="data" data-spread>
       <thead><tr>${head}</tr><tr class="filters-row">${filters}</tr></thead>
       <tbody data-rows>${body}</tbody></table></div>
     ${rows.length < total ? `<div class="sentinel" data-sentinel><span class="hint">Loading…</span></div>` : ""}`;
+}
+
+// Spare table width as equal visible gaps. Text columns are left-aligned (room shows on their
+// right), number columns right-aligned (room on their left), so the gap between columns i and
+// i+1 goes to whichever side is free; between a number and a text column neither is, so the
+// text column gets it as left padding. `right[i]`: column i is right-aligned. The gap after the
+// first column is left alone.
+function gapPlan(natural, right, avail) {
+  const n = natural.length, widths = [...natural], pads = Array(n).fill(0);
+  if (n < 3) return { widths, pads };
+  const g = Math.max(0, avail - natural.reduce((s, w) => s + w, 0)) / (n - 2);
+  for (let i = 1; i < n - 1; i++) {
+    if (!right[i]) widths[i] += g;
+    else if (right[i + 1]) widths[i + 1] += g;
+    else { widths[i + 1] += g; pads[i + 1] += g; }
+  }
+  return { widths, pads };
+}
+// Rows with one cell per column (not colspan title rows) of a table.
+const fullRows = (table, n) => [...table.rows].filter((r) => r.cells.length === n);
+function clearGapPads(table) {
+  [...table.rows].forEach((r) => [...r.cells].forEach((c) => { c.style.paddingLeft = ""; }));
+}
+function setGapPads(table, pads) {
+  pads.forEach((p, i) => {
+    if (!p) return;
+    fullRows(table, pads.length).forEach((r) => {
+      const c = r.cells[i];
+      c.style.paddingLeft = `${parseFloat(getComputedStyle(c).paddingLeft) + p}px`;
+    });
+  });
+}
+
+// Column widths of a list table: each column as wide as its content, the spare width split
+// as equal visible gaps between the contents of neighbouring columns (the first column stays
+// next to the second). Done again when the table's box resizes or rows are added.
+function spreadColumns(table) {
+  const ths = [...table.tHead.rows[0].cells];
+  const wrap = table.parentElement;
+  const fit = () => {
+    if (!table.isConnected || !wrap.clientWidth) return;
+    ths.forEach((th) => { th.style.width = ""; });
+    clearGapPads(table);
+    table.style.width = "max-content"; // not "auto": the 100 % wide filter inputs would stretch it
+    const natural = ths.map((th) => th.getBoundingClientRect().width);
+    table.style.width = "";
+    const { widths, pads } = gapPlan(natural, ths.map((th) => th.classList.contains("num")), wrap.clientWidth);
+    ths.forEach((th, i) => { th.style.boxSizing = "border-box"; th.style.width = `${widths[i]}px`; });
+    setGapPads(table, pads);
+  };
+  let frame = 0;
+  const later = () => { cancelAnimationFrame(frame); frame = requestAnimationFrame(fit); };
+  new ResizeObserver(later).observe(wrap);
+  new MutationObserver(later).observe(table.tBodies[0], { childList: true });
+  fit();
 }
 
 // Rows are loaded 50 at a time when the end of the list scrolls into view.
@@ -451,6 +514,7 @@ function bindStagedFilter(root, route, params) {
 }
 
 function bindTable(route, params) {
+  view.querySelectorAll("table[data-spread]").forEach(spreadColumns);
   const go = (changes) => {
     const next = { ...params, ...changes };
     const clean = Object.fromEntries(Object.entries(next).filter(([, v]) => v !== "" && v != null));
@@ -573,10 +637,12 @@ async function renderActivities(params) {
 
   const columns = [
     { key: "date", label: "Date", icon: "date", sort: true,
-      render: (a) => `<a href="#/activity/${a.id}">${localTime(a)}</a>` },
+      render: (a) => `<a class="plain-link" href="#/activity/${a.id}">${localTime(a)}</a>` },
     { key: "type", label: "Type", icon: "type", sort: true,
       render: (a) => typeName(a.activity_type) + (a.indoor ? ` <span class="hint">indoor</span>` : "") },
-    { key: "name", label: "Name", icon: "name", sort: true, filter: { type: "text", placeholder: "name…" }, render: (a) => esc(a.name || typeLabel(a.activity_type)) },
+    { key: "workout", label: "Training type", icon: "interval_time", sort: true,
+      render: (a) => (workoutOf(a) ? esc(workoutLabel(workoutOf(a))) : `<span class="hint">–</span>`) },
+    { key: "name", label: "Name", icon: "name", sort: true, filter: { type: "text", placeholder: "name…" }, render: (a) => `<a href="#/activity/${a.id}">${esc(a.name || typeLabel(a.activity_type))}</a>` + (a.segment_count ? ` ${segBadge(a)}` : "") },
     { key: "distance", label: "Distance", icon: "distance_total", sort: true, num: true, render: (a) => km(a.distance_m) },
     { key: "moving", label: "Moving time", icon: "moving_time", sort: true, num: true, render: (a) => dur(a.moving_s) },
     { key: "pace", label: "Pace", icon: "avg_pace", sort: true, num: true, render: (a) => (a.distance_m ? pace(a.avg_speed) : "–") },
@@ -588,13 +654,15 @@ async function renderActivities(params) {
       render: (a) => `<button class="icon delete" data-delete="${a.id}" title="Delete activity" aria-label="Delete activity">${ICON.trash}</button>` },
   ];
 
+  // Segment badge: the (first) segment's name, "+n" when there are more.
+  const segBadge = (a, cls = "") => `<span class="seg-badge ${cls}" title="Segment${a.segment_count > 1 ? "s" : ""} in this activity">${esc(a.segment_name || "Segment")}${a.segment_count > 1 ? ` +${a.segment_count - 1}` : ""}</span>`;
   const tile = (a) => `
     <a class="tile ${mode}" href="#/activity/${a.id}">
-      ${mode === "large" ? `<div class="tile-map">${tileContent === "pace" ? paceSpark(a.speed_series) : a.polyline ? staticMap(a.polyline, { W: 400, H: 160, cls: "tile-track", tiles: "faded-tiles" }) : `<span class="hint">${a.indoor ? "indoor" : "no route"}</span>`}</div>` : ""}
+      ${mode === "large" ? `<div class="tile-map">${a.segment_count ? segBadge(a, "tile-seg") : ""}${tileContent === "pace" ? paceSpark(a.speed_series) : a.polyline ? staticMap(a.polyline, { W: 400, H: 160, cls: "tile-track", tiles: "faded-tiles" }) : `<span class="hint">${a.indoor ? "indoor" : "no route"}</span>`}</div>` : ""}
       <div class="tile-head">
         <span class="tile-icon">${typeIcon(a.activity_type)}</span>
-        <span class="tile-title"><b>${esc(a.name || typeLabel(a.activity_type))}</b>
-        <span class="hint">${a.name ? `${esc(typeLabel(a.activity_type))} · ` : ""}${localTime(a)}${isAll ? ` · ${esc(personLabel(a.person_id))}` : ""}</span></span>
+        <span class="tile-title"><b>${esc(a.name || typeLabel(a.activity_type))}${a.segment_count && mode !== "large" ? ` ${segBadge(a)}` : ""}</b>
+        <span class="hint">${a.name ? `${esc(typeLabel(a.activity_type))} · ` : ""}${localTime(a)}${workoutOf(a) ? ` · ${esc(workoutLabel(workoutOf(a)))}` : ""}${isAll ? ` · ${esc(personLabel(a.person_id))}` : ""}</span></span>
       </div>
       <div class="tile-stats">
         ${a.distance_m ? `<span><span class="hint">Distance</span>${km(a.distance_m)}</span>` : ""}
@@ -681,10 +749,12 @@ const CHART_DEFS = [
 const chartDefault = (key, a) => ["hr", "speed", "altitude"].includes(key) || (a.category === "ride" && ["power", "cadence"].includes(key));
 
 async function renderActivity(id) {
-  const a = await api("activities/" + id);
-  const [s, track] = await Promise.all([
+  const a = await api("activities/" + id + (CURRENT === "all" ? "?neighbours=all" : ""));
+  // Interval workouts (detected or chosen): section lines on the charts, not stored.
+  const [s, track, iv] = await Promise.all([
     api(`activities/${id}/streams?max_points=1500`),
     a.has_gps ? api(`activities/${id}/track`).catch(() => null) : null,
+    workoutOf(a) === "intervals" ? api(`activities/${id}/intervals`).catch(() => null) : null,
   ]);
   const st = s.streams;
   const onFoot = ["run", "walk", "hike"].includes(a.category);
@@ -817,6 +887,54 @@ async function renderActivity(id) {
       ["Min", `${num(Math.min(...v))} %`, "min", "Lowest stamina"]];
     available.splice(pot, 1);
   }
+  // Interval sections: lines on the speed, heart rate, power and cadence charts; above each chart
+  // the section's average (heart rate and power with the zone, speed with the section's time).
+  const sections = iv && chartX ? (() => {
+    const t = chartX.time, d = chartX.distance;
+    const at = [...new Set(iv.splits.map((sec) => t.findIndex((v) => v >= sec)))].filter((i) => i > 0 && i < t.length - 1).sort((p, q) => p - q);
+    let zones = null;
+    try { zones = a.zones ? JSON.parse(a.zones) : null; } catch { zones = null; }
+    // zone of a value from Garmin's limits (as in the zone tiles): [number, colour] or null
+    const zoneOf = (kind, v) => {
+      const b = zones?.[kind]?.bounds;
+      if (!b || v == null) return null;
+      const lowFirst = kind === "hr" || b[0] === 0, his = lowFirst ? b.slice(1) : b;
+      if (lowFirst && v < b[0]) return null;
+      let k = his.findIndex((hi) => v < hi);
+      if (k < 0) k = his.length - 1; // above the last limit: the top zone
+      return [k + 1, rampColor(ROUTE_SCALES[kind].stops, his.length > 1 ? k / (his.length - 1) : 0)];
+    };
+    // time-weighted average of samples i0..i1 (samples without a value left out)
+    const avg = (v, i0, i1) => {
+      let sum = 0, w = 0;
+      for (let i = i0 + 1; i <= i1; i++) {
+        const dt = Math.min(30, t[i] - t[i - 1]);
+        if (v[i] == null || dt <= 0) continue;
+        sum += v[i] * dt; w += dt;
+      }
+      return w ? sum / w : null;
+    };
+    const label = (key, i0, i1) => {
+      const x = available.find((q) => q.key === key);
+      if (!x) return [];
+      const v = avg(x.raw, i0, i1);
+      // the value and its zone, both in the zone's colour (the series colour without zones)
+      const zoned = (kind, text) => { const z = zoneOf(kind, v); return z ? [[text, z[1]], [`Z${z[0]}`, z[1]]] : [[text, x.color]]; };
+      switch (key) {
+        case "hr": return v == null ? [] : zoned("hr", bpm(v));
+        case "power": return v == null ? [] : zoned("power", watts(v));
+        case "cadence": return v == null ? [] : [[cadence(v, a.category), x.color]];
+        case "speed": {
+          const secs = t[i1] - t[i0];
+          // distance over time where there is distance (as the pace of a lap)
+          const kmh = d && secs > 0 && d[i1] > d[i0] ? ((d[i1] - d[i0]) / secs) * 3600 : v;
+          return [...(kmh ? [[onFoot ? pace(kmh / 3.6) : `${num(kmh, 1)} km/h`, x.color]] : []), [clock(secs), null]];
+        }
+        default: return [];
+      }
+    };
+    return { keys: ["speed", "hr", "power", "cadence"], at, label };
+  })() : null;
   const chartChoice = () => ({ ...(UI.data["activity-charts"] || {}) });
   const isShown = (key) => chartChoice()[key] ?? chartDefault(key, a);
   const visibleSeries = () => available.filter((x) => isShown(x.key));
@@ -827,26 +945,67 @@ async function renderActivity(id) {
   const stat = (label, raw, value = raw, icon = null) => (raw == null || raw === "" || raw === 0 ? ""
     : `<div class="card stat-card"><h3 class="tile-title">${icon ? metricIcon(icon, 18) : ""}<span>${label}</span></h3><b>${value}</b></div>`);
   const active = a.calories != null && a.metabolic_calories != null ? a.calories - a.metabolic_calories : null;
+  const TE_SCALE = [[5, "overreaching"], [4, "highly improving"], [3, "improving"], [2, "maintaining"], [1, "minor benefit"], [0, "no benefit"]];
+  // Garmin's primary benefit of an activity: [code, name, what it means].
+  const TE_LABELS = [["RECOVERY", "recovery", "very easy, helps you recover"], ["AEROBIC_BASE", "base", "long and easy, builds endurance"],
+    ["TEMPO", "tempo", "steady and moderately hard"], ["LACTATE_THRESHOLD", "threshold", "hard, near the lactate threshold"],
+    ["VO2MAX", "VO2 max", "intervals at maximum oxygen uptake"], ["ANAEROBIC_CAPACITY", "anaerobic", "short, very hard efforts"],
+    ["SPEED", "sprint", "sprints of a few seconds"], ["SPRINT", "sprint", "sprints of a few seconds"]];
+  // Small cards: column 1 distance, moving and elapsed time; column 2 effect, Body Battery and
+  // calories (only the ones with data; the others in the column grow to fill it).
   const tilesHtml = () => {
     const on = new Set(chartX ? available.map((x) => x.key) : []);
-    return `${stat("Distance", a.distance_m, km(a.distance_m), "distance_total")}${stat("Moving time", a.moving_s, dur(a.moving_s), "moving_time")}
-      ${stat("Elapsed time", a.elapsed_s, dur(a.elapsed_s), "elapsed_time")}
-      ${(() => { // from Garmin Connect
-        const c = a.connect || {}, te = c.aerobicTrainingEffect, an = c.anaerobicTrainingEffect;
-        return stat("Training effect", te, `<span data-tip="Aerobic ${num(te ?? 0, 1)} · anaerobic ${num(an ?? 0, 1)}${c.trainingEffectLabel ? ` · ${esc(String(c.trainingEffectLabel).replace(/_/g, " ").toLowerCase())}` : ""} (Garmin)">${num(te ?? 0, 1)} / ${num(an ?? 0, 1)}</span>`, "aerobic_effect")
-          + stat("Body Battery", c.differenceBodyBattery, `<span data-tip="Change of Body Battery during the activity (Garmin)">${c.differenceBodyBattery > 0 ? "+" : ""}${num(c.differenceBodyBattery ?? 0)}</span>`, "battery");
-      })()}
-      ${stat("Calories", a.calories, active != null ? `<span data-tip="Active / total: active = total minus the resting calories">${num(active)} / ${kcal(a.calories)}</span>` : kcal(a.calories), "calories")}
-      ${on.has("speed") ? "" : stat("Average pace", a.distance_m && a.avg_speed, pace(a.avg_speed), "avg_pace")}
-      ${on.has("hr") ? "" : stat("Average heart rate", a.avg_hr, bpm(a.avg_hr), "avg_heart_rate") + stat("Maximum heart rate", a.max_hr, bpm(a.max_hr), "max_heart_rate")}
-      ${on.has("power") ? "" : stat("Average power", a.avg_power, watts(a.avg_power), "avg_power") + stat("Normalized power", a.np_power, watts(a.np_power), "normalized_power")}
-      ${on.has("cadence") ? "" : stat("Average cadence", a.avg_cadence, cadence(a.avg_cadence, a.category), "avg_cadence")}
-      ${on.has("altitude") ? "" : stat("Total ascent", a.ascent_m, meters(a.ascent_m), "total_ascent") + stat("Total descent", a.descent_m, meters(a.descent_m), "total_descent")}`;
+    const c = a.connect || {}, te = c.aerobicTrainingEffect, an = c.anaerobicTrainingEffect, bb = c.differenceBodyBattery;
+    const known = TE_LABELS.find(([k]) => k === c.trainingEffectLabel);
+    const label = known ? known[1] : c.trainingEffectLabel ? String(c.trainingEffectLabel).replace(/_/g, " ").toLowerCase() : "";
+    // Garmin's wording of the 0–5 scale, the same for aerobic and anaerobic.
+    const teWord = (v) => TE_SCALE.find(([lo]) => v >= lo)?.[1] ?? "no benefit";
+    const teLine = (name, v) => `<span>${name} <b>${v != null ? num(v, 1) : "–"}</b>${v ? ` <span class="effect-word">${teWord(v)}</span>` : ""}</span>`;
+    // tooltip: only what the card shows - the primary benefit, and the two scores behind it
+    const effectTip = [known ? `${known[1][0].toUpperCase()}${known[1].slice(1)}: ${known[2]}.` : "Garmin's training effect.",
+      `Aerobic ${te != null ? num(te, 1) : "–"} (${teWord(te ?? 0)}), anaerobic ${an != null ? num(an, 1) : "–"} (${teWord(an ?? 0)}) on Garmin's 0–5 scale.`].join(" ");
+    // Time: moving time first (what pace and speed are based on), the elapsed time under it.
+    const paused = a.elapsed_s && a.moving_s ? a.elapsed_s - a.moving_s : 0;
+    const timeCard = stat("Time", a.moving_s || a.elapsed_s, `<span class="time-lines"><span data-tip="Moving time: only while moving - pauses and standing still left out">${dur(a.moving_s || a.elapsed_s)}</span>
+        ${a.elapsed_s && paused >= 60 ? `<small data-tip="Elapsed time: from start to finish, pauses and stops included">${dur(a.elapsed_s)} elapsed</small>` : ""}</span>`, "moving_time");
+    // Calories: active (burned by the activity) in front, the total small under it - like Time
+    const calories = stat("Calories", a.calories, active != null ? `<span class="time-lines"><span data-tip="Active calories: burned by the activity, without the resting ones">${kcal(active)}</span>
+        <small data-tip="Total calories: active plus resting">${num(a.calories)} total</small></span>` : kcal(a.calories), "calories");
+    const colA = [stat("Distance", a.distance_m, km(a.distance_m), "distance_total"), timeCard, calories];
+    const kind = workoutOf(a);
+    // Effect: Garmin's primary benefit (from Garmin Connect) and the two scores in one short line
+    const effect = te != null || an != null ? stat("Effect", "x", `<span class="effect-lines" data-tip="${esc(effectTip)}">
+        <b>${label ? esc(label[0].toUpperCase() + label.slice(1)) : teWord(Math.max(te ?? 0, an ?? 0))}</b>
+        ${bb == null ? `<span class="effect-full">${teLine("Aerobic", te)}${teLine("Anaerobic", an)}</span>` : ""}</span>`, "aerobic_effect") : "";
+    // (without a Body Battery card the Effect card is taller: the two scores fit under the benefit)
+    const colB = [
+      kind ? stat("Training type", kind, `<span data-tip="${a.workout_override ? "Chosen in Edit" : "Detected from the activity; Edit changes it"} (Help › Training types)">${esc(workoutLabel(kind))}</span>`, "interval_time") : "",
+      effect,
+      bb != null ? stat("Body Battery", "x", `<span data-tip="Change of Body Battery during the activity (Garmin)">${bb > 0 ? "+" : ""}${num(bb)}</span>`, "battery") : "",
+      on.has("speed") ? "" : stat("Average pace", a.distance_m && a.avg_speed, pace(a.avg_speed), "avg_pace"),
+      on.has("hr") ? "" : stat("Average heart rate", a.avg_hr, bpm(a.avg_hr), "avg_heart_rate") + stat("Maximum heart rate", a.max_hr, bpm(a.max_hr), "max_heart_rate"),
+      on.has("power") ? "" : stat("Average power", a.avg_power, watts(a.avg_power), "avg_power") + stat("Normalized power", a.np_power, watts(a.np_power), "normalized_power"),
+      on.has("cadence") ? "" : stat("Average cadence", a.avg_cadence, cadence(a.avg_cadence, a.category), "avg_cadence"),
+      on.has("altitude") ? "" : stat("Total ascent", a.ascent_m, meters(a.ascent_m), "total_ascent") + stat("Total descent", a.descent_m, meters(a.descent_m), "total_descent"),
+    ].join("");
+    const a1 = colA.join(""), n = (a1 + colB).match(/stat-card/g)?.length || 0;
+    // four cards or fewer: one column
+    return n <= 4 ? `<div class="stat-col">${a1}${colB}</div>` : `<div class="stat-col">${a1}</div><div class="stat-col">${colB}</div>`;
   };
 
+  // Training types this sport can have: from the activity, else from the sport families.
+  const workoutOptions = a.workout_options
+    ?? TYPES?.workout_families?.find((f) => f.types.includes(a.activity_type))?.kinds
+    ?? (["team", "racket"].includes(a.category) ? ["match", "training", "recreation"]
+      : a.workout ? ["easy", "long", "tempo", "intervals", "hills", "race", "commute"] : []);
   const editPanel = `<div class="opt-panel">
       ${row("Name", `<input name="name" value="${esc(a.name || "")}" placeholder="${esc(typeLabel(a.activity_type))}">`)}
       ${row("Type", typeSelect)}
+      ${workoutOptions.length ? row("Training type", pickList("workout",
+        [["auto", a.workout ? `Automatic · ${workoutLabel(a.workout)}` : "Not set"], ...workoutOptions.map((k) => [k, workoutLabel(k)])],
+        a.workout_override || "auto")) : ""}
+      ${a.channels.includes("power") ? row(`FTP<small class="opt-hint">${a.ftp_override ? "For this activity only. Empty: automatic." : "Empty: automatic."}</small>`,
+        `<input name="ftp" type="number" min="30" max="2000" step="1" value="${a.ftp_override ?? ""}" placeholder="${a.ftp_source && a.ftp_source !== "activity" ? `${num(a.ftp_used)} W` : "None"}"> W`) : ""}
       ${row("", `<button id="del" class="badge danger">Delete activity</button>`)}
     </div>`;
   const hasData = (arr) => Array.isArray(arr) && arr.some((v) => v != null && v > 0);
@@ -874,7 +1033,7 @@ async function renderActivity(id) {
   const chartsPanel = `<div class="opt-panel"><div class="checks checks-col">${available.map((x) =>
     `<label class="check"><input type="checkbox" data-chart-key="${x.key}" ${isShown(x.key) ? "checked" : ""}> ${metricIcon(x.icon, 16)} ${esc(x.label)}</label>`).join("")}</div></div>`;
   view.innerHTML = `
-    ${backLink(`#/activities`, "Activities")}
+    ${backNavRow(`#/activities`, "Activities", a.prev_id && `#/activity/${a.prev_id}`, a.next_id && `#/activity/${a.next_id}`)}
     <div class="page-head"><h2 class="tb-activity-name">${typeIcon(a.activity_type, 24)}<span>${esc(a.name || typeLabel(a.activity_type))}</span><span class="head-date">${localTime(a)}${a.connect?.locationName ? ` · ${esc(a.connect.locationName)}` : ""}</span></h2>
       <div class="badges">${available.length && chartX ? `${badgeHtml("charts", "Charts", `${visibleSeries().length} of ${available.length}`, { panel: chartsPanel })}
           ${badgeHtml("chart-options", "Options", "", { panel: optionsPanel })}` : ""}
@@ -883,15 +1042,18 @@ async function renderActivity(id) {
     ${track ? `<div class="card route-card"><div class="card-head"><h3 class="tile-title">${metricIcon("route", 18)}<span>Route</span></h3><span class="spacer"></span>
         <div class="badges">${badgeHtml("route-color", "Data", routeModeLabel(mode), { panel: `<div class="opt-panel">${pickList("route-color", ROUTE_MODES.map(([k, l]) => [k, l]), mode, () => "", routeModeIcon)}</div>`, right: true })}
         ${badgeHtml("route-km", "Markers", kmOn ? `Every ${routeKmStep(a)} km` : "None", { panel: `<div class="opt-panel">${pickList("route-km", [["off", "None"], ["on", `Every ${routeKmStep(a)} km`]], kmOn ? "on" : "off")}</div>`, right: true })}</div></div>
-      <div class="route-wrap"><div id="route-map" class="map"></div><div class="route-legend" id="route-legend" hidden></div></div></div>` : ""}
+      <div class="route-wrap"><div id="route-map" class="map"></div>
+        <div class="route-overlays"><div class="route-weather" data-weather hidden></div><div class="route-legend" id="route-legend" hidden></div></div></div></div>` : ""}
     ${available.length && chartX ? `<div class="charts" data-charts></div>` : ""}
+    ${(a.segments || []).map((s, k) => segmentCardHtml(a, s, k)).join("")}
     ${a.laps.length ? `<div class="card"><div class="card-head"><h3>Laps</h3><span class="spacer"></span>
         <div class="badges">${badgeHtml("laps-n", "Group", lapsLabel(lapsN), { panel: `<div class="opt-panel">${pickList("laps-n", [1, 2, 5, 10].map((n) => [n, lapsLabel(n)]), lapsN)}</div>`, right: true })}</div></div>
       <div data-laps>${lapsTable(a, lapsN)}</div></div>` : ""}
     <div class="card"><h3>Source files</h3>${a.device ? `<div class="hint">Device: ${esc(a.device)}</div>` : ""}
       ${a.files.map((f) => `<div>${esc(f.rel_path)}${f.zip_member ? " › " + esc(f.zip_member) : ""} ${state(f.status)}${f.imported_at ? ` <span class="hint">imported ${browserTime(f.imported_at)}</span>` : ""}</div>`).join("") || hint("None")}</div>`;
   bindBadges(view);
-  view.querySelector("[data-go]")?.addEventListener("click", (e) => { location.hash = e.currentTarget.dataset.go; });
+  if (a.segments?.length) { fitEffortCols(view); fillWeather(view); } // weather of the efforts in the segment cards
+  view.querySelectorAll("[data-go]").forEach((b) => b.addEventListener("click", (e) => { location.hash = e.currentTarget.dataset.go; }));
   const panel = view.querySelector('[data-panel="edit"]');
   // Single-choice badges (route colour, markers, lap grouping, x axis): pick, update the value, close.
   const pickBadge = (name, label, apply) => view.querySelectorAll(`[data-pick="${name}"]`).forEach((b) => b.onclick = () => {
@@ -900,11 +1062,29 @@ async function renderActivity(id) {
     document.onclick?.();
     apply(b.dataset.value);
   });
-  pickBadge("laps-n", (v) => lapsLabel(Number(v)), (v) => { view.querySelector("[data-laps]").innerHTML = lapsTable(a, Number(v)); });
+  const lapsBox = view.querySelector("[data-laps]");
+  const spreadLaps = () => lapsBox?.querySelectorAll("table[data-spread]").forEach(spreadColumns);
+  spreadLaps();
+  pickBadge("laps-n", (v) => lapsLabel(Number(v)), (v) => { lapsBox.innerHTML = lapsTable(a, Number(v)); spreadLaps(); });
   panel.querySelector("[name=type]").onchange = async (e) => {
     await api("activities/" + id, { method: "PATCH", body: JSON.stringify({ type: e.target.value }) });
     renderActivity(id);
   };
+  panel.querySelectorAll('[data-pick="workout"]').forEach((b) => b.onclick = async () => {
+    const v = b.dataset.value === "auto" ? null : b.dataset.value;
+    await api("activities/" + id, { method: "PATCH", body: JSON.stringify({ workout: v }) });
+    renderActivity(id);
+  });
+  const ftpInput = panel.querySelector("[name=ftp]");
+  if (ftpInput) {
+    ftpInput.onchange = async () => {
+      const v = ftpInput.value.trim() === "" ? null : Math.round(Number(ftpInput.value));
+      if (v === (a.ftp_override ?? null) || (v != null && !(v >= 30 && v <= 2000))) return;
+      await api("activities/" + id, { method: "PATCH", body: JSON.stringify({ ftp: v }) });
+      renderActivity(id);
+    };
+    ftpInput.onkeydown = (e) => { if (e.key === "Enter") ftpInput.blur(); };
+  }
   const nameInput = panel.querySelector("[name=name]");
   nameInput.onchange = async () => {
     const v = nameInput.value.trim();
@@ -934,15 +1114,38 @@ async function renderActivity(id) {
     const cmp = COMPARE.find(([k]) => k === compare) || COMPARE[0];
     const efforts = (a.best_efforts || []).map((e) => {
       const r = records ? records[`${e.kind}:${e.key}`] : { value: e.record, start_time_utc: e.record_time, utc_offset_s: e.record_offset_s };
-      return { ...e, record: r?.value ?? null, recordDate: r?.start_time_utc ? localTime(r).slice(0, 10) : "", year: year?.[`${e.kind}:${e.key}`]?.value ?? null };
+      const y = year?.[`${e.kind}:${e.key}`];
+      const rec = r?.start_time_utc ? r : null;
+      return { ...e, record: r?.value ?? null, recordDate: rec ? localTime(rec).slice(0, 10) : "",
+        recordId: records ? r?.activity_id : e.record_activity, year: y?.value ?? null,
+        yearDate: y?.start_time_utc ? localTime(y).slice(0, 10) : "", yearId: y?.activity_id };
     });
     const top = view.querySelector("[data-top]");
     const tiles = tilesHtml();
-    top.innerHTML = `<div class="act-col-stats${(tiles.match(/stat-card/g) || []).length > 4 ? " two" : ""}" data-tiles>${tiles}</div>${(a.devices || []).length <= 1
+    top.innerHTML = `<div class="act-col-stats${(tiles.match(/stat-col/g) || []).length > 1 ? " two" : ""}" data-tiles>${tiles}</div>${(a.devices || []).length <= 1
       ? `<div class="act-col-dev">${devicesHtml(a)}${surfaceCardHtml(a)}</div>${hrZonesCard(a)}`
-      : `${devicesHtml(a)}${hrZonesCard(a) || surfaceCardHtml(a) ? `<div class="act-col-hr">${hrZonesCard(a)}${surfaceCardHtml(a)}</div>` : ""}`}${powerCard(a, efforts) || hrCurveCard(efforts)}${effortsCard(efforts, cmp[0], a.category)}`;
-    top.querySelectorAll("[data-effort]").forEach((el) => {
-      const e = efforts[Number(el.dataset.effort)];
+      : `${devicesHtml(a)}${hrZonesCard(a) || surfaceCardHtml(a) ? `<div class="act-col-hr">${hrZonesCard(a)}${surfaceCardHtml(a)}</div>` : ""}`}${powerCard(a, efforts) || hrCurveCard(efforts)}${effortsCard(efforts, cmp[0], a.category, a.segments || [])}`;
+    // A zone row: where the heart rate (or power, as drawn) was in that zone, on charts and map.
+    top.querySelectorAll("[data-zone]").forEach((el) => {
+      const [kind, lo, hi] = el.dataset.zone.split(":");
+      el.onmouseenter = () => {
+        const v = available.find((x) => x.key === kind)?.values;
+        if (!v) return;
+        const ranges = [];
+        let run = null;
+        for (let i = 0; i < v.length; i++) {
+          const inZone = v[i] != null && v[i] >= Number(lo) && v[i] < Number(hi);
+          if (inZone) { if (run && i - run[1] <= 3) run[1] = i; else { if (run) ranges.push(run); run = [i, i]; } }
+        }
+        if (run) ranges.push(run);
+        el.classList.add("on");
+        charts?.highlight(ranges);
+        route?.highlight?.(ranges);
+      };
+      el.onmouseleave = () => { el.classList.remove("on"); charts?.highlight(null); route?.highlight?.(null); };
+    });
+    top.querySelectorAll("[data-effort], [data-seg-effort]").forEach((el) => {
+      const e = el.dataset.segEffort != null ? a.segments[Number(el.dataset.segEffort)].effort : efforts[Number(el.dataset.effort)];
       el.onmouseenter = () => { el.classList.add("on"); highlightEffort(e); };
       el.onmouseleave = () => { el.classList.remove("on"); highlightEffort(null); };
     });
@@ -980,6 +1183,15 @@ async function renderActivity(id) {
   const route = track ? { a, st, mode, km: kmOn } : null;
   const chartsEl = view.querySelector("[data-charts]");
   let surfaceData = null;
+  // all stretches of one surface kind highlighted on the charts and the map (null clears)
+  const highlightSurface = (kind) => {
+    const d = chartX?.distance;
+    if (!kind || !d || !surfaceData) { charts?.highlight(null); route?.highlight?.(null); return; }
+    const idx = (m) => { const k = d.findIndex((v) => v * 1000 >= m); return k < 0 ? d.length - 1 : k; };
+    const ranges = surfaceData.runs.filter((r) => r[2] === kind).map(([a0, b0]) => [idx(a0), idx(b0)]);
+    charts?.highlight(ranges);
+    route?.highlight?.(ranges);
+  };
   const fillSurfaceTile = () => {
     const box = view.querySelector("[data-surface-share]");
     if (!box) return;
@@ -1002,14 +1214,14 @@ async function renderActivity(id) {
     const d = chartX?.distance;
     if (!surfaceData || !charts || !d) return;
     const idx = (m) => { const k = d.findIndex((v) => v * 1000 >= m); return k < 0 ? d.length - 1 : k; };
-    charts.surface("altitude", surfaceData.runs.map(([a, b, kind]) => [idx(a), idx(b), kind]));
+    charts.surface("altitude", surfaceData.runs.map(([a, b, kind]) => [idx(a), idx(b), kind]), surfaceData.shares, highlightSurface);
   };
   const applyPower = () => available.filter((x) => x.key === "power" || x.key === "cadence")
     .forEach((p) => { p.values = smoothByTime(p.raw, chartX.time, powerAvg); });
   if (chartsEl) {
     applyPower();
     charts = chartGroup(chartsEl, {
-      x: chartX, kind: xKind, series: visibleSeries(),
+      x: chartX, kind: xKind, series: visibleSeries(), sections,
       onHover: (i) => route && routeHover(route, i),
       // Dragged into a new order: kept per person, like the chart list.
       onOrder: (keys) => {
@@ -1038,7 +1250,7 @@ async function renderActivity(id) {
   if (track) {
     route.charts = charts;
     const draw = () => drawActivityRoute(route);
-    showRouteMap("route-map", track.polyline, { offset: routeOffset }).then(() => { bindRouteHover(route); draw(); }).catch((e) => {
+    showRouteMap("route-map", track.polyline, { offset: routeOffset }).then(() => { route.ready = true; bindRouteHover(route); draw(); }).catch((e) => {
       document.getElementById("route-map").outerHTML = state("Map unavailable: " + esc(e.message), "bad") + trackSvg(track.polyline);
     });
     pickBadge("route-color", routeModeLabel, (v) => { route.mode = v; draw(); });
@@ -1054,6 +1266,16 @@ async function renderActivity(id) {
     pickBadge("route-km", (v) => (v === "on" ? `Every ${routeKmStep(a)} km` : "None"), (v) => { route.km = v === "on"; draw(); });
   }
   loadCompare();
+  // Weather during the activity (Open-Meteo, cached after the first time): a widget on the map.
+  if (a.has_gps) {
+    api(`activities/${id}/weather`).then((w) => {
+      const box = view.querySelector("[data-weather]");
+      if (box && w && w.temp != null) { box.innerHTML = weatherHtml(w); box.hidden = false; }
+      // under it, without a background: did the weather help (rides and runs outdoors)
+      const meter = track ? activityHelpHtml(a, track.polyline, w) : "";
+      if (box && meter) box.insertAdjacentHTML("afterend", `<div class="route-wx-help">${meter}</div>`);
+    }).catch(() => {});
+  }
   // Road surface (OpenStreetMap, cached after the first time): shares in the tile, strip on a chart.
   if (a.has_gps) {
     api(`activities/${id}/surface`).then((sf) => {
@@ -1126,11 +1348,29 @@ const DEVICE_KIND_LABEL = { watch: "Watch", bike_computer: "Bike computer", app:
   hr_strap: "Heart rate strap", trainer: "Smart trainer", radar: "Radar", light: "Bike light",
   speed_cadence: "Speed / cadence sensor", foot_pod: "Foot pod", shifting: "Shifting", sensor: "Sensor" };
 function devicesHtml(a) {
-  const list = Array.isArray(a.devices) ? a.devices : [];
+  const seen = new Set();
+  const list = (Array.isArray(a.devices) ? a.devices : []).filter((d) => {
+    const k = `${d.maker}|${d.name}|${d.kind}`;
+    return !seen.has(k) && seen.add(k);
+  });
   if (!list.length) return "";
   return `<div class="card act-tile act-devices"><h3 class="tile-title">${metricIcon("watch", 18)}<span>Gear</span></h3><div class="devices">${list.map((d) => `<div class="device">
       <div class="device-pic">${d.image ? `<img src="${esc(d.image)}" alt="">` : `<svg viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">${DEVICE_ART[d.kind] || DEVICE_ART.sensor}</svg>`}</div>
-      <div class="device-text"><b>${esc(d.name || "Device")}</b><span>${esc([d.maker, DEVICE_KIND_LABEL[d.kind]].filter(Boolean).join(" · "))}</span></div></div>`).join("")}</div></div>`;
+      <div class="device-text"><b>${esc(d.name || "Device")}</b><span title="${esc([d.maker, DEVICE_KIND_LABEL[d.kind]].filter(Boolean).join(" · "))}">${esc([d.maker, DEVICE_KIND_LABEL[d.kind]].filter(Boolean).join(" · "))}</span></div></div>`).join("")}</div></div>`;
+}
+
+// A segment ridden in the activity: title with its name (link), a Show segment badge and the
+// person's efforts in three tables like the one on the segment page - Last (this one and the
+// two before it), Best, Best · last 12 months; this activity marked in the Activity column.
+function segmentCardHtml(a, s, k) {
+  const seg = s.segment;
+  const all = [s.effort, ...s.best, ...s.best_12m, ...s.previous];
+  const opts = { power: all.some((e) => e.avg_power != null), thisId: s.effort.id, polyline: seg.polyline };
+  const table = (title, list) => (list.length ? `<div class="act-seg-table"><h4>${title}</h4>${effortTable(list, a.category, opts)}</div>` : "");
+  return `<div class="card act-seg" data-seg-card="${k}"><div class="card-head"><h3 class="tile-title">${metricIcon("route", 18)}<span>Segment:</span><a href="#/segment/${seg.id}">${esc(seg.name || "Segment")}</a></h3>
+      <span class="hint">${km(seg.distance_m)}${seg.ascent_m ? ` · +${num(seg.ascent_m)} m` : ""}</span><span class="spacer"></span>
+      <div class="badges"><div class="badge-wrap"><button class="badge" data-go="#/segment/${seg.id}">Show segment</button></div></div></div>
+    ${table("Last", [s.effort, ...s.previous])}${table("Best", s.best)}${table("Best · last 12 months", s.best_12m)}</div>`;
 }
 
 // Clock-style duration: 1:02:03, 4:12.
@@ -1159,7 +1399,7 @@ function zoneBars(a, kind) {
   const rng = (x, k) => (k === zones.length - 1 && x.hi >= 1000 ? `${num(x.lo)}+` : k === 0 && !x.lo ? `under ${num(x.hi)}` : `${num(x.lo)}–${num(x.hi)}`);
   return `<div class="zone-bars${kind === "power" ? " with-time" : ""}">${zones.map((x, k) => {
     const c = rampColor(ROUTE_SCALES[kind].stops, zones.length > 1 ? k / (zones.length - 1) : 0);
-    return `<div class="zone-row" style="--zc:${c}" data-tip="Zone ${k + 1} (${rng(x, k)} ${unitLabel}): ${x.t ? clock(x.t) : "no time"}"><span class="zone-name">Z${k + 1}</span>
+    return `<div class="zone-row" style="--zc:${c}" data-zone="${kind}:${x.lo}:${x.hi}" data-tip="Zone ${k + 1} (${rng(x, k)} ${unitLabel}): ${x.t ? clock(x.t) : "no time"}"><span class="zone-name">Z${k + 1}</span>
       <span class="zone-bar"><span style="width:${(x.t / max) * 100}%"></span></span>${kind === "power" ? `<span class="zone-time">${x.t ? clock(x.t) : "–"}</span>` : ""}<span class="zone-pct">${num((x.t / total) * 100)}%</span></div>`;
   }).reverse().join("")}${lowFirst && d.times[0] / total >= 0.01 ? `<div class="zone-row zone-below" style="--zc:var(--muted)" data-tip="Below zone 1 (under ${num(b[0])} ${unitLabel}): ${clock(d.times[0])}">
       <span class="zone-name">–</span><span class="zone-bar"><span style="width:${Math.min(100, (d.times[0] / max) * 100)}%"></span></span>${kind === "power" ? `<span class="zone-time">${clock(d.times[0])}</span>` : ""}<span class="zone-pct">${num((d.times[0] / total) * 100)}%</span></div>` : ""}</div>`;
@@ -1215,13 +1455,13 @@ const EFFORT_NAMES = { 400: "400 m", 1000: "1 km", 1609.344: "1 mile", 5000: "5 
   21097.5: "Half marathon", 40000: "40 km", 42195: "Marathon", 50000: "50 km", 100000: "100 km" };
 const COMPARE_SHORT = { all: ["ATH", "All-time best"], year: ["Year", "Best this year"], "365d": ["12 mo", "Best in the last 12 months"],
   "90d": ["3 mo", "Best in the last 3 months"], "30d": ["30 d", "Best in the last 30 days"] };
-function effortsCard(efforts, compareKey, category) {
+function effortsCard(efforts, compareKey, category, segs = []) {
   const ride = category === "ride";
   // Distances (fastest time); on rides also the best 20 min and 1 h power.
   const list = efforts.map((e, k) => ({ ...e, k }))
     .filter((e) => e.kind === "pace" || e.kind === "ride" || (ride && e.kind === "power" && (e.key === 1200 || e.key === 3600)))
     .sort((p, q) => (p.kind === "power") - (q.kind === "power") || p.key - q.key);
-  if (!list.length) return "";
+  if (!list.length && !segs.length) return "";
   const [short, long] = COMPARE_SHORT[compareKey] || COMPARE_SHORT.all;
   const power = (e) => e.kind === "power";
   const better = (e, v, than) => than != null && (power(e) ? v >= than - 0.05 : v <= than + 0.05);
@@ -1229,12 +1469,25 @@ function effortsCard(efforts, compareKey, category) {
   const speed = (e, t) => (power(e) ? "" : ride ? `${num((e.key / t) * 3.6, 1)} km/h` : `${clock(t / (e.key / 1000))} /km`);
   const name = (e) => (power(e) ? (e.key === 1200 ? "Power20" : "Power1h") : EFFORT_NAMES[e.key] || km(e.key));
   // a past best: time and speed, or a laurel when this activity is that best
-  const cell = (e, rec, tip) => (better(e, e.value, rec) ? `<span class="effort-rec effort-pb" data-tip="${tip}: this activity">${LAUREL_SVG}</span><span></span>`
-    : rec != null ? `<span class="effort-rec">${val(e, rec)}</span><span class="effort-speed">${speed(e, rec)}</span>` : `<span class="effort-rec">–</span><span></span>`);
+  // a past best links to its activity; the tooltip says when it was set
+  const recLink = (txt, date, id, tip, cls = "") => (id ? `<a class="effort-rec plain-link ${cls}" href="#/activity/${id}" data-tip="${tip}${date ? `: ${date}` : ""}">${txt}</a>`
+    : `<span class="effort-rec ${cls}" data-tip="${tip}${date ? `: ${date}` : ""}">${txt}</span>`);
+  const cell = (e, rec, tip, date = "", id = null) => (better(e, e.value, rec) ? `<span class="effort-rec effort-pb${power(e) ? " span2" : ""}" data-tip="${tip}: this activity">${LAUREL_SVG}</span>${power(e) ? "" : "<span></span>"}`
+    : rec != null ? (power(e) ? recLink(val(e, rec), date, id, tip, "span2") : `${recLink(val(e, rec), date, id, tip)}<span class="effort-speed">${speed(e, rec)}</span>`)
+    : `<span class="effort-rec${power(e) ? " span2" : ""}">–</span>${power(e) ? "" : "<span></span>"}`);
+  // segments ridden in this activity: time this time, best this year, best of all time
+  const segSpeed = (s, t) => (t ? (ride ? `${num((s.segment.distance_m / t) * 3.6, 1)} km/h` : `${clock(t / (s.segment.distance_m / 1000))} /km`) : "");
+  const segCell = (s, t, tip, b) => (t != null && s.effort.elapsed_s <= t + 0.05 ? `<span class="effort-rec effort-pb" data-tip="${tip}: this activity">${LAUREL_SVG}</span><span></span>`
+    : t != null ? `${recLink(clock(t), b?.start_time_utc ? localTime(b).slice(0, 10) : "", b?.activity_id, tip)}<span class="effort-speed">${segSpeed(s, t)}</span>` : `<span class="effort-rec">–</span><span></span>`);
+  const segRows = segs.map((s, k) => `<div class="effort effort-seg" data-seg-effort="${k}"><span class="effort-name" title="Segment: ${esc(s.segment.name || "Segment")}">${esc(s.segment.name || "Segment")}</span>
+      <b>${clock(s.effort.elapsed_s)}</b><span class="effort-speed">${segSpeed(s, s.effort.elapsed_s)}</span>${segCell(s, s.year_best, "Best this year", s.year_best_effort)}${segCell(s, s.all_best, "All-time best", s.all_best_effort)}</div>`).join("");
   return `<div class="card act-tile act-efforts"><h3 class="tile-title">${LAUREL_SVG}<span>Best efforts</span></h3>
     <div class="efforts"><div class="effort effort-head"><span></span><span class="eh-now" data-tip="This activity">Activity</span><span class="eh-year" data-tip="Best this year">Year</span><span class="eh-rec" data-tip="${long}">${short}</span></div>
-    ${list.map((e) => `<div class="effort${better(e, e.value, e.record) ? " pb" : ""}" data-effort="${e.k}"><span class="effort-name">${name(e)}</span>
-        <b>${val(e, e.value)}</b><span class="effort-speed">${speed(e, e.value)}</span>${cell(e, e.year, "Best this year")}${cell(e, e.record, long)}</div>`).join("")}</div></div>`;
+    ${list.filter((e) => !power(e)).map((e) => row(e)).join("")}${segRows}${list.filter(power).map((e) => row(e)).join("")}</div></div>`;
+  function row(e) {
+    return `<div class="effort${better(e, e.value, e.record) ? " pb" : ""}" data-effort="${e.k}"><span class="effort-name">${name(e)}</span>
+        ${power(e) ? `<b class="span2">${val(e, e.value)}</b>` : `<b>${val(e, e.value)}</b><span class="effort-speed">${speed(e, e.value)}</span>`}${cell(e, e.year, "Best this year", e.yearDate, e.yearId)}${cell(e, e.record, long, e.recordDate, e.recordId)}</div>`;
+  }
 }
 
 // Out-and-back sections side by side (lines shifted to their right) or on top of each other.
@@ -1246,10 +1499,37 @@ function setRouteOffset(on) {
   ["route", "route-color", "effort-hl", "effort-hl-casing"].forEach((id) => { if (map.getLayer(id)) map.setPaintProperty(id, "line-offset", ROUTE_OFFSET_PX); });
 }
 
+// Weather widget: sky icon and temperature, wind arrow (pointing where the wind blows) with
+// speed and direction, rain when there was some. Model data for the hour and the area.
+const WMO = [[0, "Clear", "sun"], [2, "Partly cloudy", "partly"], [3, "Overcast", "cloud"], [48, "Fog", "fog"],
+  [57, "Drizzle", "rain"], [67, "Rain", "rain"], [77, "Snow", "snow"], [82, "Showers", "rain"], [86, "Snow showers", "snow"], [99, "Thunderstorm", "storm"]];
+const SKY_SVG = {
+  sun: `<circle cx="12" cy="12" r="4.2" fill="#f5b400"/><g stroke="#f5b400" stroke-width="1.8" stroke-linecap="round"><path d="M12 2.5v2.2M12 19.3v2.2M2.5 12h2.2M19.3 12h2.2M5.3 5.3l1.6 1.6M17.1 17.1l1.6 1.6M5.3 18.7l1.6-1.6M17.1 6.9l1.6-1.6"/></g>`,
+  partly: `<circle cx="9" cy="9" r="3.6" fill="#f5b400"/><path d="M7.5 19h9.3a3.6 3.6 0 0 0 .3-7.2 5 5 0 0 0-9.6 1.4A2.9 2.9 0 0 0 7.5 19z" fill="#e8ecf2" stroke="#9aa3b2" stroke-width="1.3"/>`,
+  cloud: `<path d="M6.5 18.5h10.8a4 4 0 0 0 .3-8 5.6 5.6 0 0 0-10.8 1.6 3.2 3.2 0 0 0-.3 6.4z" fill="#dfe4ea" stroke="#8b94a3" stroke-width="1.3"/>`,
+  fog: `<path d="M5 9h14M3.5 12.5h17M5 16h14M7 19.5h10" stroke="#9aa3b2" stroke-width="1.8" stroke-linecap="round"/>`,
+  rain: `<path d="M6.5 14.5h10.8a4 4 0 0 0 .3-8 5.6 5.6 0 0 0-10.8 1.6 3.2 3.2 0 0 0-.3 6.4z" fill="#dfe4ea" stroke="#8b94a3" stroke-width="1.3"/><path d="M8.5 17l-1 3M12.5 17l-1 3M16.5 17l-1 3" stroke="#3b82f6" stroke-width="1.7" stroke-linecap="round"/>`,
+  snow: `<path d="M6.5 14.5h10.8a4 4 0 0 0 .3-8 5.6 5.6 0 0 0-10.8 1.6 3.2 3.2 0 0 0-.3 6.4z" fill="#eef1f5" stroke="#8b94a3" stroke-width="1.3"/><g fill="#7aa7e8"><circle cx="8.5" cy="18.5" r="1.2"/><circle cx="12.5" cy="19.5" r="1.2"/><circle cx="16.5" cy="18.5" r="1.2"/></g>`,
+  storm: `<path d="M6.5 14.5h10.8a4 4 0 0 0 .3-8 5.6 5.6 0 0 0-10.8 1.6 3.2 3.2 0 0 0-.3 6.4z" fill="#cfd5de" stroke="#6b7280" stroke-width="1.3"/><path d="M12.5 15l-2 3.5h2.5l-1.5 3.5" stroke="#f5b400" stroke-width="1.7" fill="none" stroke-linecap="round" stroke-linejoin="round"/>`,
+};
+const COMPASS = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
+function weatherHtml(w) {
+  const sky = WMO.find(([max]) => (w.code ?? 0) <= max) || WMO[WMO.length - 1];
+  const temp = w.temp_min !== w.temp_max ? `${num(w.temp_min)}–${num(w.temp_max)} °C` : `${num(w.temp)} °C`;
+  const from = w.wind_dir != null ? COMPASS[Math.round(w.wind_dir / 45) % 8] : "";
+  // the arrow points where the wind blows (it comes from wind_dir)
+  return `<div class="wx" data-tip="Weather from Open-Meteo: ${sky[1].toLowerCase()}, wind from the ${from}${w.precip ? `, ${num(w.precip, 1)} mm of rain` : ""}; model data for the hour and the area (~10 km).">
+    <svg class="wx-sky" viewBox="0 0 24 24" fill="none" aria-label="${sky[1]}">${SKY_SVG[sky[2]]}</svg>
+    <span>${temp}${w.precip ? ` · ${num(w.precip, 1)} mm` : ""}</span>
+    ${w.wind_speed != null ? `<span class="wx-wind"><svg viewBox="0 0 24 24" style="transform:rotate(${(w.wind_dir ?? 0) + 180}deg)"><path d="M12 3v16M12 3l-4.5 5M12 3l4.5 5" stroke="currentColor" stroke-width="2.4" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>${num(w.wind_speed)} km/h</span>` : ""}
+  </div>`;
+}
+
 // A stretch of the route (samples i0..i1) drawn bold over the route; null clears it.
 function routeHighlight(route, range) {
   const map = activeMap;
-  if (!map?.getSource || (!range && !map.getSource("effort-hl")) || !map.isStyleLoaded()) return;
+  // route.ready: the map has loaded (isStyleLoaded() stays false while tiles load)
+  if (!map?.getSource || !route.ready || (!range && !map.getSource("effort-hl"))) return;
   // range: [[i0, i1], …] (several stretches, e.g. all gravel) or null
   const all = range ? routePoints(route.st, null) : [];
   const lines = (range || []).map(([a, b]) => all.filter((p) => p.i >= a && p.i <= b).map((p) => p.p)).filter((l) => l.length > 1);
@@ -1323,7 +1603,7 @@ function lapGroups(laps, n) {
     out.push({
       label: g.length > 1 ? `${g[0].idx + 1}–${g[g.length - 1].idx + 1}` : String(g[0].idx + 1),
       distance_m: d, timer_s: t, avg_speed: t ? d / t : null,
-      avg_hr: avg("avg_hr"), avg_power: avg("avg_power"), avg_cadence: avg("avg_cadence"),
+      avg_hr: avg("avg_hr"), max_hr: g.some((l) => l.max_hr != null) ? Math.max(...g.map((l) => l.max_hr ?? 0)) : null, avg_power: avg("avg_power"), avg_cadence: avg("avg_cadence"),
       intensity: [...new Set(g.map((l) => l.intensity).filter(Boolean))].join(", "),
     });
   }
@@ -1341,11 +1621,12 @@ function lapsTable(a, n) {
     ["moving_time", "Time", true, (r) => dur(r.timer_s)],
     has("distance_m") && ["avg_pace", "Pace", true, (r) => (r.distance_m ? pace(r.avg_speed) : "–")],
     has("avg_hr") && ["avg_heart_rate", "Avg HR", true, (r) => bpm(r.avg_hr)],
+    has("max_hr") && ["max_heart_rate", "Max HR", true, (r) => bpm(r.max_hr)],
     has("avg_power") && ["avg_power", "Avg power", true, (r) => watts(r.avg_power)],
     has("avg_cadence") && ["avg_cadence", "Cadence", true, (r) => cadence(r.avg_cadence, a.category)],
-    showInt && ["", "Intensity", false, (r) => esc(r.intensity)],
+    showInt && ["intensity_factor", "Intensity", false, (r) => esc(r.intensity)],
   ].filter(Boolean);
-  return `<div class="scroll"><table class="data"><thead><tr>${cols.map(([i, l, nm]) => thIcon(i, l, nm)).join("")}</tr></thead>
+  return `<div class="scroll"><table class="data" data-spread><thead><tr>${cols.map(([i, l, nm]) => thIcon(i, l, nm)).join("")}</tr></thead>
     <tbody>${rows.map((r) => `<tr>${cols.map(([, , nm, f]) => `<td class="${nm ? "num" : ""}">${f(r)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
 }
 
@@ -1380,7 +1661,7 @@ function routePoints(st, key) {
 function drawActivityRoute(route) {
   const map = activeMap;
   if (!map) return;
-  if (!map.isStyleLoaded()) { map.once("idle", () => drawActivityRoute(route)); return; }
+  if (!route.ready) return; // drawn as soon as the map is ready
   const legend = document.getElementById("route-legend");
   const scale = ROUTE_SCALES[route.mode];
   const pts = routePoints(route.st, scale ? route.mode : null);
@@ -1566,9 +1847,10 @@ async function createMap(container, mapSettings, opts = {}) {
     const zoom = Math.max(fitZ + zoomOffset, floor);
     activeMap.jumpTo(fitZ < floor && focus ? { zoom, center: focus } : { zoom });
   }
+  // bottom corners stack the newer control on top: attribution first, so it sits under +/-
+  activeMap.addControl(new ml.AttributionControl({ compact: false }), "bottom-right"); // small, below the buttons
   activeMap.addControl(new ml.NavigationControl({ showCompass: false }), "bottom-right"); // buttons: bottom right
   activeMap.addControl(new ml.ScaleControl({ unit: "metric", maxWidth: 110 }), "bottom-left"); // scale: bottom left
-  activeMap.addControl(new ml.AttributionControl({ compact: false }), "bottom-right"); // small, below the buttons
   if (!document.body.classList.contains("fullmap")) activeMap.addControl(new ml.FullscreenControl(), "top-right");
   const reset = withReset ? new MapResetControl() : null;
   if (reset) activeMap.addControl(reset, "top-right");
@@ -1751,8 +2033,15 @@ function densify(tracks) {
 
 // One level below a tab (an activity, a segment…): a square back button left of the page
 // header on wide screens; on narrow ones it folds above the header as a text link.
-const backLink = (href, label) => `<a class="back" href="${href}" title="Back to ${esc(label)}" aria-label="Back to ${esc(label)}">
-  <span class="back-box">${ICON.back}</span><span class="back-text">← ${esc(label)}</span></a>`;
+const backLink = (href, label, cls = "") => `<a class="back ${cls}" href="${href}" title="Back to ${esc(label)}" aria-label="Back to ${esc(label)}">
+  <span class="back-box side-box">${ICON.up}</span><span class="back-text">← ${esc(label)}</span></a>`;
+// Back link plus previous / next item (e.g. activity) links: on wide screens squares left and
+// right of the page header; on narrow ones one row of text links above it. A missing side is left out.
+const backNavRow = (href, label, prev, next) => {
+  const nav = (cls, h, text, icon) => (h ? `<a class="nav-link ${cls}" href="${h}" title="${text}" aria-label="${text}">
+    <span class="nav-box side-box">${icon}</span><span class="nav-text">${cls === "prev" ? "‹ " + text : text + " ›"}</span></a>` : "");
+  return `<div class="back-row">${backLink(href, label, "in-row")}<span class="page-nav">${nav("prev", prev, "Previous", ICON.prev)}${nav("next", next, "Next", ICON.next)}</span></div>`;
+};
 
 function pageHead(title, badges = "", right = "") {
   return `<div class="page-head"><h2>${title}</h2><div class="badges">${badges}</div><span class="spacer"></span>${right}</div>`;
@@ -2730,6 +3019,7 @@ async function route() {
     else if (section === "segments" && parts[1] === "new") await (parts[2] === "map" ? renderSegmentFromMap(params) : renderSegmentFromActivity(params));
     else if (section === "segments") await renderSegments(params);
     else if (section === "settings") await renderSettings(parts[1], params);
+    else if (section === "manual") await renderManual(parts[1]);
     else if (section === "compare") await renderCompare(params);
     else if (section === "heatmap") await renderHeatmap(params);
     else if (section === "calendar") await renderCalendar(params);

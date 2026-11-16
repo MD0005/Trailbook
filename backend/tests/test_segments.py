@@ -102,7 +102,8 @@ def test_loop_segment_start_equals_end():
 # ---- database, creation, snapping, API -----------------------------------------------------
 
 
-def _store(c, pid, day, track, category="ride", hr=140.0):
+def _store(c, pid, day, track, category="ride", hr=140.0, grade=0.05):
+    """An activity with streams; altitude rises `grade` metres per metre north."""
     time, lat, lon = track
     cur = c.execute(
         """INSERT INTO activities (person_id, fit_uid, start_time_utc, utc_offset_s, category,
@@ -114,10 +115,11 @@ def _store(c, pid, day, track, category="ride", hr=140.0):
          min(lat), min(lon), max(lat), max(lon)),
     )  # fmt: skip
     aid = cur.lastrowid
-    alt = [200 + n * 0.05 for n in range(len(time))]
+    alt = [200 + (la - LAT0) / M_LAT * grade for la in lat]
+    speed = [5.0] * len(time)
     for name, values, kind in (
         ("time", time, "f64"), ("lat", lat, "f64"), ("lon", lon, "f64"),
-        ("hr", [hr] * len(time), "f32"), ("altitude", alt, "f32"),
+        ("hr", [hr] * len(time), "f32"), ("altitude", alt, "f32"), ("speed", speed, "f32"),
     ):  # fmt: skip
         enc, blob = streams.encode(values, kind)
         c.execute(
@@ -168,6 +170,40 @@ def test_create_match_and_reimport(sdb):
     assert c.execute("SELECT COUNT(*) FROM segment_efforts").fetchone()[0] == 5
 
 
+def test_flat_segment_counts_both_ways(tmp_path):
+    c = db.connect(tmp_path / "t.db")
+    c.execute("INSERT INTO persons (id, label) VALUES ('anna', 'Anna')")
+    flat = _store(c, "anna", "2026-10-01", path((0, 0), (1500, 0)), grade=0.01)  # +10 m / km
+    _store(c, "anna", "2026-10-02", path((1500, 0), (0, 0)), grade=0.01)  # the other way
+    steep = _store(c, "anna", "2026-10-03", path((0, 0), (1500, 0), (1500, 50)), grade=0.05)
+    _store(c, "anna", "2026-10-04", path((1500, 50), (0, 50)), grade=0.05)
+    sid = segments.create_from_activity(c, flat, 40, 240, "Flat")
+    s = c.execute("SELECT * FROM segments WHERE id = ?", (sid,)).fetchone()
+    assert s["net_climb_m"] == pytest.approx(10, abs=1) and segments.two_way(s)
+    segments.backfill(c)
+    rows = c.execute(
+        "SELECT reverse, max_speed FROM segment_efforts WHERE segment_id = ? ORDER BY reverse",
+        (sid,),
+    ).fetchall()
+    # north: the flat ride and the steep-day ride; south: the flat return (the other
+    # southbound ride runs 50 m to the east, off the segment)
+    assert [r["reverse"] for r in rows] == [0, 0, 1]
+    assert rows[0]["max_speed"] == 5.0
+    # 50 m up over 1 km: one way only
+    sid2 = segments.create_from_activity(c, steep, 40, 240, "Climb")
+    s2 = c.execute("SELECT * FROM segments WHERE id = ?", (sid2,)).fetchone()
+    assert not segments.two_way(s2)
+    segments.backfill(c)
+    n = c.execute("SELECT COUNT(*) FROM segment_efforts WHERE segment_id = ?", (sid2,))
+    assert n.fetchone()[0] == 2  # the two northbound rides
+    # an older segment without the value gets it from its source activity
+    c.execute("UPDATE segments SET net_climb_m = NULL, match_version = 0 WHERE id = ?", (sid,))
+    segments.backfill(c)
+    again = c.execute("SELECT net_climb_m FROM segments WHERE id = ?", (sid,)).fetchone()[0]
+    assert again == pytest.approx(10, abs=1)
+    c.close()
+
+
 def test_create_rejects_short_or_empty_slices(sdb):
     _, c, a1 = sdb
     with pytest.raises(segments.SegmentError):
@@ -211,7 +247,9 @@ def test_segments_api(sdb, monkeypatch):
     d = client.get(f"/api/segments/{sid}").json()
     assert d["summary"]["count"] == 3 and len(d["top"]) == 3
     assert [p["person_id"] for p in d["people"]] == ["anna", "ben"]
-    assert len(d["trend"]["weeks"]) == 12 and len(d["trend"]["months"]) == 12
+    assert [e["elapsed_s"] for e in d["series"]] and sum(d["type_counts"].values()) == len(
+        d["series"]
+    )
     eff = client.get(f"/api/segments/{sid}/efforts?person=ben").json()
     assert eff["total"] == 1 and eff["items"][0]["rank"] == 1
     by_date = client.get(f"/api/segments/{sid}/efforts?sort=date").json()["items"]

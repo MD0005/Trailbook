@@ -72,11 +72,25 @@ performance condition, stamina and potential stamina. Streams without data are n
   the value is outside). An **In target** stat gives the share of the steps' time within the
   range (computed from the stream; the FIT file has no such value); hovering it marks in red
   where the value was outside. Targets given only as a zone number are not shown.
+- **Interval sections** (only while the training type is Intervals, detected or chosen; see
+  MANUAL › Interval sections): thin grey vertical lines at every work bout's start and end on the
+  speed, heart rate, power and cadence charts, and a strip above each of those plots with one
+  cell per section (between two lines) — speed: the section's pace (on foot) or speed and its
+  time; heart rate: average bpm and the zone; power: average watts and the zone; cadence: the
+  average. Heart rate and power: the value and the zone in the zone's colour (Garmin's limits,
+  as in the zone tiles); other values in the series colour; the time grey; a cell narrower than ~34 px stays empty. A line can be grabbed
+  (a grip shows on hover, the cursor becomes ↔) and dragged between its neighbours. Hovering a
+  strip shows a red ball with − over every line (click: remove it) and a blue ball with + under
+  the pointer elsewhere (click: add a line there). Every change applies to all those charts at
+  once and the cells recompute. Nothing is saved: a new visit, or another training type, starts
+  from the detection again (or shows nothing).
 - Hovering Max/Min draws a large dot with its value in a small label.
 - **Road surface** (from OpenStreetMap, see SPEC): a hatched strip along the bottom of the
   altitude chart (or the first chart) — paved solid grey, gravel dotted, dirt diagonal
-  stripes, unknown light grey — with its legend at the right under the x axis; the value flag
-  names the surface at the cursor.
+  stripes; unknown is not drawn — and one pill per kind in the side column (share of the
+  distance, the ribbon in the kind's colour and hatching; hover highlights all its stretches on
+  the charts and the map); the value flag names the surface at the cursor. A chart whose side
+  column is taller than the plot grows to fit it.
 - Stamina and potential stamina are one chart: current stamina filled, the potential (the most it can
   recover to) as a dashed line; legend on top of the side column, then Start / End / Min.
 - Options panel rows carry a one-line description under the label (what the choice changes).
@@ -111,7 +125,7 @@ performance condition, stamina and potential stamina. Streams without data are n
 One chart group over the days of the Time filter. **Date axis**: even steps chosen by what
 fits (a week, 1, 2, 3 or 6 months, a year); month ticks read "Mar", week ticks "3 Mar"; the
 first tick and every January carry the year on a second line; no axis title. The x flag
-shows the exact date with the weekday. The header toggles Fitness and Form show
+shows the exact date ("14 Apr 2026", no weekday; also on the segment charts). The header toggles Fitness and Form show
 or hide one chart without redrawing the others (`api.show`). Order: dragged like on the
 activity page (`ui_settings` key `fitness-chart-order`).
 
@@ -121,7 +135,7 @@ its value, has the series (or zone) colour and is the series label at the same t
 that would overlap move apart by the same amount, centred on their values (each gives way
 equally); hovering one marks its point. A pinned value shows every series of the chart.
 
-- **Fitness and fatigue** (330 px) — fitness (muted steel blue `#6f8fbf`) filled (or a plain line, Options), fatigue a
+- **Fitness and fatigue** (396 px) — fitness (muted steel blue `#6f8fbf`) filled (or a plain line, Options), fatigue a
   line; pills: Fitness and Fatigue at the end of the period. No daily load. Under its x axis
   a strip of **activity icons** (type icon on its day; icons closer than ~35 px share one spot (about three a month over a year; more when zoomed in)
   with a count; hovering shows name, type, date, moving time and distance of each, a single
@@ -130,7 +144,8 @@ equally); hovering one marks its point. A pinned value shows every series of the
   `fitness-options`): Activities Shown | Hidden, Fitness Filled | Line, Fatigue Shown |
   Hidden (hidden: the card is titled "Fitness"), Form zones Shown | Hidden (hidden: no bands
   and zone names, the line keeps its zone colours). Defaults: shown, filled, shown, shown.
-- **Form** (216 px) — the y axis is turned (more tired = higher). Zone bands with the zone
+- **Form** (259 px) — the usual y axis (fresher = higher, the mirror of fatigue; turning it
+  made form look like a copy of the fatigue line). Zone bands with the zone
   name in their corner; the grid lines and y labels sit exactly on the zone limits
   (−30, −10, 5, 25); the line takes the colour of its zone. Pills: Form (end of the period),
   Freshest and Most tired, each in the colour of the zone it is in.

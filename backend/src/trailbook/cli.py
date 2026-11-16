@@ -9,7 +9,7 @@ import time
 from contextlib import closing
 from pathlib import Path
 
-from . import __version__, analysis, backup, db, garmin, importer, jobs, segments, sports
+from . import __version__, analysis, backup, db, garmin, importer, jobs, segments, sports, workout
 
 
 def _set_low_priority() -> None:
@@ -144,6 +144,15 @@ def cmd_scan(conn, args) -> int:
                 )
 
             matched = segments.backfill(conn, progress=segment_progress)
+
+            def workout_progress(i, total):
+                jobs.write_progress(
+                    conn, state="running", phase="workouts", started_at=started, done=i, total=total
+                )
+
+            kinds = workout.backfill(conn, progress=workout_progress)
+            if kinds:
+                out(f"Workout kind detected for {kinds} activities.")
             if matched:
                 out(f"Segments matched for {matched} segments / activities.")
             if analysed:

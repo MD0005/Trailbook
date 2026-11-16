@@ -698,6 +698,8 @@ def _store_activity(
         "importer_version": IMPORTER_VERSION,
         "analysis_version": 0,  # load and best efforts are computed after import
         "segments_version": 0,  # segment efforts too
+        "workout_version": 0,  # and the workout kind (the person's choice is kept)
+        "workout_stats": None,
         **{c: p.summary.get(c) for c in _ACTIVITY_COLUMNS},
         **{f"watch_{k}": p.profile.get(k) for k in WATCH_FIELDS},
         "watch_version": WATCH_VERSION,
@@ -856,7 +858,8 @@ def set_activity_type(conn: sqlite3.Connection, activity_id: int, type_key: str)
     t = sports.TYPES[type_key]
     conn.execute(
         """UPDATE activities SET activity_type = ?, category = ?, type_overridden = 1,
-                  analysis_version = 0, segments_version = 0
+                  analysis_version = 0, segments_version = 0, workout_version = 0,
+                  workout_stats = NULL
            WHERE id = ?""",
         (t.key, t.group, activity_id),
     )

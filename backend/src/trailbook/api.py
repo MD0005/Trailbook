@@ -42,6 +42,8 @@ from . import (
     sports,
     streams,
     surface,
+    weather,
+    workout,
 )
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -60,13 +62,14 @@ class _RevalidatedStatic(StaticFiles):
 ACTIVITY_LIST_FIELDS = (
     "id person_id start_time_utc utc_offset_s category activity_type indoor name "
     "elapsed_s moving_s distance_m ascent_m avg_hr max_hr avg_speed avg_power calories "
-    "has_gps"
+    "has_gps workout workout_override"
 ).split()
 
 # Column key -> SQL expression, for ?sort=<key>&dir=asc|desc
 ACTIVITY_SORTS = {
     "date": "start_time_utc",
     "type": "activity_type",
+    "workout": "COALESCE(workout_override, workout)",
     "name": "name",
     "distance": "distance_m",
     "moving": "moving_s",
@@ -102,6 +105,7 @@ FILE_TEXT_FILTERS = {
 # Best efforts ranked per (kind, key): rk = 1 is the record (lowest time for pace/ride, highest
 # value otherwise; the earliest wins a tie), with when it was set. {where} filters oa (activities).
 _RECORDS_SQL = """SELECT o.kind, o.key, o.value, oa.start_time_utc, oa.utc_offset_s,
+           oa.id AS activity_id,
            ROW_NUMBER() OVER (PARTITION BY o.kind, o.key
                ORDER BY CASE WHEN o.kind IN ('pace', 'ride') THEN o.value ELSE -o.value END,
                         oa.start_time_utc) AS rk
@@ -306,6 +310,36 @@ def create_app(db_path: str | Path) -> Starlette:
                     }
                     for t in sports.TYPES.values()
                 ],
+                "workouts": [
+                    {"key": k, "en": en, "pl": pl} for k, (en, pl) in workout.KINDS.items()
+                ],
+                # sport families and their parameters (the manual is written from these)
+                "workout_families": [
+                    {
+                        "key": p.key,
+                        "en": p.en,
+                        "types": list(p.types),
+                        "kinds": list(p.kinds),
+                        "auto": p.auto,
+                        "lthr_share": p.lthr_share,
+                        "long_min": p.long_min,
+                        "hills": list(p.hills) if p.hills else None,
+                        "commute": p.commute,
+                    }
+                    for p in workout.PROFILES.values()
+                ],
+                "workout_rules": workout.RULES,
+                "workout_channels": workout.CHANNEL_RULES,
+                # training load and fitness model (Manual › Fitness is written from these)
+                "fitness_rules": {
+                    "ctl_days": analysis.CTL_DAYS,
+                    "atl_days": analysis.ATL_DAYS,
+                    "lthr_share_of_max": analysis.LTHR_SHARE_OF_MAX,
+                    "default_hr_rest": analysis.DEFAULT_HR_REST,
+                    "hr_max_range": [100, 230],
+                    "stale_days": analysis.STALE_DAYS,
+                    "ftp_groups": list(analysis.FTP_GROUPS),
+                },
             }
         )
 
@@ -567,6 +601,13 @@ def create_app(db_path: str | Path) -> Starlette:
                 params,
             ).fetchone()
             fields = ", ".join(ACTIVITY_LIST_FIELDS)
+            # segments ridden in the activity (a badge on the tile)
+            fields += (
+                ", (SELECT COUNT(*) FROM segment_efforts s"
+                " WHERE s.activity_id = activities.id) segment_count"
+                ", (SELECT g.name FROM segment_efforts s JOIN segments g ON g.id = s.segment_id"
+                " WHERE s.activity_id = activities.id ORDER BY s.start_s LIMIT 1) segment_name"
+            )
             with_track = q.get("track") == "1"
             if with_track:
                 fields += ", (SELECT polyline FROM tracks t WHERE t.activity_id = id) polyline"
@@ -590,7 +631,12 @@ def create_app(db_path: str | Path) -> Starlette:
     async def activity(request: Request):
         aid = request.path_params["id"]
         with closing(conn()) as c:
-            a = dict(_activity_or_404(c, aid))
+            row = _activity_or_404(c, aid)
+            a = dict(row)
+            th = analysis.activity_thresholds(c, row)  # FTP used (the Edit panel shows it)
+            a["ftp_used"] = th.ftp
+            a["ftp_source"] = (th.sources or {}).get("ftp")
+            a["workout_options"] = list(workout.options(row["activity_type"]))
             a["laps"] = [
                 dict(r)
                 for r in c.execute("SELECT * FROM laps WHERE activity_id = ? ORDER BY idx", (aid,))
@@ -607,7 +653,8 @@ def create_app(db_path: str | Path) -> Starlette:
                 for r in c.execute(
                     f"""WITH r AS ({same})
                        SELECT b.kind, b.key, b.value, b.start_s, b.end_s, r.value AS record,
-                              r.start_time_utc AS record_time, r.utc_offset_s AS record_offset_s
+                              r.start_time_utc AS record_time, r.utc_offset_s AS record_offset_s,
+                              r.activity_id AS record_activity
                        FROM best_efforts b
                        LEFT JOIN r ON r.kind = b.kind AND r.key = b.key AND r.rk = 1
                        WHERE b.activity_id = ? ORDER BY b.kind, b.key""",
@@ -620,6 +667,7 @@ def create_app(db_path: str | Path) -> Starlette:
                 for d in devs:
                     d["image"] = _device_image(d.get("product"))
                 a["devices"] = devs
+            a["segments"] = _activity_segments(c, a)
             # Garmin Connect list data (title, training effect, body battery, location…)
             g = c.execute(
                 """SELECT summary FROM garmin_activities
@@ -629,6 +677,18 @@ def create_app(db_path: str | Path) -> Starlette:
                 (aid, aid),
             ).fetchone()
             a["connect"] = json.loads(g["summary"]) if g else None
+            # Previous / next activity in time: same person, everyone with ?neighbours=all.
+            every = request.query_params.get("neighbours") == "all"
+            pf, pa = ("", ()) if every else ("AND person_id = ?", (row["person_id"],))
+            key = (row["start_time_utc"], row["start_time_utc"], aid)
+            for name, op, order in (("prev_id", "<", "DESC"), ("next_id", ">", "ASC")):
+                n = c.execute(
+                    f"""SELECT id FROM activities
+                        WHERE (start_time_utc {op} ? OR (start_time_utc = ? AND id {op} ?)) {pf}
+                        ORDER BY start_time_utc {order}, id {order} LIMIT 1""",
+                    (*key, *pa),
+                ).fetchone()
+                a[name] = n["id"] if n else None
             a["files"] = [
                 dict(r)
                 for r in c.execute(
@@ -662,10 +722,26 @@ def create_app(db_path: str | Path) -> Starlette:
                 raise HTTPException(400, "range must be all, year, 365d, 90d or 30d")
             rows = c.execute(
                 f"""WITH r AS ({_RECORDS_SQL.format(where=" AND ".join(where))})
-                    SELECT kind, key, value, start_time_utc, utc_offset_s FROM r WHERE rk = 1""",
+                    SELECT kind, key, value, start_time_utc, utc_offset_s, activity_id
+                    FROM r WHERE rk = 1""",
                 params,
             ).fetchall()
         return JSONResponse({"range": rng, "records": [dict(r) for r in rows]})
+
+    # Weather during the activity (Open-Meteo, cached per activity).
+    async def activity_weather(request: Request):
+        aid = request.path_params["id"]
+
+        def work():
+            with closing(conn()) as c:
+                _activity_or_404(c, aid)
+                return weather.compute(c, aid)
+
+        try:
+            result = await run_in_threadpool(work)
+        except OSError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=503)
+        return JSONResponse(result)
 
     # Road surface along the route (OpenStreetMap via an Overpass server, cached per activity).
     async def activity_surface(request: Request):
@@ -681,6 +757,21 @@ def create_app(db_path: str | Path) -> Starlette:
         except OSError as exc:
             return JSONResponse({"error": str(exc)}, status_code=503)
         return JSONResponse(result)
+
+    # Section lines of an interval workout (seconds from the start) for the charts. Only while
+    # the activity is Intervals (detected or chosen); nothing is stored, the lines the person
+    # moves live in the page.
+    async def activity_intervals(request: Request):
+        aid = request.path_params["id"]
+
+        def work():
+            with closing(conn()) as c:
+                row = _activity_or_404(c, aid)
+                if (row["workout_override"] or row["workout"]) != "intervals":
+                    return {"splits": [], "channel": None}
+                return workout.interval_splits(c, aid)
+
+        return JSONResponse(await run_in_threadpool(work))
 
     async def device_image(request: Request):
         name = request.path_params["name"]
@@ -699,6 +790,22 @@ def create_app(db_path: str | Path) -> Starlette:
                     raise HTTPException(400, "unknown activity type")
                 importer.set_activity_type(c, aid, body["type"])
                 analysis.analyse_one(c, aid)  # the group decides e.g. running best efforts
+                workout.detect_one(c, aid)
+            if "workout" in body:  # the person's choice; null = back to the detected kind
+                try:
+                    workout.set_override(c, aid, body["workout"])
+                except ValueError as exc:
+                    raise HTTPException(400, str(exc)) from exc
+            if "ftp" in body:  # FTP for this activity only; null = the file's / the person's
+                ftp = body["ftp"]
+                if ftp is not None and (not isinstance(ftp, int | float) or not 30 <= ftp <= 2000):
+                    raise HTTPException(400, "FTP must be 30-2000 W")
+                c.execute(
+                    "UPDATE activities SET ftp_override = ? WHERE id = ?",
+                    (round(ftp) if ftp is not None else None, aid),
+                )
+                analysis.analyse_one(c, aid)  # load, intensity
+                workout.detect_one(c, aid)
             if "name" in body:
                 name = (body["name"] or "").strip()
                 if name:
@@ -1157,8 +1264,67 @@ def create_app(db_path: str | Path) -> Starlette:
     # ---- segments ----------------------------------------------------------------------
 
     EFFORT_COLS = """e.id, e.segment_id, e.activity_id, e.start_time_utc, e.start_s, e.end_s,
-        e.elapsed_s, e.moving_s, e.avg_speed, e.avg_hr, e.max_hr, e.avg_power, e.avg_cadence,
-        a.person_id, a.utc_offset_s, a.name AS activity_name, a.activity_type"""
+        e.elapsed_s, e.moving_s, e.avg_speed, e.max_speed, e.avg_hr, e.max_hr, e.avg_power,
+        e.avg_cadence, e.reverse,
+        a.person_id, a.utc_offset_s, a.name AS activity_name, a.activity_type, a.weather"""
+
+    def _activity_segments(c: sqlite3.Connection, a: dict) -> list[dict]:
+        """Segments ridden in an activity: the effort, the person's 3 best of all time and of
+        the last 12 months, the 2 efforts before this one, and the bests of this year and of
+        all time (for the best efforts tile)."""
+        since = (datetime.now(UTC) - timedelta(days=365)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        year = datetime.now(UTC).strftime("%Y")
+        rank = """(SELECT COUNT(*) + 1 FROM segment_efforts e2
+                    JOIN activities a2 ON a2.id = e2.activity_id
+                    WHERE e2.segment_id = e.segment_id AND a2.person_id = a.person_id
+                      AND e2.elapsed_s < e.elapsed_s) AS rank"""
+        joined = "FROM segment_efforts e JOIN activities a ON a.id = e.activity_id"
+
+        def efforts(sid: int, extra: str, order: str, limit: int, *params) -> list[dict]:
+            rows = c.execute(
+                f"""SELECT {EFFORT_COLS}, {rank} {joined}
+                    WHERE e.segment_id = ? AND a.person_id = ? {extra}
+                    ORDER BY {order} LIMIT {limit}""",
+                (sid, a["person_id"], *params),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+        out = []
+        mine = c.execute(
+            f"SELECT {EFFORT_COLS}, {rank} {joined} WHERE e.activity_id = ? ORDER BY e.start_s",
+            (a["id"],),
+        ).fetchall()
+        for eff in mine:
+            sid = eff["segment_id"]
+            seg = c.execute(
+                """SELECT id, name, polyline, distance_m, ascent_m, category
+                   FROM segments WHERE id = ?""",
+                (sid,),
+            ).fetchone()
+            best = efforts(sid, "", "e.elapsed_s", 3)
+            year_best = efforts(
+                sid, "AND substr(e.start_time_utc, 1, 4) = ?", "e.elapsed_s", 1, year
+            )
+            out.append(
+                {
+                    "segment": dict(seg) if seg else {"id": sid},
+                    "effort": dict(eff),
+                    "best": best,
+                    "best_12m": efforts(sid, "AND e.start_time_utc >= ?", "e.elapsed_s", 3, since),
+                    "previous": efforts(
+                        sid,
+                        "AND e.start_time_utc < ?",
+                        "e.start_time_utc DESC",
+                        2,
+                        eff["start_time_utc"],
+                    ),  # fmt: skip
+                    "year_best": year_best[0]["elapsed_s"] if year_best else None,
+                    "all_best": best[0]["elapsed_s"] if best else None,
+                    "year_best_effort": year_best[0] if year_best else None,
+                    "all_best_effort": best[0] if best else None,
+                }
+            )
+        return out
 
     def _segment_or_404(c: sqlite3.Connection, sid: int) -> sqlite3.Row:
         row = c.execute("SELECT * FROM segments WHERE id = ?", (sid,)).fetchone()
@@ -1169,6 +1335,7 @@ def create_app(db_path: str | Path) -> Starlette:
     def _segment_dict(s: sqlite3.Row) -> dict:
         d = dict(s)
         d["pending"] = s["match_version"] < segments.MATCH_VERSION
+        d["two_way"] = segments.two_way(s)
         return d
 
     def _person_filter(request: Request) -> tuple[str, list]:
@@ -1245,28 +1412,6 @@ def create_app(db_path: str | Path) -> Starlette:
             "median_s": round(median, 1),
         }
 
-    def _trend(efforts: list[dict]) -> dict:
-        today = datetime.now(UTC).date()
-        monday = today - timedelta(days=today.weekday())
-        weeks = [(monday - timedelta(weeks=k)).isoformat() for k in range(11, -1, -1)]
-        months, y, m = [], today.year, today.month
-        for _ in range(12):
-            months.insert(0, f"{y:04d}-{m:02d}")
-            y, m = (y, m - 1) if m > 1 else (y - 1, 12)
-        by_week: dict[str, list] = {w: [] for w in weeks}
-        by_month: dict[str, list] = {mo: [] for mo in months}
-        for e in efforts:
-            day = datetime.strptime(e["day"], "%Y-%m-%d").date()
-            wk = (day - timedelta(days=day.weekday())).isoformat()
-            if wk in by_week:
-                by_week[wk].append(e)
-            if e["day"][:7] in by_month:
-                by_month[e["day"][:7]].append(e)
-        return {
-            "weeks": [{"period": w, **_period_stats(v)} for w, v in by_week.items()],
-            "months": [{"period": mo, **_period_stats(v)} for mo, v in by_month.items()],
-        }
-
     async def segment_detail(request: Request):
         sid = request.path_params["id"]
         pf, pp = _person_filter(request)
@@ -1281,11 +1426,33 @@ def create_app(db_path: str | Path) -> Starlette:
             source = None
             if s["source_activity_id"]:
                 src = c.execute(
-                    "SELECT id, name, activity_type, start_time_utc, utc_offset_s, person_id"
-                    " FROM activities WHERE id = ?",
+                    "SELECT id, name, activity_type, category, start_time_utc, utc_offset_s,"
+                    " person_id FROM activities WHERE id = ?",
                     (s["source_activity_id"],),
                 ).fetchone()
                 source = dict(src) if src else None
+                if source:  # the place, as on the activity page (Garmin Connect list data)
+                    g = c.execute(
+                        """SELECT summary FROM garmin_activities WHERE summary IS NOT NULL
+                           AND (trailbook_id = ? OR file_rel IN (
+                                SELECT rel_path FROM files WHERE activity_id = ?)) LIMIT 1""",
+                        (source["id"], source["id"]),
+                    ).fetchone()
+                    source["location"] = (
+                        (json.loads(g["summary"]) or {}).get("locationName") if g else None
+                    )
+            # Types of the efforts under every filter but Type: the Type filter lists only these.
+            tq = {k: v for k, v in request.query_params.items() if k not in ("types", "type")}
+            tw, tp = activity_filters(tq)
+            type_counts = dict(
+                c.execute(
+                    f"""SELECT a.activity_type, COUNT(*) FROM segment_efforts e
+                        JOIN activities a ON a.id = e.activity_id
+                        WHERE e.segment_id = ? {"".join(f" AND {w}" for w in tw)}
+                        GROUP BY a.activity_type""",
+                    [sid, *tp],
+                ).fetchall()
+            )
             _kick_matching(c)
         efforts = [dict(r) for r in rows]
         for i, e in enumerate(efforts, 1):
@@ -1312,7 +1479,24 @@ def create_app(db_path: str | Path) -> Starlette:
                 "best": efforts[0] if efforts else None,
                 "last": last,
                 "top": efforts[:10],
-                "trend": _trend(efforts),
+                "type_counts": type_counts,
+                # every effort in time order, for the trend chart
+                "series": sorted(
+                    (
+                        {
+                            k: e[k]
+                            for k in (
+                                "start_time_utc",
+                                "utc_offset_s",
+                                "elapsed_s",
+                                "activity_id",
+                                "rank",
+                            )
+                        }
+                        for e in efforts
+                    ),
+                    key=lambda e: e["start_time_utc"],
+                ),
                 "people": people,
             }
         )
@@ -1686,6 +1870,8 @@ def create_app(db_path: str | Path) -> Starlette:
         Route("/api/activities/{id:int}/streams", activity_streams),
         Route("/api/activities/{id:int}/records", activity_records),
         Route("/api/activities/{id:int}/surface", activity_surface),
+        Route("/api/activities/{id:int}/intervals", activity_intervals),
+        Route("/api/activities/{id:int}/weather", activity_weather),
         Route("/api/activities/{id:int}/track", activity_track),
         Route("/api/heatmap/tracks", heatmap_tracks),
         Route("/api/heatmap/tiles", heatmap_tiles),

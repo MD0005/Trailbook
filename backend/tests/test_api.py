@@ -4,7 +4,7 @@ import pytest
 from conftest import SAMPLE_DATA, make_fit
 from starlette.testclient import TestClient
 
-from trailbook import db, importer
+from trailbook import analysis, db, importer
 from trailbook.api import create_app
 
 
@@ -28,6 +28,10 @@ def test_info_types_persons(setup):
     assert client.get("/api/info").json()["schema"] == db.SCHEMA_VERSION
     types = client.get("/api/types").json()
     assert any(t["key"] == "yoga" and t["group"] == "mind_body" for t in types["types"])
+    # Manual › Fitness is written from these, the same values the model uses
+    rules = types["fitness_rules"]
+    assert (rules["ctl_days"], rules["atl_days"]) == (analysis.CTL_DAYS, analysis.ATL_DAYS)
+    assert rules["lthr_share_of_max"] == analysis.LTHR_SHARE_OF_MAX
     persons = client.get("/api/persons").json()
     assert persons[0]["id"] == "alice" and persons[0]["activities"] == 0
 

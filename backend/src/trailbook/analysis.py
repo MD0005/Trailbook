@@ -32,8 +32,8 @@ from datetime import UTC, date, datetime, timedelta
 from . import streams
 
 # v2: watch thresholds, load_estimated; v3: effort positions, ride; v4: 30 km ride;
-# v5: power over pauses, up to 5 h
-ANALYSIS_VERSION = 5
+# v5: power over pauses, up to 5 h; v6: watch FTP per sport, FTP corrected per activity
+ANALYSIS_VERSION = 6
 
 # Best efforts (SPEC §7.5). Pace: metres → best time in s. Power / HR: seconds → best mean.
 # Ride: kilometres → best time in s (kind "ride"). Efforts also keep where they happened
@@ -104,17 +104,35 @@ def threshold_rows(conn: sqlite3.Connection, person_id: str) -> list[sqlite3.Row
 WATCH_FIELDS = ("hr_max", "hr_rest", "lthr", "ftp", "weight")
 
 
-def watch_history(conn: sqlite3.Connection, person_id: str) -> list[tuple[str, dict]]:
-    """(local day, watch thresholds) of the person's activities that have any, by day."""
+# FTP is per sport: a run file carries the running-power FTP (~1.6x the cycling one on a
+# Garmin), so a ride without FTP in its file must not borrow it from a run, and the other way
+# round. Other groups take no FTP from the watch.
+FTP_GROUPS = ("run", "ride")
+
+
+def ftp_group(category: str | None) -> str | None:
+    """Group whose watch FTP applies to an activity of `category` (None = no watch FTP)."""
+    return category if category in FTP_GROUPS else None
+
+
+def watch_history(
+    conn: sqlite3.Connection, person_id: str, group: str | None = "ride"
+) -> list[tuple[str, dict]]:
+    """(local day, watch thresholds) of the person's activities that have any, by day. The FTP
+    comes only from activities of `group` (see FTP_GROUPS; default: cycling, the FTP shown in
+    Settings)."""
     cols = ", ".join(f"watch_{k}" for k in WATCH_FIELDS)
     out = []
     for r in conn.execute(
-        f"""SELECT {LOCAL_DAY_SQL} AS day, {cols} FROM activities
+        f"""SELECT {LOCAL_DAY_SQL} AS day, category, {cols} FROM activities
             WHERE person_id = ? AND ({" OR ".join(f"watch_{k} IS NOT NULL" for k in WATCH_FIELDS)})
             ORDER BY start_time_utc""",
         (person_id,),
     ):
-        out.append((r[0], {k: r[i + 1] for i, k in enumerate(WATCH_FIELDS)}))
+        v = {k: r[i + 2] for i, k in enumerate(WATCH_FIELDS)}
+        if group is None or r["category"] != group:
+            v["ftp"] = None
+        out.append((r[0], v))
     return out
 
 
@@ -406,6 +424,30 @@ def backfill(conn: sqlite3.Connection, progress: ProgressFn | None = None) -> in
     return len(todo)
 
 
+def activity_thresholds(
+    conn: sqlite3.Connection, a: sqlite3.Row, cache: dict | None = None
+) -> Thresholds:
+    """Thresholds valid for the activity (its own watch values first). `cache` keeps the
+    person's rows between calls."""
+    pid, group = a["person_id"], ftp_group(a["category"])
+    per = (cache if cache is not None else {}).setdefault("thresholds", {})
+    if (pid, group) not in per:
+        per[(pid, group)] = (
+            threshold_rows(conn, pid), auto_hr_max(conn, pid), watch_history(conn, pid, group)
+        )  # fmt: skip
+    rows, auto_max, history = per[(pid, group)]
+    day = _local_day(a)
+    watch, _ = watch_on(history, day)
+    own = {k: a[f"watch_{k}"] for k in WATCH_FIELDS if a[f"watch_{k}"] is not None}
+    if group is None:
+        own.pop("ftp", None)
+    th = thresholds_for(rows, day, auto_max, {**watch, **own})
+    if a["ftp_override"]:  # the person corrected the FTP of this activity
+        th.ftp = a["ftp_override"]
+        th.sources = {**(th.sources or {}), "ftp": "activity"}
+    return th
+
+
 def analyse_one(
     conn: sqlite3.Connection, activity_id: int, cache: dict | None = None
 ) -> Analysis | None:
@@ -413,15 +455,8 @@ def analyse_one(
     a = conn.execute("SELECT * FROM activities WHERE id = ?", (activity_id,)).fetchone()
     if a is None:
         return None
-    pid = a["person_id"]
     cache = {} if cache is None else cache
-    if pid not in cache:
-        cache[pid] = (threshold_rows(conn, pid), auto_hr_max(conn, pid), watch_history(conn, pid))
-    rows, auto_max, history = cache[pid]
-    day = _local_day(a)
-    watch, _ = watch_on(history, day)
-    own = {k: a[f"watch_{k}"] for k in WATCH_FIELDS if a[f"watch_{k}"] is not None}
-    th = thresholds_for(rows, day, auto_max, {**watch, **own})
+    th = activity_thresholds(conn, a, cache)
     result = analyse(a, _channels(conn, activity_id), th)
     used = METHOD_FIELDS.get(result.method or "", ())
     estimated = int(any((th.sources or {}).get(f) in ("auto", "default") for f in used))
@@ -471,16 +506,16 @@ def threshold_warnings(
     Threshold HR derived from a watch HR max is a normal estimate, not a warning."""
     rows = threshold_rows(conn, person_id)
     auto_max = auto_hr_max(conn, person_id)
-    history = watch_history(conn, person_id)
+    histories = {g: watch_history(conn, person_id, g) for g in (*FTP_GROUPS, None)}
     missing: dict[str, dict] = {}
     stale: dict[str, str] = {}  # year → farthest source day
-    for day, method in conn.execute(
-        f"""SELECT {LOCAL_DAY_SQL} AS d, load_method FROM activities
+    for day, method, category in conn.execute(
+        f"""SELECT {LOCAL_DAY_SQL} AS d, load_method, category FROM activities
             WHERE person_id = ? AND load IS NOT NULL
               AND (? = '' OR {LOCAL_DAY_SQL} >= ?) AND (? = '' OR {LOCAL_DAY_SQL} <= ?)""",
         (person_id, since, since, until, until),
     ):
-        watch, wdays = watch_days(history, day)
+        watch, wdays = watch_days(histories[ftp_group(category)], day)
         th = thresholds_for(rows, day, auto_max, watch)
         src = th.sources or {}
         for f in METHOD_FIELDS.get(method or "", ()):
@@ -504,7 +539,8 @@ def threshold_warnings(
 def reset_person(conn: sqlite3.Connection, person_id: str) -> int:
     """Thresholds changed: analyse this person's activities again on the next run."""
     return conn.execute(
-        "UPDATE activities SET analysis_version = 0 WHERE person_id = ?", (person_id,)
+        "UPDATE activities SET analysis_version = 0, workout_version = 0 WHERE person_id = ?",
+        (person_id,),
     ).rowcount
 
 

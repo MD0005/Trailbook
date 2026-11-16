@@ -15,6 +15,9 @@ Matching an activity (pure Python, a few ms per candidate on the CM4):
     checkpoints (detours and the opposite direction fail);
   * it ends at the first crossing of the end; the travelled distance must be close to the
     segment length. Several efforts per activity are possible (laps).
+  * a flat segment (end at most TWO_WAY_MAX_CLIMB_M and TWO_WAY_MAX_GRADE of the length above
+    or below the start) also counts in the opposite direction: it is matched a second time
+    reversed and those efforts are marked `reverse`.
 """
 
 from __future__ import annotations
@@ -27,7 +30,7 @@ from datetime import datetime, timedelta
 
 from . import geo, streams
 
-MATCH_VERSION = 1
+MATCH_VERSION = 2  # 2: max speed, both directions on flat segments
 
 CHECK_SPACING_M = 25.0
 START_RADIUS_M = 25.0
@@ -42,6 +45,8 @@ PIN_RADIUS_M = 50.0
 BBOX_MARGIN_DEG = 0.0005  # ~50 m
 MOVING_MIN_SPEED = 0.3  # m/s
 MOVING_MAX_DT = 10.0  # s, longer gaps are pauses
+TWO_WAY_MAX_CLIMB_M = 30.0  # end vs start altitude...
+TWO_WAY_MAX_GRADE = 0.03  # ...and at most 3 % of the length (short steep ramps stay one way)
 
 ProgressFn = Callable[[int, int], None]
 
@@ -117,9 +122,12 @@ class Prepared:
     length: float
     u_start: tuple[float, float]
     u_end: tuple[float, float]
+    reverse: bool = False
 
 
-def prepare(segment_id: int, points: list[tuple[float, float]]) -> Prepared:
+def prepare(segment_id: int, points: list[tuple[float, float]], reverse: bool = False) -> Prepared:
+    if reverse:
+        points = list(reversed(points))
     proj = Projection(*points[0])
     xy = [proj.xy(lat, lon) for lat, lon in points]
     cps = checkpoints(xy)
@@ -127,7 +135,21 @@ def prepare(segment_id: int, points: list[tuple[float, float]]) -> Prepared:
     # Directions from the ends to the checkpoint next to them.
     u_start = _unit(*cps[0], *cps[1]) if len(cps) > 1 else (1.0, 0.0)
     u_end = _unit(*cps[-2], *cps[-1]) if len(cps) > 1 else (1.0, 0.0)
-    return Prepared(segment_id, proj, cps, length, u_start, u_end)
+    return Prepared(segment_id, proj, cps, length, u_start, u_end, reverse)
+
+
+def two_way(s) -> bool:
+    """Flat enough to count in both directions (the end not much higher or lower)."""
+    net = s["net_climb_m"]
+    limit = min(TWO_WAY_MAX_CLIMB_M, TWO_WAY_MAX_GRADE * s["distance_m"])
+    return net is not None and abs(net) <= limit
+
+
+def prepared(s: sqlite3.Row) -> list[Prepared]:
+    """The segment as matched: its own direction, and reversed when it is flat."""
+    pts = _points(s)
+    back = [prepare(s["id"], pts, reverse=True)] if two_way(s) else []
+    return [prepare(s["id"], pts), *back]
 
 
 # ---- matching ----------------------------------------------------------------------------
@@ -298,10 +320,12 @@ def effort_values(tr: Track, m: Match, seg_len: float, ch: dict[str, list]) -> d
 
     hr = window("hr")
     hr_vals = [v for v in hr if v is not None]
+    speed = [v for v in window("speed") if v is not None]
     return {
         "elapsed_s": round(elapsed, 1),
         "moving_s": round(moving, 1),
         "avg_speed": round(seg_len / elapsed, 3) if elapsed > 0 else None,
+        "max_speed": round(max(speed), 3) if speed else None,
         "avg_hr": round(_mean(hr), 1) if hr_vals else None,
         "max_hr": max(hr_vals) if hr_vals else None,
         "avg_power": _round(_mean(window("power"))),
@@ -343,21 +367,22 @@ def _match_pair(conn, activity: sqlite3.Row, seg: Prepared, pos: dict) -> list[t
     matches = find_efforts(tr, seg)
     if not matches:
         return []
-    extra = _channels(conn, activity["id"], ("hr", "power", "cadence"))
+    extra = _channels(conn, activity["id"], ("hr", "power", "cadence", "speed"))
     rows = []
     for m in matches:
         v = effort_values(tr, m, seg.length, extra)
         rows.append((
             seg.id, activity["id"], _start_iso(activity, m.start_t), round(m.start_t, 1),
             round(m.end_t, 1), v["elapsed_s"], v["moving_s"], v["avg_speed"], v["avg_hr"],
-            v["max_hr"], v["avg_power"], v["avg_cadence"],
+            v["max_hr"], v["avg_power"], v["avg_cadence"], v["max_speed"], int(seg.reverse),
         ))  # fmt: skip
     return rows
 
 
 _INSERT = """INSERT INTO segment_efforts (segment_id, activity_id, start_time_utc, start_s,
-             end_s, elapsed_s, moving_s, avg_speed, avg_hr, max_hr, avg_power, avg_cadence)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"""
+             end_s, elapsed_s, moving_s, avg_speed, avg_hr, max_hr, avg_power, avg_cadence,
+             max_speed, reverse)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"""
 
 _CANDIDATE_SQL = """
     a.has_gps = 1
@@ -393,7 +418,12 @@ def match_segment(conn: sqlite3.Connection, segment_id: int) -> int:
     s = conn.execute("SELECT * FROM segments WHERE id = ?", (segment_id,)).fetchone()
     if s is None:
         return 0
-    seg = prepare(s["id"], _points(s))
+    if s["net_climb_m"] is None and s["source_activity_id"]:  # segments made before v2
+        net = source_net_climb(conn, s)
+        if net is not None:
+            conn.execute("UPDATE segments SET net_climb_m = ? WHERE id = ?", (net, segment_id))
+            s = conn.execute("SELECT * FROM segments WHERE id = ?", (segment_id,)).fetchone()
+    preps = prepared(s)
     where, params = _CANDIDATE_SQL, _candidate_params(s)
     if s["category"]:
         where += " AND a.category = ?"
@@ -404,7 +434,9 @@ def match_segment(conn: sqlite3.Connection, segment_id: int) -> int:
     ).fetchall()
     rows: list[tuple] = []
     for a in acts:
-        rows += _match_pair(conn, a, seg, _channels(conn, a["id"], ("time", "lat", "lon")))
+        pos = _channels(conn, a["id"], ("time", "lat", "lon"))
+        for seg in preps:
+            rows += _match_pair(conn, a, seg, pos)
     conn.execute("BEGIN")
     try:
         conn.execute("DELETE FROM segment_efforts WHERE segment_id = ?", (segment_id,))
@@ -430,8 +462,9 @@ def match_activity(conn: sqlite3.Connection, activity_id: int, segs: list | None
     todo = [(s, p) for s, p in segs if _covers(a, s)] if a["has_gps"] else []
     if todo:
         pos = _channels(conn, activity_id, ("time", "lat", "lon"))
-        for _, seg in todo:
-            rows += _match_pair(conn, a, seg, pos)
+        for _, preps in todo:
+            for seg in preps:
+                rows += _match_pair(conn, a, seg, pos)
     conn.execute("BEGIN")
     try:
         conn.execute("DELETE FROM segment_efforts WHERE activity_id = ?", (activity_id,))
@@ -446,8 +479,8 @@ def match_activity(conn: sqlite3.Connection, activity_id: int, segs: list | None
     return len(rows)
 
 
-def _all_segments(conn: sqlite3.Connection) -> list[tuple[sqlite3.Row, Prepared]]:
-    return [(s, prepare(s["id"], _points(s))) for s in conn.execute("SELECT * FROM segments")]
+def _all_segments(conn: sqlite3.Connection) -> list[tuple[sqlite3.Row, list[Prepared]]]:
+    return [(s, prepared(s)) for s in conn.execute("SELECT * FROM segments")]
 
 
 def pending(conn: sqlite3.Connection) -> int:
@@ -514,6 +547,44 @@ def _ascent(alt: list) -> float | None:
     return round(total, 1)
 
 
+def _end_alt(alts: list) -> float | None:
+    """Altitude at one end: the mean of the first few values (barometric noise)."""
+    vals = [v for v in alts if v is not None][:5]
+    return sum(vals) / len(vals) if vals else None
+
+
+def net_climb(alts: list) -> float | None:
+    """End altitude minus start altitude of a slice."""
+    a, b = _end_alt(alts), _end_alt(list(reversed(alts)))
+    return round(b - a, 1) if a is not None and b is not None else None
+
+
+def source_net_climb(conn: sqlite3.Connection, s: sqlite3.Row) -> float | None:
+    """Net climb of an older segment from its source activity: the altitude at the samples
+    nearest to its start and its end."""
+    ch = _channels(conn, s["source_activity_id"], ("lat", "lon", "altitude"))
+    lat, lon, alt = ch.get("lat") or [], ch.get("lon") or [], ch.get("altitude") or []
+    proj = Projection(s["start_lat"], s["start_lon"])
+
+    def nearest(la0: float, lo0: float, after: int = 0) -> int | None:
+        x0, y0 = proj.xy(la0, lo0)
+        best, best_d = None, math.inf
+        for i in range(after, min(len(lat), len(lon))):
+            if lat[i] is None or lon[i] is None:
+                continue
+            x, y = proj.xy(lat[i], lon[i])
+            d = (x - x0) ** 2 + (y - y0) ** 2
+            if d < best_d:
+                best, best_d = i, d
+        return best
+
+    i0 = nearest(s["start_lat"], s["start_lon"])
+    i1 = nearest(s["end_lat"], s["end_lon"], i0) if i0 is not None else None
+    if i0 is None or i1 is None or i1 >= len(alt):
+        return None
+    return net_climb(alt[i0 : i1 + 1])
+
+
 def slice_activity(conn: sqlite3.Connection, activity_id: int, start_s: float, end_s: float):
     """Points (full resolution) and altitude of an activity between two time offsets."""
     ch = _channels(conn, activity_id, ("time", "lat", "lon", "altitude"))
@@ -556,13 +627,13 @@ def create_from_activity(
     cur = conn.execute(
         """INSERT INTO segments (name, category, polyline, point_count, distance_m, ascent_m,
                start_lat, start_lon, end_lat, end_lon, bbox_min_lat, bbox_min_lon,
-               bbox_max_lat, bbox_max_lon, source, source_activity_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               bbox_max_lat, bbox_max_lon, source, source_activity_id, net_climb_m)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             name[:120], None if any_type else a["category"], geo.encode_polyline(simple),
             len(simple), round(length, 1), _ascent(alts), pts[0][0], pts[0][1],
             pts[-1][0], pts[-1][1], min(lats), min(lons), max(lats), max(lons),
-            source, activity_id,
+            source, activity_id, net_climb(alts),
         ),
     )  # fmt: skip
     return cur.lastrowid

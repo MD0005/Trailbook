@@ -185,7 +185,7 @@ async function renderFitness(params) {
     view.innerHTML = `${head}<div class="card">${hint(data.pending
       ? `Training load is being computed for ${num(data.pending)} activities — refresh in a moment.`
       : data.first ? "No training data in this period."
-      : "No activity has a training load yet. Load needs heart rate (or power + FTP, or pace + threshold pace for runs).")}</div>${methodsCard(data)}`;
+      : `No activity has a training load yet: it needs heart rate, or power and FTP. <a href="#/manual/fitness">How load is computed</a>`)}</div>`;
     bindFitnessHead(params);
     return;
   }
@@ -202,8 +202,7 @@ async function renderFitness(params) {
   ]);
   view.innerHTML = `${head}<div data-fsummary ${showSummary ? "" : "hidden"}>${strip}</div>
     <div class="charts" data-fcharts></div>
-    ${data.pending ? `<div class="card">${state(`Computing training load for ${num(data.pending)} activities…`, "warn")}</div>` : ""}
-    ${methodsCard(data)}`;
+    ${data.pending ? `<div class="card">${state(`Computing training load for ${num(data.pending)} activities…`, "warn")}</div>` : ""}`;
   // Charts (docs/CHARTS.md): one group over the days, each section toggled in the header.
   // Activities of the period for the icon strip under the x axis.
   const acts = (await api("calendar?" + new URLSearchParams({ from: s[0].date, to: s[s.length - 1].date, ...personParam() })).catch(() => null))?.activities || [];
@@ -238,7 +237,7 @@ async function renderFitness(params) {
   pick("f-zones", redraw("zones"));
 }
 
-// The two charts: fitness with fatigue, and form (axis turned: more fatigue higher; the line
+// The two charts: fitness with fatigue, and form (the usual axis: fresher higher; the line
 // takes the colour of its zone, the zones are bands behind it). Ramp rate is only a number in
 // the summary: it is the slope of the fitness line.
 // The pills on the right: the value at the end of the period, at its height (label = series).
@@ -253,14 +252,14 @@ function fitnessSeries(s, { marks = [], opt = FITNESS_OPTIONS } = {}) {
     ({ label, value: values[i], i, values, color, text: sign ? signed(values[i], d) : num(values[i], d), tip });
   const fresh = extreme(tsb, true), tired = extreme(tsb, false);
   return [
-    { key: "fitness", label: "Fitness", title: opt.fatigue === "off" ? "Fitness" : "Fitness and fatigue", yTitle: "Training load", unit: "TSS/d", dec: 0, height: 330,
+    { key: "fitness", label: "Fitness", title: opt.fatigue === "off" ? "Fitness" : "Fitness and fatigue", yTitle: "Training load", unit: "TSS/d", dec: 0, height: 396,
       color: COLORS.ctl, iconHtml: ICON_FITNESS, values: ctl, lines: opt.fatigue === "off" ? [] : [{ label: "Fatigue", color: COLORS.atl, values: atl }],
       fill: opt.fill === "fill", marks, marksHidden: opt.activities === "off",
       tip: "Fitness: 42-day average of the daily training load. Fatigue: the same over 7 days.",
       tags: [tag("Fitness", ctl, last, COLORS.ctl, 0, false), ...(opt.fatigue === "off" ? [] : [tag("Fatigue", atl, last, COLORS.atl, 0, false)])] },
-    { key: "form", label: "Form", title: "Form", yTitle: "Form", unit: "", dec: 0, height: 216, color: COLORS.neutral, iconHtml: ICON_FORM,
-      values: tsb, zones: zonesOf(FORM_ZONES), bands: opt.zones !== "off", invert: true, yMin: -40, yMax: 30, ySplits: [-40, -30, -10, 5, 25],
-      tip: "Yesterday's fitness minus fatigue. The axis is turned: higher = more tired; the optimal training zone sits above the grey zone.",
+    { key: "form", label: "Form", title: "Form", yTitle: "Form", unit: "", dec: 0, height: 259, color: COLORS.neutral, iconHtml: ICON_FORM,
+      values: tsb, zones: zonesOf(FORM_ZONES), bands: opt.zones !== "off", yMin: -40, yMax: 30, ySplits: [-40, -30, -10, 5, 25],
+      tip: "Yesterday's fitness minus fatigue: higher = fresher, lower = more tired. Training builds fitness in the optimal zone below the grey zone.",
       tags: [tag("Form", tsb, last, zc(FORM_ZONES, tsb[last])), tag("Freshest", tsb, fresh, zc(FORM_ZONES, tsb[fresh])), tag("Most tired", tsb, tired, zc(FORM_ZONES, tsb[tired]))] },
   ];
 }
@@ -304,13 +303,6 @@ function bindFitnessHead(params, onToggle = () => {}) {
 }
 
 const METHOD_LABELS = { power: "Power (TSS)", pace: "Running pace (rTSS)", hr: "Heart rate (hrTSS)", none: "No load (no data)" };
-// Load methods in the order they are tried, with what each one needs.
-const LOAD_METHODS = [
-  ["power", "Power", "power meter + FTP"],
-  ["pace", "Running pace", "runs + threshold pace"],
-  ["hr", "Heart rate", "HR + HR max, resting, threshold"],
-  ["none", "No load", "none of the above"],
-];
 const SOURCE_LABEL = { set: "", watch: " (watch)", auto: " (estimated)", default: " (default)" };
 const SOURCE_CHIP = { set: ["Set", "set"], watch: ["Watch", "watch"], auto: ["Estimated", "est"], default: ["Default", "est"] };
 const THRESHOLD_ITEMS = [
@@ -325,34 +317,6 @@ const sourceChip = (src) => {
   return `<span class="src-chip ${cls}">${label}</span>`;
 };
 
-function methodsCard(data) {
-  const th = data.thresholds || {}, src = th.sources || {};
-  const m = data.methods || {};
-  const total = Object.values(m).reduce((a, b) => a + b, 0) || 1;
-  const steps = [
-    ["Load", "per activity, 1 h at threshold = 100", "var(--muted)"],
-    ["Fitness", "42-day average of daily load", COLORS.ctl],
-    ["Fatigue", "7-day average of daily load", COLORS.atl],
-    ["Form", "yesterday's fitness − fatigue", "var(--fg)"],
-  ];
-  return `<div class="card method-card"><h3>How training load is calculated</h3>
-    <div class="method-steps">${steps.map(([t, d, c]) => `<div class="method-step"><b><span class="method-dot" style="background:${c}"></span>${t}</b><span>${d}</span></div>`).join("")}</div>
-    <div class="method-cols">
-      <div><div class="panel-title">Method per activity, first that fits</div>
-        <div class="method-list">${LOAD_METHODS.map(([k, l, needs], i) => {
-          const n = m[k] || 0;
-          return `<div class="method-row ${n ? "" : "off"}"><span class="method-rank">${k === "none" ? "–" : i + 1}</span>
-            <span class="method-name"><b>${l}</b><span>${needs}</span></span>
-            <span class="bar"><span style="width:${(n / total) * 100}%"></span></span><span class="method-n">${num(n)}</span></div>`;
-        }).join("")}</div>
-      </div>
-      <div><div class="panel-title">Thresholds in use today</div>
-        <div class="th-tiles">${THRESHOLD_ITEMS.map(([k, l, fmt]) => `<div class="th-tile ${th[k] == null ? "off" : ""}">
-          <span class="th-label">${l}</span><span class="th-value">${th[k] == null ? "–" : fmt(th[k])}</span>${sourceChip(th[k] == null ? null : src[k])}</div>`).join("")}</div>
-        <a class="th-link" href="#/settings/people">Edit in Settings › People</a>
-      </div>
-    </div></div>`;
-}
 const fmtPace = (secPerKm) => (secPerKm ? `${Math.floor(secPerKm / 60)}:${String(Math.round(secPerKm % 60)).padStart(2, "0")} /km` : "–");
 const parsePace = (txt) => {
   const m = /^\s*(\d{1,2}):(\d{2})\s*$/.exec(txt || "");

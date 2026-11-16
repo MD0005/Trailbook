@@ -22,6 +22,7 @@ const dark = () => document.documentElement.dataset.theme === "dark";
 //              bands: false (zones colour the line only, no bands behind it),
 //              invert: true (higher values lower), yMin / yMax: values the y range always includes,
 //              ySplits: [v] (y grid and labels exactly there, e.g. at the zone limits), height (px),
+//              fmt: (v) => text (values on the y axis, the flag, pins), points: true (a dot per value),
 //              tags: [{ label, value, color, mark }]  value pills on the right at the height of their
 //              value (instead of stats / legend), pushed apart so they never overlap }]
 //   marks: [{ x, icon, tip, href }] icons in a strip under the x axis (marksHidden: start hidden)
@@ -31,8 +32,13 @@ const dark = () => document.documentElement.dataset.theme === "dark";
 //   targets: workout step targets (sample index range, low and high value), drawn dashed
 //   onHover(i | null): the hovered sample index (for the map), onState(): pins/zoom changed,
 //   onOrder([key]): the charts were reordered by dragging a card
-function chartGroup(root, { x, kind, series, hidden = [], onHover = () => {}, onState = () => {}, onOrder = () => {} }) {
-  const g = { kind, plots: [], pins: [], range: null, hoverIdx: null, dragged: false, mark: null, hidden: new Set(hidden) };
+//   sections: { keys: [key], at: [sample index], label(key, i0, i1) => [[text, colour | null]],
+//               onChange([index]) }  interval sections: thin lines at `at` on the charts in
+//               `keys` and a strip above each with the values of every section (label). A line
+//               can be dragged; on the strip a ball with − over a line removes it, a ball with +
+//               elsewhere adds one. Changes apply to all those charts.
+function chartGroup(root, { x, kind, series, hidden = [], sections = null, onHover = () => {}, onState = () => {}, onOrder = () => {} }) {
+  const g = { kind, plots: [], pins: [], range: null, hoverIdx: null, dragged: false, mark: null, hidden: new Set(hidden), sec: sections };
   const syncKey = "tb-" + Math.random().toString(36).slice(2);
   const xs = () => x[g.kind];
   const X_TITLE = { distance: ["Distance (km)", "Distance from the start."], time: ["Elapsed time (h:mm)", "Time from the start, pauses and stops included."],
@@ -43,7 +49,7 @@ function chartGroup(root, { x, kind, series, hidden = [], onHover = () => {}, on
     return `${h}:${String(m).padStart(2, "0")}${sec ? ":" + String(ss).padStart(2, "0") : ""}`;
   };
   const stepDec = (incr) => Math.min(2, Math.max(0, -Math.floor(Math.log10(incr) + 1e-9)));
-  const fmtDate = (v) => new Date(v * 1000).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
+  const fmtDate = (v) => new Date(v * 1000).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
   // Date axis: even steps - a week, 1, 2, 3 or 6 months, a year - as many as fit (~56 px each).
   // Month ticks show "Mar"; the first tick and every January carry the year below.
   const MONTHS_3 = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -73,7 +79,7 @@ function chartGroup(root, { x, kind, series, hidden = [], onHover = () => {}, on
   });
   const fmtX = (v, exact = false, incr = 1) => (v == null ? "" : g.kind === "date" ? fmtDate(v) : g.kind === "distance" ? (exact ? `${num(v, 2)} km` : num(v, stepDec(incr)))
     : g.kind === "percent" ? `${num(v, exact ? 1 : 0)}${exact ? " %" : ""}` : fmtTime(v, exact));
-  const fmtY = (s, v) => (v == null ? "–" : `${num(v, s.dec)}${s.unit ? " " + s.unit : ""}`);
+  const fmtY = (s, v) => (v == null ? "–" : s.fmt ? s.fmt(v) : `${num(v, s.dec)}${s.unit ? " " + s.unit : ""}`);
   const zoneOf = (s, v) => (v == null ? null : s.zones?.find((z) => v >= z.lo && v < z.hi) || null);
   const colorAt = (s, v) => zoneOf(s, v)?.color || s.color;
 
@@ -89,6 +95,7 @@ function chartGroup(root, { x, kind, series, hidden = [], onHover = () => {}, on
     el.innerHTML = `<div class="card-head"><h3 class="chart-title" data-tip="${esc(s.tip)}">${s.iconHtml || (s.icon ? metricIcon(s.icon, 18) : "")}<span>${s.title || s.label}</span></h3></div>
       <div class="chart-row">
         <div class="chart-frame">
+          ${hasSec(s) ? `<div class="chart-sections"><div class="sec-cells"></div><span class="sec-ball sec-add" hidden>+</span></div>` : ""}
           <div class="chart-ylabel" data-tip="${esc(s.tip)}"><span>${s.yTitle || s.label}${s.unit ? ` (${s.unit})` : ""}</span></div>
           <div class="chart-plot"></div>
           ${s.marks ? `<div class="chart-marks"${s.marksHidden ? " hidden" : ""}></div>` : ""}
@@ -139,7 +146,7 @@ function chartGroup(root, { x, kind, series, hidden = [], onHover = () => {}, on
         points: { size: 10, width: 2, stroke: cssVar("--surface") || "#fff",
                   fill: (u, si) => (si === 1 ? colorAt(s, s.values[u.cursor.idx]) : s.lines[si - 2].color) },
       },
-      series: [{}, { label: s.label, stroke: s.zones ? zoneStroke : s.color, width: s.zones ? 2.4 : 2, fill: (s.fill ?? !(multi || s.zones)) ? grad : undefined, points: { show: false }, spanGaps: true }, ...extra],
+      series: [{}, { label: s.label, stroke: s.zones ? zoneStroke : s.color, width: s.zones ? 2.4 : 2, fill: (s.fill ?? !(multi || s.zones)) ? grad : undefined, points: s.points ? { show: true, size: 6, width: 0, fill: s.color } : { show: false }, spanGaps: true }, ...extra],
       axes: [
         { font: CHART_FONT, stroke: muted, space: 46, size: date ? 32 : 18, gap: 2, border: { show: true, stroke: axis, width: 1 },
           grid: { show: false }, ticks: { stroke: axis, size: 3, width: 1 },
@@ -148,13 +155,13 @@ function chartGroup(root, { x, kind, series, hidden = [], onHover = () => {}, on
           ...(s.ySplits ? { splits: (u) => s.ySplits.filter((v) => v >= u.scales.y.min && v <= u.scales.y.max) } : {}),
           size: (u, vals) => (vals ? Math.max(...vals.map((v) => String(v).length)) * 6.4 + 8 : 24),
           grid: { stroke: line, width: 0.6, dash: [2, 3] }, ticks: { stroke: axis, size: 3, width: 1 },
-          values: (u, vals, ax, space, incr) => vals.map((v) => num(v, s.ySplits ? 0 : stepDec(incr))) },
+          values: (u, vals, ax, space, incr) => vals.map((v) => (s.fmt ? s.fmt(v) : num(v, s.ySplits ? 0 : stepDec(incr)))) },
       ],
       hooks: {
         // soft shadow under the series line
         drawClear: [(u) => drawZones(u, s)],
         drawAxes: [(u) => { u.ctx.save(); u.ctx.shadowColor = s.zones ? "rgba(0,0,0,.18)" : withAlpha(s.color, 0.55); u.ctx.shadowBlur = 6; u.ctx.shadowOffsetY = 2; }],
-        draw: [(u) => { u.ctx.restore(); drawSurface(u, s); drawTargets(u, s); drawExt(u, s); drawMark(u, s); drawFrame(u, axis); drawPins(u); placeTags(u, s); placeMarks(u, s); }],
+        draw: [(u) => { u.ctx.restore(); drawSurface(u, s); drawTargets(u, s); drawExt(u, s); drawSections(u, s); drawMark(u, s); drawFrame(u, axis); placeSections(u, s); drawPins(u); placeTags(u, s); placeMarks(u, s); }],
         setCursor: [(u) => cursorMoved(u, s)],
         setSelect: [(u) => {
           if (u.select.width < 4) return;
@@ -249,6 +256,99 @@ function chartGroup(root, { x, kind, series, hidden = [], onHover = () => {}, on
     for (const c of clusters) c.items.forEach(({ el }, k) => { el.style.transform = `translateY(${c.top + k * step}px)`; });
   }
 
+  // Interval sections: lines at g.sec.at (sample indices) and the strip of values above the plot.
+  function hasSec(s) { return Boolean(g.sec && g.sec.keys.includes(s.key)); }
+  const secBounds = () => [0, ...g.sec.at, xs().length - 1];
+  // the sample nearest to an x value (x values never decrease)
+  const nearestIdx = (v) => {
+    const a = xs();
+    let lo = 0, hi = a.length - 1;
+    while (lo < hi) { const m = (lo + hi) >> 1; if (a[m] < v) lo = m + 1; else hi = m; }
+    return lo > 0 && Math.abs(a[lo - 1] - v) <= Math.abs(a[lo] - v) ? lo - 1 : lo;
+  };
+  function drawSections(u, s) {
+    if (!hasSec(s)) return;
+    const ctx = u.ctx, { left, top, width, height } = u.bbox, dpr = devicePixelRatio || 1;
+    ctx.save();
+    ctx.beginPath(); ctx.rect(left, top, width, height); ctx.clip();
+    ctx.strokeStyle = cssVar("--muted") || "#8a8f98"; ctx.globalAlpha = 0.6; ctx.lineWidth = dpr;
+    for (const i of g.sec.at) {
+      const px = Math.round(u.valToPos(xs()[i], "x", true)) + 0.5;
+      ctx.beginPath(); ctx.moveTo(px, top); ctx.lineTo(px, top + height); ctx.stroke();
+    }
+    ctx.restore();
+  }
+  function placeSections(u, s) {
+    const b = u._tb?.sec;
+    if (!b) return;
+    const w = u.over.clientWidth, off = u.over.offsetLeft, px = (i) => u.valToPos(xs()[i], "x");
+    const bd = secBounds();
+    b.cells.innerHTML = bd.slice(1).map((i1, k) => {
+      const i0 = bd[k], x0 = Math.max(0, px(i0)), x1 = Math.min(w, px(i1));
+      if (x1 - x0 < 1) return "";
+      const lines = x1 - x0 >= 34 ? g.sec.label(s.key, i0, i1) : [];
+      return `<div class="sec-cell${k ? " edge" : ""}" style="left:${off + x0}px;width:${x1 - x0}px">${lines.map(([t, c]) =>
+        `<span${c ? ` style="color:${c}"` : ` class="sub"`}>${t}</span>`).join("")}</div>`;
+    }).join("") + g.sec.at.map((i, k) => {
+      const x0 = px(i);
+      return x0 < 0 || x0 > w ? "" : `<span class="sec-ball sec-del" data-k="${k}" style="left:${off + x0}px">−</span>`;
+    }).join("");
+    // grab handles over the lines (kept while dragging: only moved)
+    const hs = b.handles;
+    if (hs.children.length !== g.sec.at.length) hs.innerHTML = g.sec.at.map((_, k) => `<div class="sec-handle" data-k="${k}"><i></i></div>`).join("");
+    [...hs.children].forEach((h, k) => { const x0 = px(g.sec.at[k]); h.style.left = `${x0}px`; h.hidden = x0 < 0 || x0 > w; });
+  }
+  const redrawSections = () => g.plots.forEach(({ u }) => u.redraw(false));
+  const sectionsChanged = () => { redrawSections(); g.sec.onChange?.([...g.sec.at]); };
+  function bindSections(u, el) {
+    const strip = el.querySelector(".chart-sections"), add = strip.querySelector(".sec-add");
+    const handles = Object.assign(document.createElement("div"), { className: "sec-handles" });
+    u.over.appendChild(handles);
+    u._tb.sec = { cells: strip.querySelector(".sec-cells"), handles };
+    // a line is dragged, not a zoom or a pin
+    handles.addEventListener("mousedown", (e) => e.stopPropagation());
+    handles.addEventListener("click", (e) => e.stopPropagation());
+    handles.addEventListener("pointerdown", (e) => {
+      const h = e.target.closest(".sec-handle");
+      if (!h) return;
+      e.preventDefault(); e.stopPropagation();
+      const k = Number(h.dataset.k);
+      h.setPointerCapture(e.pointerId);
+      h.classList.add("drag"); root.classList.add("sec-dragging");
+      const move = (ev) => {
+        const r = u.over.getBoundingClientRect();
+        const lo = (g.sec.at[k - 1] ?? 0) + 1, hi = (g.sec.at[k + 1] ?? xs().length - 1) - 1;
+        const i = Math.max(lo, Math.min(hi, nearestIdx(u.posToVal(ev.clientX - r.left, "x"))));
+        if (i !== g.sec.at[k]) { g.sec.at[k] = i; redrawSections(); }
+      };
+      const up = () => {
+        h.removeEventListener("pointermove", move); h.removeEventListener("pointerup", up); h.removeEventListener("pointercancel", up);
+        h.classList.remove("drag"); root.classList.remove("sec-dragging");
+        sectionsChanged();
+      };
+      h.addEventListener("pointermove", move); h.addEventListener("pointerup", up); h.addEventListener("pointercancel", up);
+    });
+    // the strip: − over each line, + under the pointer elsewhere
+    let addAt = null;
+    strip.addEventListener("mousemove", (e) => {
+      const r = u.over.getBoundingClientRect(), px = e.clientX - r.left;
+      const near = g.sec.at.some((i) => Math.abs(u.valToPos(xs()[i], "x") - px) < 12);
+      const i = nearestIdx(u.posToVal(px, "x"));
+      addAt = !near && px >= 0 && px <= u.over.clientWidth && i > 0 && i < xs().length - 1 ? i : null;
+      add.hidden = addAt == null;
+      if (addAt != null) add.style.left = `${u.over.offsetLeft + px}px`;
+    });
+    strip.addEventListener("mouseleave", () => { add.hidden = true; addAt = null; });
+    strip.addEventListener("click", (e) => {
+      const del = e.target.closest(".sec-del");
+      if (del) g.sec.at.splice(Number(del.dataset.k), 1);
+      else if (addAt != null && !g.sec.at.includes(addAt)) { g.sec.at.push(addAt); g.sec.at.sort((p, q) => p - q); }
+      else return;
+      add.hidden = true; addAt = null;
+      sectionsChanged();
+    });
+  }
+
   // Road surface (from map data) as a hatched strip along the bottom of one chart.
   function drawSurface(u, s) {
     const sf = g.surface;
@@ -256,7 +356,7 @@ function chartGroup(root, { x, kind, series, hidden = [], onHover = () => {}, on
     const ctx = u.ctx, { left, top, width, height } = u.bbox, dpr = devicePixelRatio || 1, h = 9 * dpr;
     ctx.save();
     ctx.beginPath(); ctx.rect(left, top, width, height); ctx.clip();
-    for (const [a, b, kind] of sf.ranges) {
+    for (const [a, b, kind] of sf.ranges) { // unknown is filtered out in surface()
       const x0 = u.valToPos(xs()[a], "x", true), x1 = u.valToPos(xs()[b], "x", true);
       ctx.fillStyle = surfacePattern(ctx, kind, dpr);
       ctx.fillRect(x0, top + height - h, Math.max(1, x1 - x0), h);
@@ -466,6 +566,7 @@ function chartGroup(root, { x, kind, series, hidden = [], onHover = () => {}, on
       u.over.appendChild(tip);
       u.root.appendChild(xflag); u.root.appendChild(pins);
       u._tb = { tip, xflag, pins, tags: s.tags ? el.querySelector(".chart-tags") : null, marks: el.querySelector(".chart-marks") };
+      if (hasSec(s)) { bindSections(u, el); placeSections(u, s); }
       // Reset: a refresh pictogram in the plot's top right corner, only when needed.
       const reset = Object.assign(document.createElement("button"), { className: "chart-reset", hidden: true, title: "Reset zoom and pins" });
       reset.dataset.chartReset = "";
@@ -516,7 +617,16 @@ function chartGroup(root, { x, kind, series, hidden = [], onHover = () => {}, on
       for (const c of st.children) w = Math.max(w, c.getBoundingClientRect().width);
     });
     if (w) root.style.setProperty("--side-w", `${Math.ceil(w) + 2}px`);
-    requestAnimationFrame(() => g.plots.forEach(fit)); // plots take the freed width
+    requestAnimationFrame(() => {
+      g.plots.forEach(fit); // plots take the freed width
+      // a chart with many stats grows so its pills never stick out of the card
+      g.plots.forEach(({ u, s, el }) => {
+        const st = el.querySelector(".chart-stats:not(.chart-tags)"), fr = el.querySelector(".chart-frame");
+        if (!st || !fr || getComputedStyle(st).flexDirection === "row") return;
+        const extra = st.scrollHeight - fr.offsetHeight;
+        if (extra > 0) { s.height = u.height + extra; u.setSize({ width: u.width, height: s.height }); renderPins(); }
+      });
+    });
   }
 
   const fit = ({ u, s, el }) => {
@@ -555,14 +665,23 @@ function chartGroup(root, { x, kind, series, hidden = [], onHover = () => {}, on
     // Highlight stretches [[i0, i1], …] on all charts (null clears).
     highlight(ranges) { g.ext = ranges; g.plots.forEach(({ u }) => u.redraw(false)); },
     // Road surface on the chart `key` (falls back to the first chart): ranges [[i0, i1, kind]].
-    surface(key, ranges) {
+    // Unknown stretches are not drawn. The kinds are pills in the side column (share of the
+    // distance); hovering one calls onKind(kind | null) to highlight it on the charts and map.
+    surface(key, ranges, shares = {}, onKind = () => {}) {
       const p = g.plots.find((x) => x.s.key === key) || g.plots[0];
       if (!p) return;
-      g.surface = { key: p.s.key, ranges };
-      p.el.querySelector(".chart-surface-legend")?.remove();
-      const kinds = SURFACE_KINDS.filter((k) => ranges.some((r) => r[2] === k));
-      p.el.querySelector(".chart-frame").insertAdjacentHTML("beforeend", `<div class="chart-surface-legend" data-tip="Road surface from OpenStreetMap along the route.">${kinds.map((k) =>
-        `<span><i class="surface-swatch s-${k}"></i>${SURFACE_LABEL[k]}</span>`).join("")}</div>`);
+      g.surface = { key: p.s.key, ranges: ranges.filter((r) => r[2] !== "unknown") };
+      p.el.querySelectorAll(".surface-stat").forEach((x) => x.remove());
+      const total = Object.values(shares).reduce((x, y) => x + y, 0) || 1;
+      const kinds = SURFACE_KINDS.filter((k) => k !== "unknown" && shares[k]);
+      p.el.querySelector(".chart-stats").insertAdjacentHTML("beforeend", kinds.map((k) =>
+        `<div class="chart-stat surface-stat" data-surface="${k}" data-tip="${SURFACE_LABEL[k]} road (OpenStreetMap): ${num(shares[k] / 1000, 2)} km">
+          <span class="chart-stat-label">${SURFACE_LABEL[k]}</span><span class="chart-ribbon s-${k}" style="--c:${SURFACE_COLOR[k]}">${num((shares[k] / total) * 100)}%</span></div>`).join(""));
+      p.el.querySelectorAll(".surface-stat").forEach((el) => {
+        el.onmouseenter = () => { el.classList.add("on"); onKind(el.dataset.surface); };
+        el.onmouseleave = () => { el.classList.remove("on"); onKind(null); };
+      });
+      fitSide();
       p.u.redraw(false);
     },
     // Show sample i on all charts (e.g. hovered on the map); null hides it.
@@ -600,6 +719,7 @@ function chartGroup(root, { x, kind, series, hidden = [], onHover = () => {}, on
 // Road surface kinds: the same hatching on the chart strip, the legend and the shares bar.
 const SURFACE_KINDS = ["paved", "gravel", "dirt", "unknown"];
 const SURFACE_LABEL = { paved: "Paved", gravel: "Gravel", dirt: "Dirt", unknown: "Unknown" };
+const SURFACE_COLOR = { paved: "#6b7280", gravel: "#c08a2e", dirt: "#8b5a2b", unknown: "#b8bec7" }; // pills, map
 const surfacePatterns = {};
 function surfacePattern(ctx, kind, dpr) {
   const key = `${kind}:${dpr}`;

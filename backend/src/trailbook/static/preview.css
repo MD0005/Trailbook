@@ -148,8 +148,7 @@ a.sort:hover { color: var(--fg); text-decoration: none; }
 a.sort .arrow { font-size: 10px; opacity: 0.6; }
 a.sort.active { color: var(--fg); }
 a.sort.active .arrow { color: var(--accent); opacity: 1; }
-tr.filters-row th { padding: 0 6px 8px; }
-tr.filters-row input, tr.filters-row select { width: 100%; min-width: 70px; padding: 4px 6px;
+tr.filters-row th { padding: 0 6px 8px; }tr.filters-row input, tr.filters-row select { width: 100%; min-width: 70px; padding: 4px 6px;
                                               font-size: 12px; }
 
 /* Table toolbar + pager */
@@ -163,17 +162,31 @@ svg.chart { width: 100%; height: 140px; background: var(--surface-2); border-rad
 svg.track { width: 100%; max-width: 480px; height: 320px; background: var(--surface-2);
             border-radius: 10px; }
 .back { display: inline-block; margin-bottom: 12px; }
-.back .back-box { display: none; }
-/* Wide screens: a square button in the left margin, sticky with the page header and framed like it */
+.back .back-box, .nav-box { display: none; }
+/* Back + previous / next row (activity page): text links in one row on narrow screens */
+.back-row { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+.back-row .back { margin: 0; }
+.page-nav { margin-left: auto; display: flex; gap: 16px; }
+/* Wide screens: square buttons in the margins, sticky with the page header and framed like it */
+.side-box { align-items: center; justify-content: center; position: absolute; top: 0;
+            width: var(--head-h, 52px); height: var(--head-h, 52px); border-radius: 10px; color: var(--fg);
+            background: color-mix(in srgb, var(--surface) 88%, transparent); backdrop-filter: blur(8px);
+            border: 1px solid var(--line); box-shadow: 0 6px 20px rgba(0,0,0,.12); }
+.side-box svg { width: 14px; height: 14px; }
+a:hover > .side-box { color: var(--accent); border-color: var(--accent); }
 @media (min-width: 1740px) {
-  .back { position: sticky; top: calc(var(--header-h, 52px) + 12px); z-index: 6; display: block; height: 0; margin: 0; }
-  .back .back-text { display: none; }
-  .back .back-box { display: flex; align-items: center; justify-content: center; position: absolute; left: calc(-6px - var(--head-h, 52px)); top: 0;
-                    width: var(--head-h, 52px); height: var(--head-h, 52px); border-radius: 10px; color: var(--fg);
-                    background: color-mix(in srgb, var(--surface) 88%, transparent); backdrop-filter: blur(8px);
-                    border: 1px solid var(--line); box-shadow: 0 6px 20px rgba(0,0,0,.12); }
-  .back:hover .back-box { color: var(--accent); border-color: var(--accent); }
-  .back .back-box svg { width: 14px; height: 14px; }
+  .back:not(.in-row) { position: sticky; top: calc(var(--header-h, 52px) + 12px); z-index: 6; display: block; height: 0; margin: 0; }
+  .back:not(.in-row) .back-text { display: none; }
+  .back:not(.in-row) .back-box { display: flex; left: calc(-6px - var(--head-h, 52px)); }
+}
+/* Two squares on the right need a wider margin: the whole row switches later */
+@media (min-width: 1840px) {
+  .back-row { position: sticky; top: calc(var(--header-h, 52px) + 12px); z-index: 6; display: block; height: 0; margin: 0; }
+  .back-row .back-text, .back-row .nav-text { display: none; }
+  .back-row .back-box, .back-row .nav-box { display: flex; }
+  .back-row .back-box { left: calc(-6px - var(--head-h, 52px)); }
+  .back-row .prev .nav-box { left: calc(100% + 6px); }
+  .back-row .next .nav-box { left: calc(100% + 12px + var(--head-h, 52px)); }
 }
 
 /* Layout helpers */
@@ -716,17 +729,18 @@ table.exports td:first-child, table.exports td:nth-child(4) { white-space: norma
            color: var(--accent-fg, #fff); font: 600 12px/24px system-ui, sans-serif;
            text-align: center; border: 2px solid #fff; box-shadow: 0 2px 6px rgba(0,0,0,.35);
            cursor: grab; }
-svg.seg-trend { display: block; width: 100%; height: auto; }
-.seg-trend .seg-avg { fill: none; stroke: var(--accent); stroke-width: 2; opacity: .7; }
-.seg-trend .seg-best { fill: var(--accent); stroke: var(--surface); stroke-width: 2; }
-.seg-trend .seg-count { fill: var(--muted); opacity: .25; }
-.legend { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; font-size: 12px;
-          color: var(--muted); margin-top: 6px; }
-.legend span { display: inline-flex; align-items: center; gap: 6px; }
-.legend i { display: inline-block; }
-.seg-best-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); }
-.seg-avg-line { width: 16px; height: 2px; background: var(--accent); opacity: .7; }
-.seg-count-box { width: 10px; height: 10px; background: var(--muted); opacity: .35; }
+#seg-map { height: 414px; }
+.seg-eff-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 12px; margin-bottom: 16px;
+               font-family: Roboto, system-ui, sans-serif; }
+.seg-eff-row .card { margin: 0; padding: 12px 14px; }
+.seg-eff h3 { margin: 0 0 2px; }
+.seg-eff-sub { margin: 0 0 10px 25px; }
+.seg-eff-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 10px 14px; }
+.seg-eff-tile .tile-title { display: flex; align-items: center; gap: 7px; font-size: 13px; color: var(--muted); }
+.seg-eff-tile b { display: block; padding-left: 25px; font-size: 15px; font-weight: 500; white-space: nowrap;
+                  font-variant-numeric: tabular-nums; }
+a.head-date { color: var(--muted); }
+a.head-date:hover { color: var(--accent); text-decoration: none; }
 
 /* Option list: every choice visible, one selected (Map › Options) */
 .pick-list { display: flex; flex-direction: column; gap: 2px; }
@@ -822,29 +836,14 @@ button.icon.warn svg { width: 18px; height: 18px; }
 .warn-panel ul { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; color: var(--fg); }
 .warn-panel b { color: var(--warn); }
 .th-field button { margin-top: 6px; align-self: flex-start; }
-.method-card h3 { margin-bottom: 12px; }
 .method-steps { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-bottom: 18px; }
 .method-step { display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border-radius: 10px; background: var(--surface-2); font-size: 13px; }
 .method-step b { display: flex; align-items: center; gap: 8px; font-size: 14px; }
 .method-step span:last-child { color: var(--muted); }
-.method-dot { width: 10px; height: 10px; border-radius: 3px; display: inline-block; flex: none; }
-.method-cols { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 24px; }
-.method-list { display: flex; flex-direction: column; gap: 10px; margin-top: 8px; }
-.method-row { display: grid; grid-template-columns: 22px minmax(0, 1.4fr) minmax(60px, 1fr) 36px; align-items: center; gap: 10px; font-size: 13px; }
 .method-rank { width: 22px; height: 22px; border-radius: 50%; display: inline-grid; place-items: center; font-size: 11px; font-weight: 600;
   background: color-mix(in srgb, var(--accent) 14%, var(--surface)); color: var(--accent); }
-.method-name { display: flex; flex-direction: column; line-height: 1.3; }
-.method-name span { color: var(--muted); font-size: 12px; }
-.method-row .bar > span { background: var(--accent); }
-.method-n { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
-.method-row.off { opacity: .45; }
-.method-row.off .method-rank { background: var(--surface-2); color: var(--muted); }
-.th-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; margin: 8px 0 10px; }
-.th-tile { display: flex; flex-direction: column; gap: 3px; padding: 10px 12px; border-radius: 10px; background: var(--surface-2); }
-.th-tile.off .th-value { color: var(--muted); }
 .th-label { font-size: 12px; color: var(--muted); }
 .th-value { font-size: 17px; font-weight: 600; font-variant-numeric: tabular-nums; }
-.th-link { font-size: 13px; }
 .src-chip { align-self: flex-start; font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 999px; }
 .src-chip.watch { background: color-mix(in srgb, var(--accent) 14%, var(--surface)); color: var(--accent); }
 .src-chip.set { background: color-mix(in srgb, var(--ok) 16%, var(--surface)); color: var(--ok); }
@@ -867,7 +866,6 @@ tr.th-row > td { padding: 4px 8px 16px; }
 .th-from { display: flex; flex-direction: column; gap: 4px; }
 @media (max-width: 760px) {
   .method-steps { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .method-cols { grid-template-columns: 1fr; }
 }
 
 /* Activity page: card header with controls on the right, route legend and km markers */
@@ -877,7 +875,21 @@ tr.th-row > td { padding: 4px 8px 16px; }
 .badge .badge-icon svg { width: 15px; height: 15px; }
 .stat-person { display: inline-flex; align-items: center; gap: 6px; }
 .route-wrap { position: relative; }
-.route-legend { position: absolute; top: 10px; left: 10px; z-index: 2; padding: 6px 10px 5px; min-width: 150px;
+/* top left of the route map: the weather widget, the colour legend under it */
+.route-overlays { position: absolute; top: 10px; left: 10px; z-index: 2; display: flex; flex-direction: column; align-items: flex-start; gap: 6px; pointer-events: none; }
+.route-overlays > * { pointer-events: auto; }
+.route-weather[hidden] { display: none; }
+.route-weather { padding: 5px 9px; border-radius: 8px; background: color-mix(in srgb, var(--surface) 78%, transparent);
+                 backdrop-filter: blur(3px); box-shadow: var(--shadow); font-size: 11px; }
+.wx { display: flex; align-items: center; gap: 8px; cursor: default; }
+.wx-sky { width: 26px; height: 26px; flex: none; }
+.wx-main { display: flex; flex-direction: column; line-height: 1.2; }
+.wx-main b { font-size: 13px; }
+.wx-main span { color: var(--muted); }
+.wx-wind { display: flex; align-items: center; gap: 4px; padding-left: 8px; border-left: 1px solid var(--line); line-height: 1.2; }
+.wx-wind svg { width: 16px; height: 16px; color: var(--fg); }
+.wx-wind small { color: var(--muted); }
+.route-legend { position: relative; padding: 6px 10px 5px; min-width: 150px;
                 background: color-mix(in srgb, var(--surface) 62%, transparent); backdrop-filter: blur(3px); border-radius: 8px; box-shadow: var(--shadow);
                 font-size: 11px; }
 .route-legend[hidden] { display: none; }
@@ -1126,10 +1138,12 @@ button[hidden] { display: none !important; }
 .route-legend-kinds i { width: 14px; height: 4px; border-radius: 2px; display: inline-block; }
 
 /* Height grip on the bottom edge of chart and map cards (right side), very light */
-.card-resize { position: absolute; right: 22px; bottom: 3px; width: 26px; height: 9px; cursor: ns-resize; border-radius: 4px;
-               display: grid; place-items: center; opacity: .55; transition: opacity .15s, background .15s; z-index: 3; touch-action: none; }
-.card-resize::before { content: ""; width: 18px; height: 4px; border-top: 1px solid var(--muted); border-bottom: 1px solid var(--muted); opacity: .6; }
-.card-resize:hover, .resizing > .card-resize { opacity: 1; background: color-mix(in srgb, var(--fg) 6%, transparent); }
+/* Height handle: a small lozenge on the card's bottom edge (right side) with a short bar */
+.card-resize { position: absolute; right: 26px; bottom: -6px; width: 46px; height: 12px; cursor: ns-resize; z-index: 3; touch-action: none;
+               background: no-repeat center / 100% 100% url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 46 12'%3E%3Cpath d='M7 .5H39L45.5 6L39 11.5H7L.5 6Z' fill='%23ffffff' stroke='%23cfcfca'/%3E%3Cpath d='M17.5 6H28.5' stroke='%23989ca6' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E");
+               opacity: .85; transition: opacity .15s, filter .15s; }
+.card-resize:hover, .resizing > .card-resize { opacity: 1; filter: drop-shadow(0 1px 2px rgba(0,0,0,.18)); }
+:root[data-theme="dark"] .card-resize { filter: invert(.88); }
 .resizing { user-select: none; }
 
 /* more than four small cards: two columns */
@@ -1140,3 +1154,182 @@ button[hidden] { display: none !important; }
 
 /* the list keeps its natural width (no columns stretched when the tile is wide) */
 .act-efforts .efforts { width: max-content; max-width: 100%; }
+
+/* Segments: one dark colour for everything segment-related */
+:root { --segment: #3a3f8f; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --segment: #a5b0ff; } }
+:root[data-theme="dark"] { --segment: #a5b0ff; }
+.seg-badge { display: inline-block; vertical-align: middle; margin-left: 4px; padding: 0 5px; border-radius: 4px; font-size: 9.5px; font-weight: 700;
+             line-height: 15px; text-transform: uppercase; letter-spacing: .04em; color: #fff; background: var(--segment); }
+:root[data-theme="dark"] .seg-badge { color: #11131a; }
+.effort-seg .effort-name { max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Segment card on an activity: small route map above the effort table */
+.act-seg h3 a { color: inherit; }
+.act-seg h3 a:hover { color: var(--accent); text-decoration: none; }
+/* Column widths come from fitEffortCols (content width + equal share of the spare width) */
+.seg-table { width: 100%; table-layout: fixed; }
+.seg-table td.c-act { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.act-seg-table + .act-seg-table { margin-top: 18px; }
+.act-seg-table h4 { margin: 0 0 4px; font-size: 13px; font-weight: 600; color: var(--fg); }
+/* the effort of the open activity: its name in a colour apart from the blue links */
+.seg-wx { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; font-size: 12px; font-variant-numeric: tabular-nums; }
+.seg-wx-sky { width: 17px; height: 17px; flex: none; }
+.seg-wx-wind { display: inline-flex; align-items: center; gap: 2px; color: var(--muted); min-width: 64px; }
+/* fixed slots, so the help meters line up in one column */
+.seg-wx-temp { min-width: 34px; }
+.seg-wx-wind svg { width: 11px; height: 11px; }
+/* weather help meter: from the middle, right = helped (green), left = held back (orange/red) */
+.wx-meter { position: relative; display: inline-block; width: 64px; height: 7px; margin-left: 4px; border-radius: 3.5px;
+            background: var(--surface-2); cursor: default; }
+.wx-meter::before { content: ""; position: absolute; inset: -6px 0; } /* a taller hover target */
+.wx-meter i { position: absolute; top: 0; bottom: 0; z-index: 1; } /* over the axis */
+.wx-meter i.pos { border-radius: 0 3.5px 3.5px 0; } /* square at the middle axis */
+.wx-meter i.neg { border-radius: 3.5px 0 0 3.5px; }
+.route-wx-help { padding: 0 2px; line-height: 0; }
+.route-wx-help .wx-meter { margin: 0; width: 80px; }
+.wx-meter b { position: absolute; left: 50%; top: -2px; bottom: -2px; width: 1px; background: var(--muted); }
+.wx-meter.l3 i { background: #3b6d11; }
+.wx-meter.l2 i { background: #639922; }
+.wx-meter.l1 i { background: #97c459; }
+.wx-meter.l0 i { background: #b4b2a9; }
+.wx-meter.l-1 i { background: #f0997b; }
+.wx-meter.l-2 i { background: #d85a30; }
+.wx-meter.l-3 i { background: #e24b4a; }
+.this-tag { color: #e8590c; font-weight: 600; }
+/* best efforts: natural width (the power curve gets the rest); watts over both columns */
+.act-efforts { flex: 0 0 auto !important; }
+.act-efforts .span2 { grid-column: span 2; justify-self: center !important; text-align: center; }
+.act-efforts .effort-rec.span2 { justify-self: stretch !important; }
+/* gear: smaller, one line per device */
+.device-text b { font-size: 13px; }
+.device-text span { font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Effect: aerobic / anaerobic on two short lines */
+.effect-lines { display: flex; flex-direction: column; font-size: 12px; line-height: 1.35; }
+.effect-lines b { font-weight: 600; }
+.effect-lines b { display: inline; padding-left: 0; font-size: inherit; color: inherit; }
+.effect-word { color: var(--muted); }
+.act-col-stats.two { flex: 0 0 310px; }
+.stat-card h3 { white-space: nowrap; }
+
+/* segment name on the tile map, top right */
+.tile-map { position: relative; }
+.seg-badge.tile-seg { position: absolute; top: 7px; right: 7px; margin: 0; z-index: 2; max-width: 70%; overflow: hidden; text-overflow: ellipsis;
+                      white-space: nowrap; text-transform: none; letter-spacing: 0; font-size: 10.5px; line-height: 18px; padding: 0 7px;
+                      box-shadow: 0 1px 4px rgba(0,0,0,.25); }
+
+/* small cards in one or two columns; each column's cards share its height */
+.act-col-stats.two { display: flex; flex-direction: row; gap: 8px; }
+.act-col-stats .stat-col { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+.act-col-stats .stat-col > .stat-card { flex: 1 1 0; display: flex; flex-direction: column; justify-content: center; margin: 0; }
+/* height handle: a little smaller */
+.card-resize { width: 34px; height: 10px; right: 28px; bottom: -5px; }
+
+/* surface pills on the altitude chart: the ribbon carries the hatching of its kind */
+.chart-ribbon.s-gravel { background: radial-gradient(circle, rgba(255,255,255,.35) 1px, transparent 1.3px) 0 0 / 5px 5px, var(--c); }
+.chart-ribbon.s-dirt { background: repeating-linear-gradient(-45deg, rgba(255,255,255,.22) 0 1.3px, transparent 1.3px 4px), var(--c); }
+.surface-stat { margin-top: 2px; }
+
+/* a link that reads as plain text (e.g. the date in the activities list; the name is the link) */
+a.plain-link { color: inherit; text-decoration: none; font-weight: 400 !important; }
+a.plain-link:hover { text-decoration: underline; }
+
+.zone-bars .zone-row.on { background: color-mix(in srgb, var(--zc) 14%, transparent); border-radius: 5px; }
+
+a.effort-rec.plain-link:hover { text-decoration: underline; color: var(--accent); }
+
+/* weather widget: small sky icon, then temperature and wind in one line */
+.route-weather { padding: 3px 8px; }
+.wx { gap: 6px; font-size: 11px; color: var(--fg); }
+.wx-sky { width: 16px; height: 16px; }
+.wx-wind { padding-left: 6px; gap: 3px; }
+.wx-wind svg { width: 13px; height: 13px; }
+
+/* ---- Manual (the ? in the header): the Fitness method card's pieces (grey tiles, ranked
+   rows, panel titles) and plain data tables; only the layout is added here. */
+.man p { margin: 0 0 12px; max-width: 120ch; }
+.man .method-steps { grid-template-columns: repeat(var(--cols, 4), minmax(0, 1fr)); margin-bottom: 0; }
+.man .method-steps + * { margin-top: 14px; }
+.man-toc .method-step { text-align: left; align-items: stretch; justify-content: flex-start; border: 0; height: auto; font: inherit; color: inherit; cursor: pointer; }
+.man-toc .method-step b { justify-content: flex-start; }
+.man-toc .method-step:hover { background: color-mix(in srgb, var(--accent) 10%, var(--surface-2)); filter: none; }
+.man-sec { scroll-margin-top: calc(var(--header-h, 52px) + var(--head-h, 56px) + 24px); }
+.man-panel { margin-top: 18px; }
+.man-table { margin-bottom: 16px; }
+.man-table table { table-layout: fixed; width: 100%; } /* tables with % widths; Manual tables are fitted (.man-fit) */
+.man-n { display: inline-block; width: 18px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.man-table th, .man-table td { white-space: normal; vertical-align: top; }
+.man-table td { overflow-wrap: break-word; }
+.man-table td { font-size: 13px; }
+.man-nowrap { white-space: nowrap; }
+/* Tables fitted to their content: short columns at the left, the last one takes the rest */
+.man-table table.man-fit { table-layout: auto; min-width: 0; width: 100%; max-width: none; } /* lines across the whole card */
+.man-fit th.fit, .man-fit td.fit { width: 1%; white-space: nowrap; padding-right: 24px; }
+/* A section's content sits indented under its title, so title and text do not run together */
+.man-body { padding-left: 16px; }
+/* the first column's text starts where the paragraphs start (no extra cell padding) */
+.man-body table.data th:first-child, .man-body table.data td:first-child { padding-left: 0; }
+/* tiles inside a section are not indented: they line up with the title like other cards */
+.man-body .method-steps { margin-left: -16px; }
+.man-zone { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; }
+.man-zone i { width: 10px; height: 10px; border-radius: 3px; flex: none; }
+.man-rows { display: flex; flex-direction: column; gap: 10px; margin-top: 4px; font-size: 13px; }
+.man-row { display: grid; grid-template-columns: 22px 130px minmax(0, 1fr); gap: 10px; align-items: baseline; }
+.man-row .method-rank { align-self: start; }
+.man-terms { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 32px; margin: 0; font-size: 13px; }
+.man-terms dt { font-weight: 600; }
+.man-terms dd { margin: 2px 0 0; color: var(--muted); }
+.man code { font-size: 12px; }
+.man-link { display: inline; height: auto; padding: 0; border: 0; background: none; font: inherit; color: var(--accent); cursor: pointer; }
+.man-link:hover { text-decoration: underline; filter: none; }
+@media (max-width: 860px) {
+  .man .method-steps { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .man-terms { grid-template-columns: 1fr; }
+  .man-row { grid-template-columns: 22px minmax(0, 1fr); }
+  .man-row > span:last-child { grid-column: 2; }
+}
+
+/* Time card: moving time, the elapsed time small under it */
+.time-lines { display: flex; flex-direction: column; line-height: 1.25; }
+.time-lines small { font-size: 11px; color: var(--muted); }
+
+/* Effect card: the primary benefit, the two scores small under it */
+.effect-lines > b { font-size: 14px; font-weight: 400; color: color-mix(in srgb, var(--fg) 80%, transparent); }
+.effect-lines small { font-size: 10.5px; color: var(--muted); white-space: nowrap; }
+
+/* Effect card with room: the aerobic and anaerobic scores in small lines under the benefit */
+.effect-full { display: flex; flex-direction: column; margin-top: 3px; font-size: 10.5px; line-height: 1.35; color: var(--muted); white-space: nowrap; }
+.effect-full b { font-weight: 600; color: color-mix(in srgb, var(--fg) 80%, transparent); }
+.effect-full .effect-word { color: var(--muted); }
+/* the score lines never stick out: the Garmin word wraps under the number when needed */
+.effect-full { white-space: normal; }
+.effect-full > span { display: block; overflow-wrap: anywhere; }
+.effect-full .effect-word { white-space: nowrap; }
+/* Interval sections (charts.js): values of each section in a strip above the plot, thin lines on
+   the plot that can be dragged; − over a line removes it, + elsewhere adds one */
+.chart-sections { grid-column: 2; position: relative; height: 46px; user-select: none; }
+.sec-cells { position: absolute; inset: 0; }
+.sec-cell { position: absolute; top: 16px; bottom: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
+            font-size: 11px; line-height: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; font-variant-numeric: tabular-nums; }
+.sec-cell.edge { border-left: 1px solid color-mix(in srgb, var(--muted) 45%, transparent); }
+.sec-cell .sub { font-weight: 500; color: var(--muted); }
+.sec-ball { position: absolute; top: 3px; width: 10px; height: 10px; margin-left: -5px; border-radius: 50%; display: grid; place-items: center;
+            font-size: 9px; line-height: 1; font-weight: 700; color: #fff; cursor: pointer; z-index: 1;
+            box-shadow: 0 1px 4px rgba(0,0,0,.25); transition: opacity .15s, transform .15s; }
+.sec-ball.sec-del { background: #e5484d; opacity: 0; pointer-events: none; }
+.chart-sections:hover .sec-ball.sec-del { opacity: 1; pointer-events: auto; }
+.sec-ball.sec-add { background: var(--accent); pointer-events: none; }
+.sec-ball.sec-add[hidden] { display: none; }
+.sec-ball.sec-del:hover { transform: scale(1.25); }
+.sec-handles { position: absolute; inset: 0; pointer-events: none; z-index: 5; }
+.sec-handle { position: absolute; top: 0; bottom: 0; width: 13px; margin-left: -6px; cursor: ew-resize; pointer-events: auto; }
+.sec-handle[hidden] { display: none; }
+.sec-handle::after { content: ""; position: absolute; left: 6px; top: 0; bottom: 0; width: 1px; background: transparent;
+                     transition: left .15s, width .15s, background .15s; }
+.sec-handle:hover::after, .sec-handle.drag::after { left: 5px; width: 3px; background: var(--accent); }
+/* a small grip in the middle of the line: it can be moved sideways */
+.sec-handle i { position: absolute; left: 2px; top: 50%; width: 9px; height: 22px; margin-top: -11px; border-radius: 5px; z-index: 1;
+                background: var(--surface); border: 1.5px solid var(--accent); opacity: 0; transform: scaleY(.5); transition: opacity .15s, transform .15s; }
+.sec-handle i::before { content: ""; position: absolute; left: 2px; right: 2px; top: 5px; bottom: 5px;
+                        background: repeating-linear-gradient(to bottom, var(--accent) 0 1.5px, transparent 1.5px 4px); }
+.sec-handle:hover i, .sec-handle.drag i { opacity: 1; transform: none; }
+.charts.sec-dragging, .charts.sec-dragging * { cursor: ew-resize !important; }

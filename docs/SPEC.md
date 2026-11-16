@@ -339,8 +339,14 @@ Each field, in this order:
    (`user_profile`), with the session's `time_in_zone` as a fallback; 0 / out-of-range
    values are ignored. Stored per activity (`activities.watch_*`); an activity uses its own
    values, otherwise those of the person's nearest activity (latest before, else first
-   after). Activities imported before this are read once more in the `thresholds` phase
-   (`watch_version`). Garmin API values (lactate threshold pace, FTP history) may follow.
+   after). **FTP is per sport**: a run file carries the running-power FTP (~1.6× the cycling
+   one on a Garmin), so rides borrow FTP only from rides and runs only from runs; other
+   groups take none from the watch, and Settings shows the cycling one. An activity whose
+   file has no FTP or a wrong one (e.g. Rouvy with a substituted device) can get its own in
+   its Edit panel (`activities.ftp_override`, kept on reimport; empty = automatic); load and
+   workout kind are recomputed. Activities imported before this are read once more in the
+   `thresholds` phase (`watch_version`). Garmin API values (lactate threshold pace, FTP
+   history) may follow.
 3. **Estimate** — HR max = highest plausible max HR recorded (100–230 bpm), resting HR
    = 60 bpm, threshold HR = 90 % of HR max.
 
@@ -389,6 +395,61 @@ the activity page and as records + curve in Statistics (all time, last 90 days, 
 with the all-time curve dashed for comparison). On the activity page each effort is compared
 with the person's best **in the same category** (running power is no record for a ride), and
 the power curve tooltip shows the date that best was set.
+
+### 7.6 Training type
+In the UI "training type" (Edit row, activity tile, Help tab); `workout` in the code and
+the database.
+Three groups of sports (`workout.PROFILES`; the thresholds in `workout.RULES` — the code and
+Help › Training types read the same values, served in `/api/types`):
+- **Endurance sports** get one of **Easy · Long · Tempo · Intervals · Hills · Race · Commute**,
+  detected: running, cycling (not downhill / BMX), cross-country skiing (also skitour, ski
+  erg), skating (inline, ice), rowing (also the erg), paddling (kayak, canoe, SUP), swimming,
+  cardio machines (elliptical, stair stepper). Each family has its share of the threshold HR
+  (rides, skating, rowing, machines 95 %, paddling 93 %, swimming 92 %), its shortest Long
+  (run 75, ride 150, ski 120, skate 90, row 75, paddle 120, swim 60, machines 75 min), Hills
+  only where terrain counts (run, ride, ski) and Commute only for rides and skates. Walks and
+  hikes (also snowshoe) are always Commute.
+- **Team and racket sports** get **Match · Training · Recreation**, from the heart rate over the
+  whole game (pauses included — a game is all stop-and-go): Match when 45 %+ of it is at 85 %+
+  of threshold HR, Recreation when the average is under 70 %, else Training; none without HR.
+- **Everything else** (strength, yoga, climbing, motor, multisport…) — no kind.
+Detected after import (`workout.py`, `activities.workout`, the reason and interval bouts in
+`workout_detail`); the person can pick another kind of the sport in the activity's Edit panel
+(`workout_override`, kept on reimport, "Automatic" goes back). Shown in the activity header
+after the place; statistics per kind and calendar charts come later. Interval workouts get
+section lines on the activity charts (`GET /api/activities/{id}/intervals`, computed on request,
+not stored; CHARTS.md › Activity page, MANUAL › Interval sections). Interval channel per
+sport: power (bike, running, erg), speed (runs without power — grade-adjusted on hilly runs —,
+skating, paddling, skiing), pool swims: speed from the laps (rests at the wall; the HR drop is
+not checked, wrist HR under water is unreliable), estimated power (rides without a power meter),
+heart rate alone (machines). Everything is relative to the person — HR as a share of the sport's threshold HR,
+power as a share of FTP, "typical" = median of their own activities of the group (moving
+power, speed, estimated power, moving time; per-activity medians in `workout_stats`). FTP as
+in §7.2 (per sport, correctable per activity). First rule that fits:
+1. **Commute** — walks and hikes always; rides that are easy (little time at 90 %+ threshold
+   HR, IF < 0.7) and under 45 min or from A to B (end > 1 km from start).
+2. **Intervals** — at least 3 work bouts (or 2 of 5+ min), each cycle bout / recovery / bout
+   clearly above its recovery (power ×1.25, running power or speed ×1.2), work at least 8 %
+   above the person's typical (else it is the normal pace with stops), heart rate falling in
+   the recoveries by 10 %+ of threshold HR (in a race with surges it stays up), bouts alike
+   (length within ×3, intensity CV ≤ 15 %), 3+ min of work (5+ on a bike; bike bouts under
+   60 s only above 120 % FTP — starts after a stop are not intervals). Bouts up a hill or
+   clearly steeper than the recoveries around them do not count. Channel: power (running
+   power too) → speed (grade-adjusted on hilly runs, Minetti) → power estimated from speed and
+   grade (rides without a power meter; heart rate must rise through each bout, recoveries
+   ridden, stricter ratios) → heart rate alone (bouts of 3+ min only).
+3. **Hills** — the same climb repeated 3+ times (bouts start within 60 m), or a hilly
+   activity: run 25+ m/km (200+ m), ride 15+ m/km (500+ m).
+4. **Race** — 60 %+ of the time at 95 %+ threshold HR (rides: or IF ≥ 0.9), at least 95 % of
+   the person's best intensity for a similar duration (±25 %, ±365 days) and 3 %+ above
+   typical, few stops.
+5. **Long** — moving time ≥ 1.5× the person's median, at least 75 min (run) / 150 min (ride).
+6. **Tempo** — 40 %+ of the time at 90 %+ threshold HR with a 12+ min block (dips ≤ 60 s),
+   or 50 %+ of the time there in any stretches (a steady ride whose HR hovers at the line,
+   broken by junctions), or (rides with power) half the time at 80 %+ FTP with a 15+ min block.
+7. **Easy** — the rest.
+Re-detected when the version changes, the type is changed, the activity is reimported or the
+person's thresholds change.
 
 ---
 
@@ -500,9 +561,20 @@ The visual design is defined by the project owner; the technical preview follows
   button top right (maps that are not already full screen); the colour legend of the activity route stays top left on a
   semi-transparent block.
 - **One level below a tab** (an activity, a segment, the segment creator): a square back button
-  with a left arrow, separate from the page header but framed like it and sticky with it, in
+  with an up arrow, separate from the page header but framed like it and sticky with it, in
   the left margin. When the screen is too narrow for the margin it folds above the header as
   the text link "← Activities", scrolling away as before. Use `backLink(href, label)`.
+  The activity page also has two such squares right of the header: previous (left arrow) and
+  next (right arrow) activity of the same person (of everyone in the All view); a missing one
+  is left out. Narrow screens: "‹ Previous · Next ›" text links in the back link's row; the
+  row folds at 1840 px (two squares need a wider margin). Use `backNavRow(…)`.
+- **List tables** (`tableHtml`: activities, files; also laps): each column as wide as its content; the
+  spare width becomes equal visible gaps between neighbouring columns' contents (text is
+  left-aligned, numbers right-aligned, so each gap goes to the free side; number → text gets
+  left padding). The gap after the first column stays small (`gapPlan`, `spreadColumns`,
+  redone on resize and when rows load). Segment effort tables
+  (segment page, segment cards on an activity) follow the same rule (`fitEffortCols`); tables
+  with the same columns share one set of widths, so tables one under another line up.
 - **Charts** follow `docs/CHARTS.md`. Distance is always shown with two decimals.
 - **Numbers**: decimal comma and a space between thousands (`1 234,56`) everywhere (`num()`).
 - **Defaults vs user settings.** Two kinds, decided per setting with the owner:
@@ -519,7 +591,8 @@ The visual design is defined by the project owner; the technical preview follows
 
 ### Navigation
 - Main header: **Activities · Calendar · Map · Segments · Fitness · Statistics**, then on the right
-  the **person picker** (the only coloured icon), the light/dark switch and a **gear** for
+  the **person picker** (the only coloured icon), the light/dark switch, a **question mark** for
+  the Manual and a **gear** for
   Settings.
 - Person picker: one person or **Everyone**. The first person in the configured order is the
   default (never Everyone). The choice is remembered per browser.
@@ -543,13 +616,14 @@ The visual design is defined by the project owner; the technical preview follows
 | View | Content |
 |---|---|
 | Activities | KPI row (count, distance, time, ascent, calories for the current filters); Tiles (route on a static map, always the Faded light tone) / List switch (Tiles first) at the right of the page title; sortable columns with a filter row. |
-| Activity | Back button; header with type icon, name, start date (smaller, lighter), Charts and Options badges (Options: X axis, power averaging), an **Edit** badge (panel like Map › Options: name — empty = back to the Connect title or the type —, type, delete) and **Create segment** (activities with a route; opens the segment creator on this activity). FIT activity files carry no surface type, so the route has no surface colouring. Tiles at the top, each its own card, side by side (flex, wrapping on narrow screens, as low and as even as possible; columns have different widths — power widest, best efforts narrow): first column four small tiles one under another — **Distance**, **Moving time**, **Elapsed time**, **Calories** (active / total; active = total − the resting share the watch writes) — each with a title like a chart title (same font, 18 px icon) and the value below; **Gear** (icon in the title; small pictures; from the FIT `device_info`: the watch or bike computer and the sensors — HR strap, power meter, radar, lights…; a drawing per kind, or the owner's own photo from `<data>/device-images/<product>.png|jpg|webp`, e.g. `edge_850.png`; unknown or older devices show a generic picture; no battery status); **Heart rate in zones** and under it, in the same column, **Surface** (its own tile: a stacked bar in the surface hatching and the share of paved / gravel / dirt / unknown); heart rate zones: (Garmin's time in HR zones from the FIT `time_in_zone` message — one bar per zone with its share; time and zone range on hover; a grey row for the time below zone 1); **Power** (rides only, i.e. a power meter, not running power) as a sliding tile: first the **power curve** (a chart of the standard filling the tile: best average power 5 s … 5 h on a log axis — every duration labelled, a stop counts as 0 W —, this activity filled, the comparison dashed and lightly filled, crosshair with the values; hovering a point highlights that effort on the charts and the map), then **Power in zones**; dots under it switch; **Best efforts** (laurel icon; fastest time per distance — runs 400 m … marathon, rides 5, 10, 20, 30, 40, 50, 100 km and the best 20 min and 1 h power — in columns: distance, time, average speed (rides) or pace (runs) and the best of the comparison under a short header (ATH, Year, 12 mo…), a laurel there when this activity is the best; hovering highlights the stretch on the charts and the map). Best efforts columns: This activity | This year | the comparison. Options › **Compare with** (the last column): All time (default, ATH) | Last 12 months | Last 3 months | Last 30 days, saved per person (`ui_settings` key `activity-compare`); used by the power curve and the best efforts. Zone colours are fixed: HR zones green → red and power zones yellow → violet, the same scales as the route colouring. Titles of all tiles and of the Route card use the chart title font with an icon; the route map is 414 px high. No training load card on this page. Options › **Route lines**: where the route runs twice (out and back) the lines are drawn side by side (default) or on top; saved per person (`ui_settings` key `activity-route-offset`). FIT activity files (Edge included) carry no road surface and no gear (bike, shoes: those live in Garmin Connect only); it comes from OpenStreetMap (`surface.py`): the route is cut into ~1 km boxes, the ways with a highway tag in them are fetched from an Overpass server (`overpass_url` setting, default overpass-api.de; only these boxes are sent), each track point (every 20 m) takes the surface of the nearest way within 25 m (surface tag; without it roads count as paved, tracks by their grade, paths unknown) and the result is cached in `activities.surface` as runs along the distance with shares. Runs shorter than 80 m join their neighbours (no flicker when a few points catch a road beside a gravel path; the stored runs stay point by point, the page gets them smoothed). Settings › General › Road surface: when an activity is opened (default) or all activities slowly in the background (newest first, one at a time with a 15 s pause, 10 min after a server error; setting `surface_mode`). Shown for every activity with a route for now (later maybe only wheeled sports). Hovering a surface kind in its tile highlights all its stretches on the charts and the map. With at most one device the Surface tile shares the Devices column and heart rate zones take a full column. When there is no power tile, a **Heart rate curve** tile (same chart as the power curve: best average HR for 10 s … 1 h, this activity and the comparison) takes its place. Tiles without a value are hidden, and values that belong to a chart (HR, pace, power, cadence, ascent…) live only next to it, even when it is hidden. Route card: Data badge (single colour, speed, heart rate, power / cadence / altitude when recorded, surface — one colour per kind with a legend of the kinds; 5–95 % range, legend with the scale on the map; HR green → red, power → violet, altitude green → brown like a relief map) and Markers badge (numbered dot in the accent colour every 1 km, every 5 km for rides and activities ≥ 40 km); a distance scale is always on the map; a reset view button (refresh pictogram, in a block like Fullscreen, under it) appears only after the map was moved, zoomed or rotated. Charts right below the map (docs/CHARTS.md), laps (Group badge), best efforts. |
+| Activity | Back button; header with type icon, name, start date (smaller, lighter), place (the training type is a tile, §7.6), Charts and Options badges (Options: X axis, power averaging), an **Edit** badge (panel like Map › Options: name — empty = back to the Connect title or the type —, type, kind — Automatic (the detected one) or one of the seven, §7.6 —, FTP for this activity — activities with power, empty = automatic, the automatic value as placeholder, §7.2 —, delete) and **Create segment** (activities with a route; opens the segment creator on this activity). FIT activity files carry no surface type, so the route has no surface colouring. Tiles at the top, each its own card, side by side (flex, wrapping on narrow screens, as low and as even as possible; columns have different widths — power widest, best efforts narrow): first column four small tiles one under another — **Distance**, **Moving time**, **Elapsed time**, **Calories** (active / total; active = total − the resting share the watch writes) — each with a title like a chart title (same font, 18 px icon) and the value below; **Gear** (icon in the title; small pictures; from the FIT `device_info`: the watch or bike computer and the sensors — HR strap, power meter, radar, lights…; a drawing per kind, or the owner's own photo from `<data>/device-images/<product>.png|jpg|webp`, e.g. `edge_850.png`; unknown or older devices show a generic picture; no battery status); **Heart rate in zones** and under it, in the same column, **Surface** (its own tile: a stacked bar in the surface hatching and the share of paved / gravel / dirt / unknown); heart rate zones: (Garmin's time in HR zones from the FIT `time_in_zone` message — one bar per zone with its share; time and zone range on hover; a grey row for the time below zone 1); **Power** (rides only, i.e. a power meter, not running power) as a sliding tile: first the **power curve** (a chart of the standard filling the tile: best average power 5 s … 5 h on a log axis — every duration labelled, a stop counts as 0 W —, this activity filled, the comparison dashed and lightly filled, crosshair with the values; hovering a point highlights that effort on the charts and the map), then **Power in zones**; dots under it switch; **Best efforts** (laurel icon; fastest time per distance — runs 400 m … marathon, rides 5, 10, 20, 30, 40, 50, 100 km and the best 20 min and 1 h power — in columns: distance, time, average speed (rides) or pace (runs) and the best of the comparison under a short header (ATH, Year, 12 mo…), a laurel there when this activity is the best; hovering highlights the stretch on the charts and the map). Best efforts columns: This activity | This year | the comparison. Options › **Compare with** (the last column): All time (default, ATH) | Last 12 months | Last 3 months | Last 30 days, saved per person (`ui_settings` key `activity-compare`); used by the power curve and the best efforts. Zone colours are fixed: HR zones green → red and power zones yellow → violet, the same scales as the route colouring. Titles of all tiles and of the Route card use the chart title font with an icon; the route map is 414 px high. No training load card on this page. Options › **Route lines**: where the route runs twice (out and back) the lines are drawn side by side (default) or on top; saved per person (`ui_settings` key `activity-route-offset`). FIT activity files (Edge included) carry no road surface and no gear (bike, shoes: those live in Garmin Connect only); it comes from OpenStreetMap (`surface.py`): the route is cut into ~1 km boxes, the ways with a highway tag in them are fetched from an Overpass server (`overpass_url` setting, default overpass-api.de; only these boxes are sent), each track point (every 20 m) takes the surface of the nearest way within 25 m (surface tag; without it roads count as paved, tracks by their grade, paths unknown) and the result is cached in `activities.surface` as runs along the distance with shares. Runs shorter than 80 m join their neighbours (no flicker when a few points catch a road beside a gravel path; the stored runs stay point by point, the page gets them smoothed). Settings › General › Road surface: when an activity is opened (default) or all activities slowly in the background (newest first, one at a time with a 15 s pause, 10 min after a server error; setting `surface_mode`). Shown for every activity with a route for now (later maybe only wheeled sports). Hovering a surface kind in its tile highlights all its stretches on the charts and the map. With at most one device the Surface tile shares the Devices column and heart rate zones take a full column. When there is no power tile, a **Heart rate curve** tile (same chart as the power curve: best average HR for 10 s … 1 h, this activity and the comparison) takes its place. Tiles without a value are hidden, and values that belong to a chart (HR, pace, power, cadence, ascent…) live only next to it, even when it is hidden. Route card: Data badge (single colour, speed, heart rate, power / cadence / altitude when recorded, surface — one colour per kind with a legend of the kinds; 5–95 % range, legend with the scale on the map; HR green → red, power → violet, altitude green → brown like a relief map) and Markers badge (numbered dot in the accent colour every 1 km, every 5 km for rides and activities ≥ 40 km); a distance scale is always on the map; a reset view button (refresh pictogram, in a block like Fullscreen, under it) appears only after the map was moved, zoomed or rotated. Charts right below the map (docs/CHARTS.md), laps (Group badge), best efforts. |
 | Calendar | Month view (Mon–Sun, activity chips with type icon and distance or time, week totals: time, distance, load, count) and year view (12 small month grids coloured by moving time per day); ‹ › and Today; summary strip for the shown month/year. With Everyone: a person dot on each chip. |
 | Heatmap | All routes as low-opacity lines; explorer tiles, max square, cluster. |
-| Fitness | Header: Time filter, Options (activity icons under the fitness chart, fitness filled / line, fatigue, form zones; saved per person) and a Summary toggle (off when the tab is entered); on the right two toggles with icons (Fitness, Form), each shows or hides its chart, any number may be on (remembered in the browser). A ⚠ icon after the title only when thresholds can distort the load (§7.2). Summary (fitness, fatigue, form with zone, ramp rate, 7-day load) at the end of the period; charts per docs/CHARTS.md (Fitness page): fitness and fatigue lines, and form with the axis turned (more tired = higher), zone bands and the line coloured by its zone; ramp rate (fitness change in 7 days; above 8 too fast, below 0 losing fitness) is only a summary value, as it is the slope of the fitness line; card explaining the calculation: four steps (load, fitness, fatigue, form), the load methods in the order they are tried with counts, and the thresholds in use as tiles with their source. |
+| Fitness | Header: Time filter, Options (activity icons under the fitness chart, fitness filled / line, fatigue, form zones; saved per person) and a Summary toggle (off when the tab is entered); on the right two toggles with icons (Fitness, Form), each shows or hides its chart, any number may be on (remembered in the browser). A ⚠ icon after the title only when thresholds can distort the load (§7.2). Summary (fitness, fatigue, form with zone, ramp rate, 7-day load) at the end of the period; charts per docs/CHARTS.md (Fitness page): fitness and fatigue lines, and form (fresher = higher), zone bands and the line coloured by its zone; ramp rate (fitness change in 7 days; above 8 too fast, below 0 losing fitness) is only a summary value, as it is the slope of the fitness line. How it is computed lives in Manual › Fitness (no explanation card on the page). |
 | Wellbeing | Sleep, stress, heart rate (mostly charts), from the Garmin API; some daily values also in the Calendar. Later stage. |
 | Statistics | *Totals*: filter (type, year, group by year/month/week, chart metric), bar chart, table per period (years link to their months), moving time by group. *Records*: running pace / power / heart rate, range all / 90 days / year, curve + table with links to activities. |
 | Compare | Everyone side by side (only with “Everyone” selected). |
+| Manual (?) | A knowledge base of how Trailbook computes things and how to read them, tabs like Settings: **Training types** (what a training type is, the types with what they do and the recovery, sports and their settings, the detection rules, intervals in detail, relative to you, changing the type, terms) and **Training effect** (what it is, Garmin's aerobic / anaerobic scale, primary benefit with the codes, how to read it, how it relates to the training type, where it is shown). **Weather help** (what the meter shows, which activities, how it is counted with the levels, weights per sport, examples, limits; the weights come from `HELP_PROFILES`, the values the meter uses). **Fitness** (what the charts show, load per activity by method, the fitness model, form and ramp zones, thresholds and the ⚠, terms; constants from `/api/types` › `fitness_rules`, zones from the charts' own tables). Every table is fitted to its content: when every cell fits on one line, the columns keep their natural width and only the last column takes the rest (measured in `fitManualTables`, again on resize); otherwise short columns stay on one line and the text columns share the rest and wrap; row lines run across the card; rules and terms are tables too. A section's text and tables sit 16 px in from its title (the first column without cell padding, so text and tables line up); tiles inside a section are not indented. Built only from the app's existing pieces (grey tiles, ranked rows and panel titles, plain data tables), no colours of its own; the first card holds the contents as tiles that jump to the sections. All of Trailbook's own numbers come from the server (`/api/types`), the same values the code uses; new topics get a tab of their own. |
 | Settings › Backup | Export (with / without FIT files, optionally with Garmin keys), list of exports (download, restore, delete), restore from an uploaded export (one file picker, no folder choice: every file goes into the archive); progress while a job runs, page reloads after a restore. |
 
 ### Page structure
@@ -672,8 +746,9 @@ covers it gets an *effort* with its time; the Segments tab ranks and tracks them
   still being matched always show (state *matching…*), so a new one gives feedback at once.
 - **Two creators**, both ending in a slice of one recorded activity (full-resolution
   `lat`/`lon` from `streams`, simplified to 2 m, at least 100 m long):
-  1. *From an activity* — choose an activity, pick start and end with two sliders over the
-     elevation profile; the map highlights the slice.
+  1. *From an activity* — choose an activity, pick start and end with one two-thumb slider
+     right under the elevation profile (along the distance, so the thumbs line up with it);
+     the map highlights the slice; below: length, time, climb, name, any type, Create.
   2. *From the map* — place pins in riding order on a map that shows your routes; the server
      snaps them to **your own tracks**: the activity that passes all pins in order (within
      50 m) is cut between the first and the last pin (closest match wins, then the newest).
@@ -689,8 +764,13 @@ covers it gets an *effort* with its time; the Segments tab ranks and tracks them
      opposite direction fail) and ends at the first crossing of the end (within 25 m).
   3. Travelled distance must be 0.8–1.3× the segment length (+100 m). One activity can have
      several efforts (laps); the search continues after each end.
-  4. Effort values: elapsed time (the ranking), moving time, average speed, average / max HR,
-     average power and cadence over the slice, start time.
+  4. **Both directions on flat segments**: when the end is at most 30 m and at most 3 % of the
+     length above or below the start (`segments.net_climb_m`, set at creation; older segments
+     take it from their source activity), the segment is also matched reversed. Those efforts
+     share the leaderboard and are marked `reverse` (⇄ next to the date, explained on hover). A short
+     steep ramp stays one way even under 30 m.
+  5. Effort values: elapsed time (the ranking), moving time, average speed, max speed (from
+     the speed stream), average / max HR, average power and cadence over the slice, start time.
   `segments.match_version` / `activities.segments_version` (0 = to do) say what is done; a new
   or changed segment is matched against all activities, a new or reimported activity (or a
   type change) against all segments. ~ms per candidate on the CM4.
@@ -700,10 +780,35 @@ covers it gets an *effort* with its time; the Segments tab ranks and tracks them
   name, distance, ascent, number of efforts, the best effort with its date and the last
   effort with its time, pace/speed, average and max HR, power. Options: show segments
   without efforts of the selected person.
-- **Detail** (`#/segment/{id}`): map, summary (distance, ascent, grade, efforts, best,
-  average, median), last effort, top 10, trend of the best and average time per week (last
-  12 weeks) and per month (last 12 months), all efforts (50 at a time), rename, delete. With
-  Everyone also a table per person (best, average, efforts, last).
+- **Detail** (`#/segment/{id}`): header like an activity — group icon, name, then the date
+  and place of the source activity (small, links to it); badges Time, Type (only the types
+  of this segment's efforts in the period, with counts), **Edit** (name, Counts: *<group>
+  only* — every type of the group — or *Any activity type*, Delete segment) and **Summary**
+  (shows the strip under the map: distance, ascent, grade, direction (one way / both ways
+  with the end vs start altitude), efforts, best, average, median;
+  on by default, saved per person, `ui_settings` key `segment-summary`). Route card (title
+  with icon, 414 px map), Last effort and Best effort cards (tile titles with icons, values
+  as small tiles), **Trend** chart (docs/CHARTS.md: every effort's time over the Time
+  filter, faster higher; Best / Avg / Last on the right), top 10 and all efforts (50 at a
+  time; Date and Time headers sort) with the activity list's icon headers: Avg speed and Max
+  speed (on foot: Avg pace, Best pace), Avg HR, Max HR, Avg power only when an effort has it. With Everyone also a table per person (best, average, efforts, last).
+  The route map has the height grip like the activity route.
+- **On an activity** every segment it covers gets a card: title "Segment: <name>" (route
+  icon, the name links to the segment) and a **Show segment** badge on the right, then three
+  separate full-width tables like the one on the segment page, each with its own title in
+  the text colour and space between them: **Last** (this effort and the two before it),
+  **Best**, **Best · last 12 months**. This activity's row says "This activity" in the
+  Activity column in orange (apart from the blue links); rows are not tinted.
+- **Weather of an effort** (last column of the effort tables on the segment page and in the
+  segment card on an activity): sky icon, temperature, wind arrow (where it blows) and speed,
+  then a small diverging meter: from the middle to the right when the weather helped, to the
+  left when it held back (a full half at 15 points); hovering it shows this case's breakdown
+  (wind, temperature, rain with their points and the sum). Data: the activity's weather (Open-Meteo,
+  hourly for the area, see the Activity page); an activity without it is looked up when the
+  table is shown (one at a time, cached). Rides and runs outdoors only, each with its own
+  weights; indoor and virtual activities leave the cell empty. The same meter
+  sits under the weather widget on an activity's route map (whole route, no background).
+  The formula, the sport profiles and examples: `docs/MANUAL.md` › Weather help.
 - **VO2 max** of the period is shown only once it is stored (Garmin API, Wellbeing stage);
   until then nothing is shown.
 
@@ -831,3 +936,37 @@ altitude chart when Garmin corrected the elevation. The page shows location afte
 Training effect and Body Battery as small cards (two columns when there are more than four).
 Gear (bike, shoes) is not available through the personal API key (gear-service: 404) and is
 not in FIT files.
+
+### Segments on the activity page
+
+Segment colour: a dark indigo (`--segment`), used for everything segment-related. Activity
+tiles show a small **SEGMENT** badge after the name when the activity rides a segment. Each
+segment ridden gets a card before the laps: its static map, a link to the segment and a table
+(rank, date, time, speed or pace, avg HR, avg power, behind best) with this activity, the 3
+best, the 3 best of the last 12 months and the 2 efforts before this one. The segments are
+also rows in Best efforts (time, best this year, all-time best; hover highlights the stretch).
+Best efforts: power values span both columns of their group; the tile keeps its natural
+width. Small cards: Effect (aerobic / anaerobic training effect on two lines) and Body
+Battery whenever Garmin Connect data exists. The height handle of chart and map cards is a
+small lozenge with a bar on the card's bottom edge.
+
+### Weather on the activity map
+
+FIT files and the Garmin personal API carry no weather (no weather messages in the files; the
+Connect weather service answers 404). It comes from Open-Meteo (`weather.py`, no key): the hour
+of the activity at the start point, and for routes over 30 km also the middle and the end
+(coordinates rounded to 0.01°; forecast API for the last ~80 days, the archive before), cached
+in `activities.weather`. A small one-line widget top left of the route map: a small sky icon
+(by WMO code), the temperature (range when the points differ), rain in mm when there was some,
+and the wind: an arrow pointing exactly where it blows, and the speed (no compass letters;
+details in the tooltip). The colour legend sits under the widget. Model data for the hour and
+the area (~10 km).
+On activity maps the © OpenStreetMap attribution sits under the +/- buttons.
+Best efforts: the Year and ATH values link to the activity that set them; the tooltip gives
+its date.
+
+Small cards: one **Time** card — moving time (what pace and speed use), and under it, small,
+the elapsed time when the two differ by a minute or more.
+Small cards, final order: column 1 Distance, Time, Calories; column 2 Training type (the
+workout kind, no longer in the page title), Effect (only Garmin's primary benefit, e.g. "Tempo"; the tooltip
+explains just that benefit and gives the aerobic and anaerobic scores), Body Battery.
