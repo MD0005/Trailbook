@@ -199,12 +199,39 @@ function bindTypePanel(root) {
   };
 }
 
+// ---- Training type (activities page) -------------------------------------------------------
+
+// URL parameter `workouts`: comma list of training type keys, "none" = no training type.
+// `counts` ({key: n}) from the activities API, under the other filters.
+const workoutSelection = (params) => new Set((params.workouts || "").split(",").filter(Boolean));
+const workoutName = (k) => (k === "none" ? "Not set" : workoutLabel(k));
+
+function workoutBadge(params, counts = {}) {
+  const sel = workoutSelection(params);
+  const keys = [...(TYPES.workouts || []).map((w) => w.key), "none"].filter((k) => counts[k] || sel.has(k));
+  const item = (k) => `<label class="tyf-item"><input type="checkbox" data-wkf="${k}" ${sel.has(k) ? "checked" : ""}><span>${esc(workoutName(k))}</span><small>${num(counts[k] || 0)}</small></label>`;
+  const panel = `<div class="tyf wkf">${keys.length ? `<div class="tyf-list"><div class="tyf-group">${keys.map(item).join("")}</div></div>` : hint("No activities yet.")}
+    ${filterActions("workout", sel.size > 0)}</div>`;
+  const label = !sel.size ? "All" : sel.size <= 2 ? [...sel].map(workoutName).join(", ") : `${sel.size} types`;
+  return badgeHtml("workout", "Training type", esc(label), { panel, on: sel.size > 0 });
+}
+
+function bindWorkoutPanel(root) {
+  const box = root.querySelector(".wkf");
+  if (!box) return null;
+  return () => {
+    const all = [...box.querySelectorAll("[data-wkf]")];
+    const on = all.filter((i) => i.checked).map((i) => i.dataset.wkf);
+    return { workouts: on.length === all.length ? "" : on.join(",") };
+  };
+}
+
 // ---- wiring ------------------------------------------------------------------------------
 
 // Apply / Clear of the Time and Type panels: navigate to `route` with the other parameters
 // kept. `drop` lists older parameters the new ones replace (year, type, range, page, …).
 function bindFilterBadges(root, route, params, { drop = [] } = {}) {
-  const readers = { time: bindTimePanel(root), type: bindTypePanel(root) };
+  const readers = { time: bindTimePanel(root), type: bindTypePanel(root), workout: bindWorkoutPanel(root) };
   const old = ["page", "year", "type", "range", ...drop];
   const go = (changes) => {
     const next = { ...params, ...changes };
@@ -217,14 +244,14 @@ function bindFilterBadges(root, route, params, { drop = [] } = {}) {
     if (read) go(read());
   });
   root.querySelectorAll("[data-fclear]").forEach((b) => b.onclick = () => {
-    go(b.dataset.fclear === "time" ? { from: "", to: "" } : { types: "" });
+    go({ time: { from: "", to: "" }, type: { types: "" }, workout: { workouts: "" } }[b.dataset.fclear]);
   });
 }
 
 // Query parameters for the API from the page parameters.
 function filterQuery(params) {
   const q = {};
-  for (const k of ["from", "to", "types"]) if (params[k]) q[k] = params[k];
+  for (const k of ["from", "to", "types", "workouts"]) if (params[k]) q[k] = params[k];
   if (!q.types && params.type) q.types = params.type; // older links
   return q;
 }

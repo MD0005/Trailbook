@@ -63,6 +63,8 @@ performance condition, stamina and potential stamina. Streams without data are n
   speed, altitude; power and cadence on rides. The user's choice is saved per person on the
   server (`ui_settings` key `activity-charts`).
 - Chart order: drag a card; saved per person (`ui_settings` key `activity-chart-order`).
+- All charts of the page have one y-axis width (the widest), so the plots start at the same x
+  and a moment — cursor, pins, interval lines — is one straight vertical line down the page.
 - Structured workouts: the target of each workout step (heart rate, power, speed or cadence
   range, as set in the plan) is drawn on that chart over the step's laps: the high and the
   low limit are two continuous fine dashed lines that step up or down where the target
@@ -78,12 +80,26 @@ performance condition, stamina and potential stamina. Streams without data are n
   cell per section (between two lines) — speed: the section's pace (on foot) or speed and its
   time; heart rate: average bpm and the zone; power: average watts and the zone; cadence: the
   average. Heart rate and power: the value and the zone in the zone's colour (Garmin's limits,
-  as in the zone tiles); other values in the series colour; the time grey; a cell narrower than ~34 px stays empty. A line can be grabbed
-  (a grip shows on hover, the cursor becomes ↔) and dragged between its neighbours. Hovering a
+  as in the zone tiles); other values in the series colour; the time grey; a cell narrower than ~34 px stays empty. The line in the strip runs on
+  unbroken into the plot. A line can be grabbed (a small grip shows on hover, the cursor becomes
+  ↔; the line turns 2 px accent in every chart, its strip part too) and dragged between its
+  neighbours. Hovering a
   strip shows a red ball with − over every line (click: remove it) and a blue ball with + under
   the pointer elsewhere (click: add a line there). Every change applies to all those charts at
-  once and the cells recompute. Nothing is saved: a new visit, or another training type, starts
-  from the detection again (or shows nothing).
+  once and the cells recompute. **Saved** at once per activity (`activities.section_lines`, the
+  seconds of the lines and the training type they belong to; kept on reimport): the next visit
+  shows them instead of the detection. Edit › **Section lines: Reset lines** (shown only while
+  there are saved lines) drops them and the detection is back. Another training type drops them
+  too. The route map has an **Intervals** layer
+  (Data badge) built from the same lines.
+- **Climbs** (MANUAL › Climbs), altitude chart only. **Hills**: the same lines, strip and
+  editing as interval sections, at every turning point of the profile; above a climb its gain,
+  class, length and time; descents empty; moved lines are saved like interval lines. **Every other activity**: no lines — each climb with a
+  class (Hill on foot, Cat 4 … HC) is the altitude line drawn thick (3,5 px, 5 px hovered) in
+  the class's colour (Hill green, Cat 4 ochre, Cat 3 orange, Cat 2 red-orange, Cat 1 red, HC
+  purple), with a tag above its highest point: gain and class in that colour, length, time.
+  Hovering a climb shows a circle at both ends; dragging one changes the range, the tag
+  recomputes. Not saved: a new visit shows the detected climbs again.
 - Hovering Max/Min draws a large dot with its value in a small label.
 - **Road surface** (from OpenStreetMap, see SPEC): a hatched strip along the bottom of the
   altitude chart (or the first chart) — paved solid grey, gravel dotted, dirt diagonal

@@ -33,7 +33,8 @@ from datetime import date
 
 from . import analysis, sports, streams
 
-WORKOUT_VERSION = 5  # v2 FTP per sport, v3 all endurance sports, v4 tempo without block, v5 games
+WORKOUT_VERSION = 6  # v2 FTP per sport, v3 all endurance sports, v4 tempo without block, v5 games,
+# v6 race needs heart rate at threshold in every sport (rides: and IF)
 
 KINDS: dict[str, tuple[str, str]] = {
     "easy": ("Easy", "Spokojny"),
@@ -88,7 +89,7 @@ RULES: dict[str, float] = {
     # race
     "race_hr": 0.95,
     "race_share": 0.60,
-    "race_if": 0.90,  # rides: or an intensity factor (NP / FTP) of at least this
+    "race_if": 0.90,  # rides with power: and an intensity factor (NP / FTP) of at least this
     "race_best": 0.95,  # of the person's best intensity for a similar duration
     "race_typical": 1.03,  # and at least this x their typical
     "race_peer_range": 0.25,  # "similar duration": +-25 %
@@ -587,8 +588,10 @@ def classify(a: sqlite3.Row | dict, f: Features, th: analysis.Thresholds, h: His
         ]  # fmt: skip
         rel_best = inten / max(peers + [inten])
         rel_typ = inten / ((h.power if h.power else h.speed) or inten)
-        hot = (z4 or 0) >= RULES["race_share"] or bool(
-            fam == "ride" and intensity_factor and intensity_factor >= RULES["race_if"]
+        # heart rate at threshold is required in every sport; rides with power must also have
+        # an intensity factor of a race (a hard group ride has the power, not the heart rate)
+        hot = (z4 or 0) >= RULES["race_share"] and (
+            not (fam == "ride" and intensity_factor) or intensity_factor >= RULES["race_if"]
         )
         if hot and rel_best >= RULES["race_best"] and rel_typ >= RULES["race_typical"]:
             return Result("race", f"{z4 or 0:.0%} at threshold, {rel_best:.0%} of best")

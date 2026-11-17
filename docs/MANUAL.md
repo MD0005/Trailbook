@@ -119,7 +119,8 @@ Points: 1 point ≈ 1 km/h of tailwind on a bike.
 ## Interval sections (lines on the activity charts)
 
 Shown only while the activity's training type is **Intervals** (detected or chosen in Edit).
-`workout.interval_splits`, computed on each visit (about 15 ms), nothing stored.
+`workout.interval_splits`, computed on each visit (about 15 ms) while the person has not moved
+any line; moved lines are saved per activity and shown instead (Edit › Reset lines drops them).
 
 1. **Signal**: runs use their speed (what the runner sees as pace; running power drops on a
    fast downhill); other sports their interval channel (power → speed → power estimated from
@@ -149,6 +150,82 @@ Shown only while the activity's training type is **Intervals** (detected or chos
 Section values on the strip above each chart: time-weighted averages of the samples between
 two lines (power and cadence without the chart's smoothing). Pace / speed of a section =
 distance / time where there is distance. Zone = Garmin's zone limits from the FIT file.
+
+## Training type Race
+
+`workout.classify`, thresholds in `workout.RULES`; Help › Training types prints the same values.
+Checked after Intervals, before Hills, Long, Tempo. All conditions must hold:
+
+| Condition | Formula | Value |
+|---|---|---|
+| Long enough | moving time | ≥ 10 min |
+| Few stops | elapsed ÷ moving time | ≤ 1,25 |
+| Heart rate at threshold (every sport) | share of moving time with HR ≥ 95 % of the sport's threshold HR | ≥ 60 % |
+| Rides with power: race intensity | IF = NP ÷ FTP | ≥ 0,90 |
+| Close to your best | intensity ÷ your best intensity in activities of the family ±25 % as long, within 365 days | ≥ 95 % |
+| Above your typical | intensity ÷ your median of the family | ≥ 1,03 |
+
+- **Intensity** = the median moving power when the family's history has power, else the median
+  moving speed (per-activity medians in `workout_stats`).
+- **Threshold HR of the sport** = threshold HR (watch, else 90 % of max HR) × the sport's share
+  (cycling 0,95, running 1,0; Help › Training types › Sports).
+- Without heart rate an activity is never a Race. The heart rate condition keeps hard group
+  rides and solo efforts with high power but a moderate heart rate out (they become Tempo or
+  Long); a hot treadmill run has the heart rate of a race but not the intensity.
+
+## Climbs (lines on the altitude chart)
+
+Computed in the page from the altitude line of the charts (`climbSections`, `climbCategory` in
+`preview.js`). Moved Hills lines are saved per activity like interval lines; the thick climbs
+of other activities are not saved.
+
+**Categories** — the cycling scale (Tour de France, Strava): score = length (m) × average grade
+(%), which is simply the gain × 100, so the category is set by the metres climbed; the climb
+must average at least 3 % over at least 500 m. Every sport uses it. On foot (run, walk, hike)
+there is one more class below Cat 4, because Cat 4 is rare on a run.
+
+| Class | Gain | Also needs | Example |
+|---|---|---|---|
+| Hill (on foot only) | ≥ 30 m | ≥ 5 % average, ≥ 200 m | 300 m × 10 %, 600 m × 5 % |
+| Cat 4 (easiest) | ≥ 80 m | ≥ 3 %, ≥ 500 m | 2 km × 4 % |
+| Cat 3 | ≥ 160 m | | 4 km × 4 % |
+| Cat 2 | ≥ 320 m | | 5 km × 6,4 % |
+| Cat 1 | ≥ 640 m | | 8 km × 8 % |
+| HC (hors catégorie, hardest) | ≥ 800 m | | 10 km × 8 % |
+
+**What a climb is** (`chartClimbs`): from a low point to its highest point; wiggles under 3 m
+ignored; a dip on the way stays part of the climb while it is at most a quarter as long as the
+rise just before it and loses at most a third of the height gained so far.
+
+**Every activity except Hills**: no lines. The climbs that have a class are drawn thick on
+the altitude line in the class's colour, with their values in a small tag above the climb's
+highest point. Hovering a climb shows a circle at its start and its end; dragging one moves that
+end along the line and the values (the class too) recompute. Not saved.
+
+**Hills**: lines at the turning points of the profile — a top or a foot counts once the
+altitude has moved away from it by 12 % of the activity's altitude range, at least 15 m (a
+500 m range: 60 m); smaller wiggles stay inside a climb or a descent. No turning point inside
+the activity: the hill repeat bouts the training type detection stored. Every climb gets
+values, with its class when it has one.
+
+**Values of a climb** (in the strip on Hills, in the tag elsewhere): the gain and the class
+(both in the class's colour; without a class the gain in the altitude colour), the length and
+the time (elapsed, pauses included). On Hills descents stay empty, and the lines can be moved,
+added and removed like interval lines.
+
+## Laps (table on the activity page)
+
+Rows of 1, 2, 5 or 10 km. They are built from 1 km laps:
+
+- **Device auto-laps** when every lap but the last is 1 km long (± 25 m): their own values.
+- **Otherwise cut from the streams** (the 1 500 points the page loads): a lap ends at the first
+  point at or past each whole kilometre. Time is the moving time (gaps over 10 s and standing
+  still left out); heart rate, power and cadence are averages weighted by time (gaps count at
+  most 30 s; power zeros count, heart rate and cadence zeros do not); a last piece under 50 m
+  is dropped.
+
+Grouped rows: distance and time are sums, speed is distance ÷ time, the averages are weighted
+by time. Device laps of another kind (manual laps, workout steps) are the choice *Device laps*.
 
 ## Fitness: training load, fitness, fatigue, form
 

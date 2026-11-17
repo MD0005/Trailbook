@@ -413,6 +413,12 @@ MIGRATIONS: list[str] = [
     """
     ALTER TABLE activities ADD COLUMN ftp_override INTEGER;
     """,
+    # v22 — section lines the person moved, added or removed on the activity charts (JSON:
+    # {"kind": "intervals" | "hills", "splits": [seconds from the start]}). NULL = the detected
+    # ones. Kept on reimport; dropped when the training type no longer matches the kind.
+    """
+    ALTER TABLE activities ADD COLUMN section_lines TEXT;
+    """,
 ]
 
 SCHEMA_VERSION = len(MIGRATIONS)

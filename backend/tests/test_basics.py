@@ -62,6 +62,16 @@ def test_product_name():
     assert fitfile.product_name(None) is None
 
 
+def test_virtual_app():
+    assert fitfile.is_virtual_app({"manufacturer": "zwift"}, [])
+    assert fitfile.is_virtual_app({}, [{"device_index": "creator", "manufacturer": "tacx"}])
+    assert not fitfile.is_virtual_app({"manufacturer": "garmin"}, [])
+    # a Tacx trainer as a sensor does not make a watch-recorded ride virtual
+    assert not fitfile.is_virtual_app(
+        {"manufacturer": "garmin"}, [{"device_index": 2, "manufacturer": "tacx"}]
+    )
+
+
 def test_classify():
     assert sports.classify("running", "treadmill") == ("run", "treadmill_run", True)
     assert sports.classify("running", "generic") == ("run", "run", False)

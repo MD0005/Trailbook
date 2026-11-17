@@ -112,6 +112,17 @@ _RECORDS_SQL = """SELECT o.kind, o.key, o.value, oa.start_time_utc, oa.utc_offse
     FROM best_efforts o JOIN activities oa ON oa.id = o.activity_id WHERE {where}"""
 
 
+def _prev_bests(c: sqlite3.Connection, a, where: list[str], params: list) -> dict:
+    """The best of each (kind, key) set before activity `a` under the same filters: what a new
+    record of `a` beat (how much and how long it stood)."""
+    rows = c.execute(
+        f"""WITH r AS ({_RECORDS_SQL.format(where=" AND ".join([*where, "oa.start_time_utc < ?"]))})
+            SELECT kind, key, value, start_time_utc, utc_offset_s FROM r WHERE rk = 1""",
+        [*params, a["start_time_utc"]],
+    ).fetchall()
+    return {(r["kind"], r["key"]): r for r in rows}
+
+
 def activity_filters(q, alias: str = "a", person: bool = True) -> tuple[list[str], list]:
     """The filters every tab shares (SPEC §10, Filters), as SQL conditions on `activities`:
     person (comma list), from / to (local days, inclusive) and types (comma list of type
@@ -586,6 +597,19 @@ def create_app(db_path: str | Path) -> Starlette:
         if q.get("q"):
             where.append("name LIKE ?")
             params.append(f"%{q['q']}%")
+        # Training type counts under the other filters (the Training type badge lists them).
+        base = f"WHERE {' AND '.join(where)}" if where else ""
+        base_params = list(params)
+        wk = "COALESCE(workout_override, workout)"
+        # workouts: comma list of training type keys; "none" = no training type
+        chosen = [v for v in (q.get("workouts") or "").split(",") if v]
+        if chosen:
+            keys = [v for v in chosen if v != "none"]
+            parts = [f"{wk} IN ({','.join('?' for _ in keys)})"] if keys else []
+            if "none" in chosen:
+                parts.append(f"{wk} IS NULL")
+            where.append("(" + " OR ".join(parts) + ")")
+            params = [*params, *keys]
         clause = f"WHERE {' AND '.join(where)}" if where else ""
         limit = _int(request, "limit", 50, 1, 1000)
         offset = _int(request, "offset", 0, 0, 10**9)
@@ -620,11 +644,18 @@ def create_app(db_path: str | Path) -> Starlette:
             if q.get("chart") == "pace":
                 for item in items:
                     item["speed_series"] = _speed_series(c, item["id"])
+            workout_counts = {
+                (r[0] or "none"): r[1]
+                for r in c.execute(
+                    f"SELECT {wk}, COUNT(*) FROM activities {base} GROUP BY 1", base_params
+                )
+            }
             return JSONResponse(
                 {
                     "total": totals["count"],
                     "totals": dict(totals),
                     "items": items,
+                    "workout_counts": workout_counts,
                 }
             )
 
@@ -661,6 +692,13 @@ def create_app(db_path: str | Path) -> Starlette:
                     (a["person_id"], a["category"], aid),
                 )
             ]
+            # the all-time best before this activity (the tooltip of a new record)
+            prev = _prev_bests(
+                c, row, ["oa.person_id = ?", "oa.category IS ?"], [a["person_id"], a["category"]]
+            )
+            for b in a["best_efforts"]:
+                p = prev.get((b["kind"], b["key"]))
+                b["prev"] = dict(p) if p else None
             # Own photos of devices: data/device-images/<product>.(png|jpg|webp)
             if a.get("devices"):
                 devs = json.loads(a["devices"])
@@ -726,7 +764,12 @@ def create_app(db_path: str | Path) -> Starlette:
                     FROM r WHERE rk = 1""",
                 params,
             ).fetchall()
-        return JSONResponse({"range": rng, "records": [dict(r) for r in rows]})
+            prev = _prev_bests(c, a, where, params)  # the range's best before this activity
+            records = []
+            for r in rows:
+                p = prev.get((r["kind"], r["key"]))
+                records.append({**dict(r), "prev": dict(p) if p else None})
+        return JSONResponse({"range": rng, "records": records})
 
     # Weather during the activity (Open-Meteo, cached per activity).
     async def activity_weather(request: Request):
@@ -780,6 +823,8 @@ def create_app(db_path: str | Path) -> Starlette:
             raise HTTPException(404, "no image")
         return FileResponse(path, headers={"Cache-Control": "max-age=86400"})
 
+    SECTION_KINDS = ("intervals", "hills")
+
     async def activity_update(request: Request):
         aid = request.path_params["id"]
         body = await request.json()
@@ -806,6 +851,33 @@ def create_app(db_path: str | Path) -> Starlette:
                 )
                 analysis.analyse_one(c, aid)  # load, intensity
                 workout.detect_one(c, aid)
+            if "section_lines" in body:  # lines the person moved; null = back to the detected
+                lines = body["section_lines"]
+                ok = lines is None or (
+                    isinstance(lines, dict)
+                    and lines.get("kind") in SECTION_KINDS
+                    and isinstance(lines.get("splits"), list)
+                    and len(lines["splits"]) <= 1000
+                    and all(isinstance(v, int | float) and v >= 0 for v in lines["splits"])
+                )
+                if not ok:
+                    raise HTTPException(400, "invalid section lines")
+                saved = (
+                    {"kind": lines["kind"], "splits": sorted(round(v) for v in lines["splits"])}
+                    if lines
+                    else None
+                )
+                c.execute(
+                    "UPDATE activities SET section_lines = ? WHERE id = ?",
+                    (json.dumps(saved) if saved else None, aid),
+                )
+            # saved lines belong to one training type: another type (chosen or detected after a
+            # change of sport or FTP) drops them
+            row = _activity_or_404(c, aid)
+            if row["section_lines"]:
+                kind = json.loads(row["section_lines"]).get("kind")
+                if kind != (row["workout_override"] or row["workout"]):
+                    c.execute("UPDATE activities SET section_lines = NULL WHERE id = ?", (aid,))
             if "name" in body:
                 name = (body["name"] or "").strip()
                 if name:
@@ -1305,6 +1377,13 @@ def create_app(db_path: str | Path) -> Starlette:
             year_best = efforts(
                 sid, "AND substr(e.start_time_utc, 1, 4) = ?", "e.elapsed_s", 1, year
             )
+            # the bests before this effort: what a new record beat (tooltip of the laurel)
+            before = "AND e.start_time_utc < ?"
+            all_prev = efforts(sid, before, "e.elapsed_s", 1, eff["start_time_utc"])
+            year_prev = efforts(
+                sid, f"{before} AND substr(e.start_time_utc, 1, 4) = ?", "e.elapsed_s", 1,
+                eff["start_time_utc"], year,
+            )  # fmt: skip
             out.append(
                 {
                     "segment": dict(seg) if seg else {"id": sid},
@@ -1322,6 +1401,8 @@ def create_app(db_path: str | Path) -> Starlette:
                     "all_best": best[0]["elapsed_s"] if best else None,
                     "year_best_effort": year_best[0] if year_best else None,
                     "all_best_effort": best[0] if best else None,
+                    "year_prev": year_prev[0] if year_prev else None,
+                    "all_prev": all_prev[0] if all_prev else None,
                 }
             )
         return out

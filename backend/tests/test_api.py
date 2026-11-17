@@ -138,3 +138,31 @@ def test_ui_settings_are_kept_per_person(setup):
     assert client.get("/api/ui-settings?person=alice").json() == {"map": value}
     assert client.get("/api/ui-settings").json() == {"map": {"x": 1}}
     assert client.put("/api/ui-settings/bad key?person=alice", json=1).status_code == 400
+
+
+def test_activity_list_workout_filter_and_neighbours(setup):
+    client, _, db_path = setup
+    conn = db.connect(db_path)
+    rows = [  # (id, start, workout, override)
+        (1, "2026-01-01T08:00:00Z", "tempo", None),
+        (2, "2026-01-02T08:00:00Z", "recovery", "tempo"),
+        (3, "2026-01-03T08:00:00Z", None, None),
+    ]
+    for aid, start, wk, ov in rows:
+        conn.execute(
+            """INSERT INTO activities (id, person_id, fit_uid, start_time_utc, category,
+                                       activity_type, workout, workout_override, importer_version)
+               VALUES (?, 'alice', ?, ?, 'run', 'run', ?, ?, 1)""",
+            (aid, f"uid{aid}", start, wk, ov),
+        )
+    conn.commit()
+    conn.close()
+    r = client.get("/api/activities?person=alice&workouts=tempo").json()
+    assert sorted(a["id"] for a in r["items"]) == [1, 2]  # the override counts
+    assert r["workout_counts"] == {"tempo": 2, "none": 1}  # under the other filters only
+    r = client.get("/api/activities?person=alice&workouts=none").json()
+    assert [a["id"] for a in r["items"]] == [3]
+    a = client.get("/api/activities/2").json()
+    assert (a["prev_id"], a["next_id"]) == (1, 3)
+    a = client.get("/api/activities/3").json()
+    assert (a["prev_id"], a["next_id"]) == (2, None)

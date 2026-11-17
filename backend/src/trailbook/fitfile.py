@@ -329,6 +329,9 @@ def parse_activity(data: bytes) -> ParsedActivity:
         sport, sub_sport = None, None
     sport = str(sport) if sport is not None else None
     sub_sport = str(sub_sport) if sub_sport is not None else None
+    if sub_sport in (None, "generic") and sport in ("cycling", "running"):
+        if is_virtual_app(file_id, messages.get("device_info_mesgs") or []):
+            sub_sport = "virtual_activity"  # files edited by tools often lose the sub-sport
     category, activity_type, indoor = classify(sport, sub_sport)
     on_foot = category in ON_FOOT_GROUPS
 
@@ -360,6 +363,8 @@ def parse_activity(data: bytes) -> ParsedActivity:
         **{k: [] for k in EXTRA_CHANNELS},
     }
     track: list[tuple[float, float]] = []
+    # Recordings joined by file tools restart the distance at 0: keep it running on.
+    dist_offset, last_dist = 0.0, None
     for r in records:
         ts = r.get("timestamp")
         if ts is None:
@@ -369,7 +374,13 @@ def parse_activity(data: bytes) -> ParsedActivity:
         if lat is not None and lon is not None and (abs(lat) > 90 or (lat == 0 and lon == 0)):
             lat = lon = None
         channels["time"].append((ts - start_time).total_seconds())
-        channels["distance"].append(r.get("distance"))
+        dist = r.get("distance")
+        if dist is not None:
+            if last_dist is not None and dist < last_dist - 100:
+                dist_offset += last_dist
+            last_dist = dist
+            dist += dist_offset
+        channels["distance"].append(dist)
         channels["lat"].append(lat)
         channels["lon"].append(lon)
         channels["altitude"].append(_first(r, "enhanced_altitude", "altitude"))
@@ -580,6 +591,23 @@ def device_name(maker: str | None, product) -> str | None:
         tail = re.sub(r"(\d)([a-z]+)$", lambda x: x.group(1) + x.group(2).upper(), tail)
         return f"{_NAME_PREFIX[head]} {tail}".strip()
     return " ".join(w.capitalize() for w in product.split("_"))
+
+
+# Makers of virtual training apps (FIT manufacturer of the file creator): a ride or run they
+# recorded is virtual even when the file has no sub-sport.
+VIRTUAL_APP_MAKERS = frozenset(
+    {"zwift", "tacx", "bkool", "trainerroad", "the_sufferfest", "virtualtraining", "rouvy",
+     "mywhoosh", "fulgaz", "kinomap", "onelap", "rgt_cycling"}
+)  # fmt: skip
+
+
+def is_virtual_app(file_id: dict, device_infos: list[dict]) -> bool:
+    """True when the file was recorded by a virtual training app (Zwift, Tacx app, Rouvy…)."""
+    makers = {str(file_id.get("manufacturer") or "")}
+    for d in device_infos:
+        if str(d.get("device_index")) == "creator" or d.get("device_index") == 0:
+            makers.add(str(d.get("manufacturer") or ""))
+    return bool(makers & VIRTUAL_APP_MAKERS)
 
 
 def devices(messages: dict) -> list[dict]:

@@ -47,9 +47,9 @@ const store = {
 const svg = (body, extra = "") => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ${extra}>${body}</svg>`;
 const ICON = {
   pencil: svg(`<path d="M4 20h4L19 9a2.8 2.8 0 0 0-4-4L4 16Z"/><path d="m13.5 6.5 4 4"/>`),
-  up: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 17 12 6l8 11Z" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>`,
-  prev: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17 4 6 12l11 8Z" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>`,
-  next: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4l11 8-11 8Z" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>`,
+  back: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17 4 6 12l11 8Z" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>`,
+  chevLeft: svg(`<path d="M15 6l-6 6 6 6"/>`),
+  chevRight: svg(`<path d="M9 6l6 6-6 6"/>`),
   trash: svg(`<path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/>`),
   sun: svg(`<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>`),
   moon: svg(`<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/>`),
@@ -328,7 +328,7 @@ function tableHtml(columns, rows, params, total) {
     : `<tr><td colspan="${columns.length}" class="hint">Nothing matches the filters.</td></tr>`;
   return listBar(columns, params, rows.length, total) + `
     <div class="scroll"><table class="data" data-spread>
-      <thead><tr>${head}</tr><tr class="filters-row">${filters}</tr></thead>
+      <thead><tr>${head}</tr>${columns.some((c) => c.filter) ? `<tr class="filters-row">${filters}</tr>` : ""}</thead>
       <tbody data-rows>${body}</tbody></table></div>
     ${rows.length < total ? `<div class="sentinel" data-sentinel><span class="hint">Loading…</span></div>` : ""}`;
 }
@@ -626,7 +626,6 @@ async function renderActivities(params) {
   const mode = VIEWS.some(([k]) => k === TAB.view) ? TAB.view : "large";
   const isAll = CURRENT === "all";
   const q = { limit: PAGE_SIZE, sort: params.sort, dir: params.dir, ...filterQuery(params) };
-  if (params.name) q.q = params.name;
   if (!isAll) q.person = CURRENT;
   else if (params.person) q.person = params.person;
   const tileContent = store.get("tile-content") === "pace" ? "pace" : "route";
@@ -642,7 +641,7 @@ async function renderActivities(params) {
       render: (a) => typeName(a.activity_type) + (a.indoor ? ` <span class="hint">indoor</span>` : "") },
     { key: "workout", label: "Training type", icon: "interval_time", sort: true,
       render: (a) => (workoutOf(a) ? esc(workoutLabel(workoutOf(a))) : `<span class="hint">–</span>`) },
-    { key: "name", label: "Name", icon: "name", sort: true, filter: { type: "text", placeholder: "name…" }, render: (a) => `<a href="#/activity/${a.id}">${esc(a.name || typeLabel(a.activity_type))}</a>` + (a.segment_count ? ` ${segBadge(a)}` : "") },
+    { key: "name", label: "Name", icon: "name", sort: true, render: (a) => `<a href="#/activity/${a.id}">${esc(a.name || typeLabel(a.activity_type))}</a>` + (a.segment_count ? ` ${segBadge(a)}` : "") },
     { key: "distance", label: "Distance", icon: "distance_total", sort: true, num: true, render: (a) => km(a.distance_m) },
     { key: "moving", label: "Moving time", icon: "moving_time", sort: true, num: true, render: (a) => dur(a.moving_s) },
     { key: "pace", label: "Pace", icon: "avg_pace", sort: true, num: true, render: (a) => (a.distance_m ? pace(a.avg_speed) : "–") },
@@ -683,7 +682,7 @@ async function renderActivities(params) {
   const showSummary = TAB.kpis ?? false;
   view.innerHTML = `
     ${pageHead("Activities", `
-      ${timeBadge(params)}${typeBadge(params)}
+      ${timeBadge(params)}${typeBadge(params)}${workoutBadge(params, data.workout_counts)}
       ${badgeHtml("options", "Options", "", { panel: `<div class="opt-panel">${row("Tiles", selectCtl("tile-content", [["route", "Route map"], ["pace", "Pace chart"]], tileContent))}
         <div class="hint" style="margin-top:6px">More chart types (intervals) will follow.</div></div>` })}
       <button class="badge ${showSummary ? "on" : ""}" data-kpis>Summary</button>`,
@@ -750,11 +749,15 @@ const chartDefault = (key, a) => ["hr", "speed", "altitude"].includes(key) || (a
 
 async function renderActivity(id) {
   const a = await api("activities/" + id + (CURRENT === "all" ? "?neighbours=all" : ""));
-  // Interval workouts (detected or chosen): section lines on the charts, not stored.
+  // Section lines the person moved (Hills, Intervals): kept per activity for its training type;
+  // without them the detected ones (intervals from the server, hills from the altitude line).
+  let savedLines = null;
+  try { savedLines = a.section_lines ? JSON.parse(a.section_lines) : null; } catch { savedLines = null; }
+  if (savedLines?.kind !== workoutOf(a)) savedLines = null;
   const [s, track, iv] = await Promise.all([
     api(`activities/${id}/streams?max_points=1500`),
     a.has_gps ? api(`activities/${id}/track`).catch(() => null) : null,
-    workoutOf(a) === "intervals" ? api(`activities/${id}/intervals`).catch(() => null) : null,
+    workoutOf(a) === "intervals" ? (savedLines ? { splits: savedLines.splits } : api(`activities/${id}/intervals`).catch(() => null)) : null,
   ]);
   const st = s.streams;
   const onFoot = ["run", "walk", "hike"].includes(a.category);
@@ -887,6 +890,61 @@ async function renderActivity(id) {
       ["Min", `${num(Math.min(...v))} %`, "min", "Lowest stamina"]];
     available.splice(pot, 1);
   }
+  // Climbs on the altitude chart (docs/MANUAL.md › Climbs). Hills: lines at the turning points of
+  // the profile (a climb's foot or top; wiggles under 12 % of the altitude range, at least 15 m,
+  // ignored; without any, the hill repeats the detector stored), values over every climb.
+  // Other activities: no lines; the climbs that have a category (climbCategory) are accented.
+  // Above a climb: the gain and the category (in the category's colour), length and time.
+  function climbSections(hills) {
+    const alt = available.find((q) => q.key === "altitude"), t = chartX?.time, d = chartX?.distance;
+    if (!alt || !t) return null;
+    const v = alt.raw;
+    const catOf = (i0, i1, up) => (d ? climbCategory(up, (d[i1] - d[i0]) * 1000, onFoot) : null);
+    let spans;
+    if (hills) {
+      const vals = v.filter((x) => x != null);
+      const th = Math.max(15, (Math.max(...vals) - Math.min(...vals)) * 0.12);
+      spans = [chartPivots(v, th)];
+      if (spans[0].length <= 2) {
+        let det = null;
+        try { det = a.workout_detail ? JSON.parse(a.workout_detail) : null; } catch { det = null; }
+        const idx = (sec) => t.findIndex((x) => x >= sec);
+        spans = (det?.bouts || []).map(([s0, s1]) => [idx(s0), idx(s1)]).filter(([i0, i1]) => i0 >= 0 && i1 > i0);
+      }
+    } else {
+      // other activities: no lines - the climbs with a class are drawn thick on the altitude
+      // line with their values above (charts.js › s.climbs); the range can be dragged
+      if (!d) return null;
+      const items = chartClimbs(v, d).filter((c) => catOf(c.i0, c.i1, c.gain)).map((c) => ({ i0: c.i0, i1: c.i1 }));
+      alt.climbs = items.length ? { items, label: (i0, i1) => {
+        const up = v[i1] != null && v[i0] != null ? v[i1] - v[i0] : null;
+        const cat = up > 0 ? catOf(i0, i1, up) : null;
+        return { color: cat?.color || null, lines: up == null ? [] : [
+          [`${up >= 0 ? "+" : "−"}${num(Math.abs(up))} m`, cat?.color || alt.color],
+          ...(cat ? [[cat.name, cat.color]] : []),
+          [km((d[i1] - d[i0]) * 1000), null],
+          [clock(t[i1] - t[i0]), null],
+        ] };
+      } } : null;
+      return null;
+    }
+    if (hills && savedLines) spans = [savedLines.splits.map((sec) => t.findIndex((x) => x >= sec))];
+    const at = [...new Set(spans.flat())].filter((i) => i > 0 && i < t.length - 1).sort((p, q) => p - q);
+    const label = (key, i0, i1) => {
+      if (key !== "altitude") return [];
+      const up = v[i1] != null && v[i0] != null ? v[i1] - v[i0] : null;
+      if (up == null || up <= 0) return []; // climbs only: descents and flats stay empty
+      const cat = catOf(i0, i1, up);
+      if (!hills && !cat) return [];
+      return [
+        [`+${num(up)} m`, cat?.color || alt.color],
+        ...(cat ? [[cat.name, cat.color]] : []),
+        ...(d ? [[km((d[i1] - d[i0]) * 1000), null]] : []),
+        [clock(t[i1] - t[i0]), null],
+      ];
+    };
+    return { kind: hills ? "hills" : "climbs", keys: ["altitude"], at, label, lines: 4 };
+  }
   // Interval sections: lines on the speed, heart rate, power and cadence charts; above each chart
   // the section's average (heart rate and power with the zone, speed with the section's time).
   const sections = iv && chartX ? (() => {
@@ -933,8 +991,9 @@ async function renderActivity(id) {
         default: return [];
       }
     };
-    return { keys: ["speed", "hr", "power", "cadence"], at, label };
+    return { kind: "intervals", keys: ["speed", "hr", "power", "cadence"], at, label };
   })() : null;
+  const climbs = chartX ? climbSections(workoutOf(a) === "hills") : null;
   const chartChoice = () => ({ ...(UI.data["activity-charts"] || {}) });
   const isShown = (key) => chartChoice()[key] ?? chartDefault(key, a);
   const visibleSeries = () => available.filter((x) => isShown(x.key));
@@ -961,9 +1020,12 @@ async function renderActivity(id) {
     // Garmin's wording of the 0–5 scale, the same for aerobic and anaerobic.
     const teWord = (v) => TE_SCALE.find(([lo]) => v >= lo)?.[1] ?? "no benefit";
     const teLine = (name, v) => `<span>${name} <b>${v != null ? num(v, 1) : "–"}</b>${v ? ` <span class="effect-word">${teWord(v)}</span>` : ""}</span>`;
-    // tooltip: only what the card shows - the primary benefit, and the two scores behind it
-    const effectTip = [known ? `${known[1][0].toUpperCase()}${known[1].slice(1)}: ${known[2]}.` : "Garmin's training effect.",
-      `Aerobic ${te != null ? num(te, 1) : "–"} (${teWord(te ?? 0)}), anaerobic ${an != null ? num(an, 1) : "–"} (${teWord(an ?? 0)}) on Garmin's 0–5 scale.`].join(" ");
+    // tooltip (HTML, like the weather help): the primary benefit in bold, then each score with
+    // its name in bold, a blank line between them, the source as a light note
+    const effectTip = [known ? `<b>${esc(known[1][0].toUpperCase() + known[1].slice(1))}</b> ${esc(known[2])}` : "<b>Training effect</b>",
+      `<b>Aerobic</b> ${te != null ? num(te, 1) : "–"} · ${teWord(te ?? 0)}`,
+      `<b>Anaerobic</b> ${an != null ? num(an, 1) : "–"} · ${teWord(an ?? 0)}`,
+      `<span class="tip-note">Garmin's training effect, 0–5 scale (Manual › Training effect).</span>`].join("\n\n");
     // Time: moving time first (what pace and speed are based on), the elapsed time under it.
     const paused = a.elapsed_s && a.moving_s ? a.elapsed_s - a.moving_s : 0;
     const timeCard = stat("Time", a.moving_s || a.elapsed_s, `<span class="time-lines"><span data-tip="Moving time: only while moving - pauses and standing still left out">${dur(a.moving_s || a.elapsed_s)}</span>
@@ -974,7 +1036,7 @@ async function renderActivity(id) {
     const colA = [stat("Distance", a.distance_m, km(a.distance_m), "distance_total"), timeCard, calories];
     const kind = workoutOf(a);
     // Effect: Garmin's primary benefit (from Garmin Connect) and the two scores in one short line
-    const effect = te != null || an != null ? stat("Effect", "x", `<span class="effect-lines" data-tip="${esc(effectTip)}">
+    const effect = te != null || an != null ? stat("Effect", "x", `<span class="effect-lines" data-tip-html="${esc(effectTip)}">
         <b>${label ? esc(label[0].toUpperCase() + label.slice(1)) : teWord(Math.max(te ?? 0, an ?? 0))}</b>
         ${bb == null ? `<span class="effect-full">${teLine("Aerobic", te)}${teLine("Anaerobic", an)}</span>` : ""}</span>`, "aerobic_effect") : "";
     // (without a Body Battery card the Effect card is taller: the two scores fit under the benefit)
@@ -1006,13 +1068,18 @@ async function renderActivity(id) {
         a.workout_override || "auto")) : ""}
       ${a.channels.includes("power") ? row(`FTP<small class="opt-hint">${a.ftp_override ? "For this activity only. Empty: automatic." : "Empty: automatic."}</small>`,
         `<input name="ftp" type="number" min="30" max="2000" step="1" value="${a.ftp_override ?? ""}" placeholder="${a.ftp_source && a.ftp_source !== "activity" ? `${num(a.ftp_used)} W` : "None"}"> W`) : ""}
+      ${["intervals", "hills"].includes(workoutOf(a)) ? `<div data-reset-lines ${savedLines ? "" : "hidden"}>${row(`Section lines<small class="opt-hint">Moved by you. Reset brings back the detected ones.</small>`,
+        `<button id="reset-lines" class="badge">Reset lines</button>`)}</div>` : ""}
       ${row("", `<button id="del" class="badge danger">Delete activity</button>`)}
     </div>`;
   const hasData = (arr) => Array.isArray(arr) && arr.some((v) => v != null && v > 0);
   const ROUTE_MODES = [["plain", "Single colour", true], ["speed", "Speed", hasData(st.speed)], ["hr", "Heart rate", hasData(st.hr)],
-    ["power", "Power", hasData(st.power)], ["cadence", "Cadence", hasData(st.cadence)], ["altitude", "Altitude", hasVals(st.altitude)], ["surface", "Surface", Boolean(a.has_gps)]].filter((m) => m[2]);
+    ["power", "Power", hasData(st.power)], ["cadence", "Cadence", hasData(st.cadence)], ["altitude", "Altitude", hasVals(st.altitude)], ["surface", "Surface", Boolean(a.has_gps)],
+    ["intervals", "Intervals", sections?.kind === "intervals"]].filter((m) => m[2]);
   const mode = "plain", kmOn = true; // fixed defaults on every visit
-  const lapsN = routeKmStep(a);       // laps grouped by 1 (runs) or 5 (rides, long activities)
+  const laps = lapSource(a, chartX, st); // 1 km laps: the device auto-laps, else from the streams
+  // grouped by 1 km (runs) or 5 km (rides, long activities); device laps without a distance
+  const lapsN = laps.options.includes(routeKmStep(a)) ? routeKmStep(a) : laps.options[0];
   const X_KINDS = [chartX?.distance && ["distance", "Distance"], ["time", "Elapsed time"], chartX?.moving && ["moving", "Moving time"], ["percent", "Percent"]].filter(Boolean);
   const xKind = X_KINDS[0][0];
   // Averaging of the power and cadence lines (one choice for both): remembered per person, default 10 s.
@@ -1033,22 +1100,23 @@ async function renderActivity(id) {
   const chartsPanel = `<div class="opt-panel"><div class="checks checks-col">${available.map((x) =>
     `<label class="check"><input type="checkbox" data-chart-key="${x.key}" ${isShown(x.key) ? "checked" : ""}> ${metricIcon(x.icon, 16)} ${esc(x.label)}</label>`).join("")}</div></div>`;
   view.innerHTML = `
-    ${backNavRow(`#/activities`, "Activities", a.prev_id && `#/activity/${a.prev_id}`, a.next_id && `#/activity/${a.next_id}`)}
+    ${backLink(`#/activities`, "Activities")}
     <div class="page-head"><h2 class="tb-activity-name">${typeIcon(a.activity_type, 24)}<span>${esc(a.name || typeLabel(a.activity_type))}</span><span class="head-date">${localTime(a)}${a.connect?.locationName ? ` · ${esc(a.connect.locationName)}` : ""}</span></h2>
       <div class="badges">${available.length && chartX ? `${badgeHtml("charts", "Charts", `${visibleSeries().length} of ${available.length}`, { panel: chartsPanel })}
           ${badgeHtml("chart-options", "Options", "", { panel: optionsPanel })}` : ""}
-        ${badgeHtml("edit", "Edit", "", { panel: editPanel })}${track ? `<div class="badge-wrap"><button class="badge" data-go="#/segments/new/activity?id=${id}&from=activity">Create segment</button></div>` : ""}</div><span class="spacer"></span></div>
+        ${badgeHtml("edit", "Edit", "", { panel: editPanel })}${track ? `<div class="badge-wrap"><button class="badge" data-go="#/segments/new/activity?id=${id}&from=activity">Create segment</button></div>` : ""}</div><span class="spacer"></span>
+      ${prevNextHtml(a.prev_id && `#/activity/${a.prev_id}`, a.next_id && `#/activity/${a.next_id}`)}</div>
     <div class="act-top" data-top></div>
     ${track ? `<div class="card route-card"><div class="card-head"><h3 class="tile-title">${metricIcon("route", 18)}<span>Route</span></h3><span class="spacer"></span>
         <div class="badges">${badgeHtml("route-color", "Data", routeModeLabel(mode), { panel: `<div class="opt-panel">${pickList("route-color", ROUTE_MODES.map(([k, l]) => [k, l]), mode, () => "", routeModeIcon)}</div>`, right: true })}
         ${badgeHtml("route-km", "Markers", kmOn ? `Every ${routeKmStep(a)} km` : "None", { panel: `<div class="opt-panel">${pickList("route-km", [["off", "None"], ["on", `Every ${routeKmStep(a)} km`]], kmOn ? "on" : "off")}</div>`, right: true })}</div></div>
       <div class="route-wrap"><div id="route-map" class="map"></div>
-        <div class="route-overlays"><div class="route-weather" data-weather hidden></div><div class="route-legend" id="route-legend" hidden></div></div></div></div>` : ""}
+        <div class="route-overlays">${a.activity_type?.startsWith("virtual_") ? `<div class="route-virtual" data-tip="Virtual: ridden or run on a trainer or treadmill in an app; the route is the app's.">Virtual</div>` : ""}<div class="route-weather" data-weather hidden></div><div class="route-legend" id="route-legend" hidden></div></div></div></div>` : ""}
     ${available.length && chartX ? `<div class="charts" data-charts></div>` : ""}
     ${(a.segments || []).map((s, k) => segmentCardHtml(a, s, k)).join("")}
-    ${a.laps.length ? `<div class="card"><div class="card-head"><h3>Laps</h3><span class="spacer"></span>
-        <div class="badges">${badgeHtml("laps-n", "Group", lapsLabel(lapsN), { panel: `<div class="opt-panel">${pickList("laps-n", [1, 2, 5, 10].map((n) => [n, lapsLabel(n)]), lapsN)}</div>`, right: true })}</div></div>
-      <div data-laps>${lapsTable(a, lapsN)}</div></div>` : ""}
+    ${laps.options.length ? `<div class="card"><div class="card-head"><h3>Laps</h3><span class="spacer"></span>
+        <div class="badges">${badgeHtml("laps-n", "Group", lapsLabel(lapsN), { panel: `<div class="opt-panel">${pickList("laps-n", laps.options.map((n) => [n, lapsLabel(n)]), lapsN)}</div>`, right: true })}</div></div>
+      <div data-laps>${lapsTable(a, laps, lapsN)}</div></div>` : ""}
     <div class="card"><h3>Source files</h3>${a.device ? `<div class="hint">Device: ${esc(a.device)}</div>` : ""}
       ${a.files.map((f) => `<div>${esc(f.rel_path)}${f.zip_member ? " › " + esc(f.zip_member) : ""} ${state(f.status)}${f.imported_at ? ` <span class="hint">imported ${browserTime(f.imported_at)}</span>` : ""}</div>`).join("") || hint("None")}</div>`;
   bindBadges(view);
@@ -1065,7 +1133,7 @@ async function renderActivity(id) {
   const lapsBox = view.querySelector("[data-laps]");
   const spreadLaps = () => lapsBox?.querySelectorAll("table[data-spread]").forEach(spreadColumns);
   spreadLaps();
-  pickBadge("laps-n", (v) => lapsLabel(Number(v)), (v) => { lapsBox.innerHTML = lapsTable(a, Number(v)); spreadLaps(); });
+  pickBadge("laps-n", (v) => lapsLabel(v), (v) => { lapsBox.innerHTML = lapsTable(a, laps, v === "device" ? v : Number(v)); spreadLaps(); });
   panel.querySelector("[name=type]").onchange = async (e) => {
     await api("activities/" + id, { method: "PATCH", body: JSON.stringify({ type: e.target.value }) });
     renderActivity(id);
@@ -1093,6 +1161,11 @@ async function renderActivity(id) {
     renderActivity(id);
   };
   nameInput.onkeydown = (e) => { if (e.key === "Enter") nameInput.blur(); };
+  const resetLines = panel.querySelector("#reset-lines");
+  if (resetLines) resetLines.onclick = async () => {
+    await api("activities/" + id, { method: "PATCH", body: JSON.stringify({ section_lines: null }) });
+    renderActivity(id);
+  };
   panel.querySelector("#del").onclick = async () => {
     if (!confirm("Delete this activity from the database?\n\nThe FIT file is not touched. It will not be imported again unless you remove it from the import history.")) return;
     await api("activities/" + id, { method: "DELETE" });
@@ -1116,9 +1189,13 @@ async function renderActivity(id) {
       const r = records ? records[`${e.kind}:${e.key}`] : { value: e.record, start_time_utc: e.record_time, utc_offset_s: e.record_offset_s };
       const y = year?.[`${e.kind}:${e.key}`];
       const rec = r?.start_time_utc ? r : null;
+      // the best before this activity: what a new record beat, and how long it stood
+      const before = (p) => (p ? { value: p.value, date: localTime(p).slice(0, 10),
+        days: Math.round((Date.parse(a.start_time_utc) - Date.parse(p.start_time_utc)) / 86400000) } : null);
       return { ...e, record: r?.value ?? null, recordDate: rec ? localTime(rec).slice(0, 10) : "",
         recordId: records ? r?.activity_id : e.record_activity, year: y?.value ?? null,
-        yearDate: y?.start_time_utc ? localTime(y).slice(0, 10) : "", yearId: y?.activity_id };
+        yearDate: y?.start_time_utc ? localTime(y).slice(0, 10) : "", yearId: y?.activity_id,
+        recordPrev: before(records ? r?.prev : e.prev), yearPrev: before(y?.prev) };
     });
     const top = view.querySelector("[data-top]");
     const tiles = tilesHtml();
@@ -1178,9 +1255,19 @@ async function renderActivity(id) {
     if (yr) yearRecords = byKey(yr);
     renderTop(cr ? byKey(cr) : null, yearRecords);
   };
+  // Moved, added or removed lines are saved at once (seconds from the start); Edit › Reset lines
+  // drops them and the detection is back.
+  const saveLines = (kind, at) => {
+    const t = chartX.time;
+    api("activities/" + id, { method: "PATCH", body: JSON.stringify({ section_lines: { kind, splits: at.map((i) => Math.round(t[i])) } }) })
+      .then(() => { const r = view.querySelector("[data-reset-lines]"); if (r) r.hidden = false; }).catch(() => {});
+  };
   // Charts (docs/CHARTS.md): synced with each other and with the route map.
   let charts = null;
-  const route = track ? { a, st, mode, km: kmOn } : null;
+  const route = track ? { a, st, mode, km: kmOn, sections } : null;
+  // lines moved, added or removed: the Intervals layer of the map follows
+  if (sections) sections.onChange = (at) => { if (route?.mode === "intervals") drawActivityRoute(route); saveLines("intervals", at); };
+  if (climbs) climbs.onChange = (at) => saveLines("hills", at);
   const chartsEl = view.querySelector("[data-charts]");
   let surfaceData = null;
   // all stretches of one surface kind highlighted on the charts and the map (null clears)
@@ -1221,7 +1308,7 @@ async function renderActivity(id) {
   if (chartsEl) {
     applyPower();
     charts = chartGroup(chartsEl, {
-      x: chartX, kind: xKind, series: visibleSeries(), sections,
+      x: chartX, kind: xKind, series: visibleSeries(), sections: [sections, climbs].filter(Boolean),
       onHover: (i) => route && routeHover(route, i),
       // Dragged into a new order: kept per person, like the chart list.
       onOrder: (keys) => {
@@ -1267,7 +1354,8 @@ async function renderActivity(id) {
   }
   loadCompare();
   // Weather during the activity (Open-Meteo, cached after the first time): a widget on the map.
-  if (a.has_gps) {
+  // Not indoors or virtual: the weather outside is not theirs, a virtual route is a game world.
+  if (a.has_gps && !a.indoor) {
     api(`activities/${id}/weather`).then((w) => {
       const box = view.querySelector("[data-weather]");
       if (box && w && w.temp != null) { box.innerHTML = weatherHtml(w); box.hidden = false; }
@@ -1455,6 +1543,14 @@ const EFFORT_NAMES = { 400: "400 m", 1000: "1 km", 1609.344: "1 mile", 5000: "5 
   21097.5: "Half marathon", 40000: "40 km", 42195: "Marathon", 50000: "50 km", 100000: "100 km" };
 const COMPARE_SHORT = { all: ["ATH", "All-time best"], year: ["Year", "Best this year"], "365d": ["12 mo", "Best in the last 12 months"],
   "90d": ["3 mo", "Best in the last 3 months"], "30d": ["30 d", "Best in the last 30 days"] };
+// Tooltip of a record laurel: by how much the previous best ({value, date, days}) is beaten and
+// how long it stood. Times in seconds (lower is better), or watts with `isPower`.
+function recordTip(tip, value, p, isPower) {
+  if (!p) return `${tip}: this activity, the first result`;
+  const d = p.value - value;
+  const gain = isPower ? `${watts(-d)} more` : `${d < 60 ? `${num(d, d < 10 ? 1 : 0)} s` : clock(d)} faster`;
+  return `${tip}: this activity. ${gain} than ${isPower ? watts(p.value) : clock(p.value)} from ${p.date} (${num(p.days)} ${p.days === 1 ? "day" : "days"} earlier)`;
+}
 function effortsCard(efforts, compareKey, category, segs = []) {
   const ride = category === "ride";
   // Distances (fastest time); on rides also the best 20 min and 1 h power.
@@ -1472,21 +1568,25 @@ function effortsCard(efforts, compareKey, category, segs = []) {
   // a past best links to its activity; the tooltip says when it was set
   const recLink = (txt, date, id, tip, cls = "") => (id ? `<a class="effort-rec plain-link ${cls}" href="#/activity/${id}" data-tip="${tip}${date ? `: ${date}` : ""}">${txt}</a>`
     : `<span class="effort-rec ${cls}" data-tip="${tip}${date ? `: ${date}` : ""}">${txt}</span>`);
-  const cell = (e, rec, tip, date = "", id = null) => (better(e, e.value, rec) ? `<span class="effort-rec effort-pb${power(e) ? " span2" : ""}" data-tip="${tip}: this activity">${LAUREL_SVG}</span>${power(e) ? "" : "<span></span>"}`
+  // a new record: how long the previous one stood and by how much it is beaten
+  const pbTip = (e, tip, p) => recordTip(tip, e.value, p, power(e));
+  const cell = (e, rec, tip, date = "", id = null, prev = null) => (better(e, e.value, rec) ? `<span class="effort-rec effort-pb span2" data-tip="${pbTip(e, tip, prev)}">${LAUREL_SVG}</span>`
     : rec != null ? (power(e) ? recLink(val(e, rec), date, id, tip, "span2") : `${recLink(val(e, rec), date, id, tip)}<span class="effort-speed">${speed(e, rec)}</span>`)
     : `<span class="effort-rec${power(e) ? " span2" : ""}">–</span>${power(e) ? "" : "<span></span>"}`);
   // segments ridden in this activity: time this time, best this year, best of all time
   const segSpeed = (s, t) => (t ? (ride ? `${num((s.segment.distance_m / t) * 3.6, 1)} km/h` : `${clock(t / (s.segment.distance_m / 1000))} /km`) : "");
-  const segCell = (s, t, tip, b) => (t != null && s.effort.elapsed_s <= t + 0.05 ? `<span class="effort-rec effort-pb" data-tip="${tip}: this activity">${LAUREL_SVG}</span><span></span>`
+  const segPrev = (s, p) => (p ? { value: p.elapsed_s, date: localTime(p).slice(0, 10),
+    days: Math.round((Date.parse(s.effort.start_time_utc) - Date.parse(p.start_time_utc)) / 86400000) } : null);
+  const segCell = (s, t, tip, b, p) => (t != null && s.effort.elapsed_s <= t + 0.05 ? `<span class="effort-rec effort-pb span2" data-tip="${recordTip(tip, s.effort.elapsed_s, segPrev(s, p), false)}">${LAUREL_SVG}</span>`
     : t != null ? `${recLink(clock(t), b?.start_time_utc ? localTime(b).slice(0, 10) : "", b?.activity_id, tip)}<span class="effort-speed">${segSpeed(s, t)}</span>` : `<span class="effort-rec">–</span><span></span>`);
   const segRows = segs.map((s, k) => `<div class="effort effort-seg" data-seg-effort="${k}"><span class="effort-name" title="Segment: ${esc(s.segment.name || "Segment")}">${esc(s.segment.name || "Segment")}</span>
-      <b>${clock(s.effort.elapsed_s)}</b><span class="effort-speed">${segSpeed(s, s.effort.elapsed_s)}</span>${segCell(s, s.year_best, "Best this year", s.year_best_effort)}${segCell(s, s.all_best, "All-time best", s.all_best_effort)}</div>`).join("");
+      <b>${clock(s.effort.elapsed_s)}</b><span class="effort-speed">${segSpeed(s, s.effort.elapsed_s)}</span>${segCell(s, s.year_best, "Best this year", s.year_best_effort, s.year_prev)}${segCell(s, s.all_best, "All-time best", s.all_best_effort, s.all_prev)}</div>`).join("");
   return `<div class="card act-tile act-efforts"><h3 class="tile-title">${LAUREL_SVG}<span>Best efforts</span></h3>
     <div class="efforts"><div class="effort effort-head"><span></span><span class="eh-now" data-tip="This activity">Activity</span><span class="eh-year" data-tip="Best this year">Year</span><span class="eh-rec" data-tip="${long}">${short}</span></div>
     ${list.filter((e) => !power(e)).map((e) => row(e)).join("")}${segRows}${list.filter(power).map((e) => row(e)).join("")}</div></div>`;
   function row(e) {
     return `<div class="effort${better(e, e.value, e.record) ? " pb" : ""}" data-effort="${e.k}"><span class="effort-name">${name(e)}</span>
-        ${power(e) ? `<b class="span2">${val(e, e.value)}</b>` : `<b>${val(e, e.value)}</b><span class="effort-speed">${speed(e, e.value)}</span>`}${cell(e, e.year, "Best this year", e.yearDate, e.yearId)}${cell(e, e.record, long, e.recordDate, e.recordId)}</div>`;
+        ${power(e) ? `<b class="span2">${val(e, e.value)}</b>` : `<b>${val(e, e.value)}</b><span class="effort-speed">${speed(e, e.value)}</span>`}${cell(e, e.year, "Best this year", e.yearDate, e.yearId, e.yearPrev)}${cell(e, e.record, long, e.recordDate, e.recordId, e.recordPrev)}</div>`;
   }
 }
 
@@ -1582,26 +1682,79 @@ const ROUTE_SCALES = {
 };
 // Bikes and long activities: a marker every 5 km, otherwise every km.
 const routeKmStep = (a) => (a.category === "ride" || (a.distance_m || 0) >= 40000 ? 5 : 1);
-const ROUTE_ICON = { speed: "speed", hr: "avg_heart_rate", power: "power", cadence: "cadence", altitude: "altitude", surface: "route" };
+const ROUTE_ICON = { speed: "speed", hr: "avg_heart_rate", power: "power", cadence: "cadence", altitude: "altitude", surface: "route", intervals: "interval_time" };
+// Climb categories (docs/MANUAL.md › Climbs): the cycling scale - length × grade, which is the
+// gain × 100 - at least 3 % over 500 m, for every sport; on foot also "Hill" below Cat 4.
+const CLIMB_CATS = [["HC", 800, "#7b2d8e"], ["Cat 1", 640, "#c2252d"], ["Cat 2", 320, "#e4572e"], ["Cat 3", 160, "#ee8a1f"], ["Cat 4", 80, "#c79a00"]];
+const CLIMB_HILL = { gain: 30, grade: 0.05, len: 200, color: "#4f9d56" };
+function climbCategory(gain, lenM, foot) {
+  const grade = lenM > 0 ? gain / lenM : 0;
+  const c = grade >= 0.03 && lenM >= 500 ? CLIMB_CATS.find(([, lo]) => gain >= lo) : null;
+  if (c) return { name: c[0], color: c[2] };
+  return foot && gain >= CLIMB_HILL.gain && grade >= CLIMB_HILL.grade && lenM >= CLIMB_HILL.len ? { name: "Hill", color: CLIMB_HILL.color } : null;
+}
+// Intervals on the map: work bouts and recoveries (warm-up and cool-down are recoveries too).
+const INTERVAL_MAP_COLOR = { work: "#f2552c", rest: "#9aa3b2" };
 // Surface on the map: one colour per kind (the base colours of the chart hatching).
 const SURFACE_MAP_COLOR = { paved: "#5b6472", gravel: "#d39a2f", dirt: "#8b5a2b", unknown: "#b8bec7" };
 const routeModeIcon = (k) => (ROUTE_ICON[k] ? metricIcon(ROUTE_ICON[k], 16) : "");
-const routeModeLabel = (k) => (k === "plain" ? "None" : `<span class="badge-metric">${routeModeIcon(k)}${k === "surface" ? "Surface" : ROUTE_SCALES[k].label}</span>`);
+const routeModeLabel = (k) => (k === "plain" ? "None" : `<span class="badge-metric">${routeModeIcon(k)}${k === "surface" ? "Surface" : k === "intervals" ? "Intervals" : ROUTE_SCALES[k].label}</span>`);
 
 // ---- Laps: grouped by n, header icons, columns without data hidden --------------------
-const lapsLabel = (n) => (Number(n) === 1 ? "1 lap" : `${n} laps`);
-function lapGroups(laps, n) {
+const lapsLabel = (n) => (n === "device" ? "Device laps" : `Every ${n} km`);
+// Laps of 1 km to group by n km: the device auto-laps when they are 1 km long, else cut from
+// the streams (distance, time, heart rate, power, cadence). Device laps that are something else
+// (manual laps, workout steps) stay available as their own choice.
+function lapSource(a, chartX, st) {
+  const L = a.laps || [];
+  const autoKm = L.length > 1 && L.slice(0, -1).every((l) => Math.abs((l.distance_m || 0) - 1000) <= 25);
+  const km1 = autoKm ? L : streamKmLaps(chartX, st);
+  const device = !autoKm && L.length > 1 ? L : null;
+  const options = [...(km1.length ? [1, 2, 5, 10] : []), ...(device ? ["device"] : [])];
+  return { km1, device, options };
+}
+function streamKmLaps(chartX, st) {
+  const d = chartX?.distance, t = chartX?.time, mv = chartX?.moving;
+  if (!d || d[d.length - 1] < 1) return [];
   const out = [];
+  let i0 = 0;
+  for (let k = 1, i = 1; i < d.length; i++) {
+    const last = i === d.length - 1;
+    if (d[i] < k && !last) continue;
+    const acc = { hr: [0, 0], power: [0, 0], cadence: [0, 0] };
+    let maxHr = null;
+    for (let j = i0 + 1; j <= i; j++) {
+      const dt = Math.min(30, t[j] - t[j - 1]);
+      for (const ch of ["hr", "power", "cadence"]) {
+        const v = st[ch]?.[j];
+        if (v != null && (ch === "power" || v > 0)) { acc[ch][0] += v * dt; acc[ch][1] += dt; }
+      }
+      if (st.hr?.[j] != null) maxHr = Math.max(maxHr ?? 0, st.hr[j]);
+    }
+    const avg = (ch) => (acc[ch][1] ? acc[ch][0] / acc[ch][1] : null);
+    const dist = (d[i] - d[i0]) * 1000;
+    if (dist >= 50 || !last) out.push({ idx: out.length, distance_m: dist, timer_s: (mv || t)[i] - (mv || t)[i0],
+      avg_hr: avg("hr"), max_hr: maxHr, avg_power: avg("power"), avg_cadence: avg("cadence"), intensity: null });
+    i0 = i;
+    k = Math.floor(d[i]) + 1;
+  }
+  return out;
+}
+function lapGroups(laps, n, byKm) {
+  const out = [];
+  let total = 0;
   for (let i = 0; i < laps.length; i += n) {
     const g = laps.slice(i, i + n);
     const t = g.reduce((s, l) => s + (l.timer_s || 0), 0), d = g.reduce((s, l) => s + (l.distance_m || 0), 0);
+    total += d;
     const avg = (k) => { // time-weighted
       let sum = 0, w = 0;
       for (const l of g) if (l[k] != null && l.timer_s) { sum += l[k] * l.timer_s; w += l.timer_s; }
       return w ? sum / w : null;
     };
     out.push({
-      label: g.length > 1 ? `${g[0].idx + 1}–${g[g.length - 1].idx + 1}` : String(g[0].idx + 1),
+      label: byKm ? num(total / 1000, Math.abs(total / 1000 - Math.round(total / 1000)) < 0.05 ? 0 : 1)
+        : g.length > 1 ? `${g[0].idx + 1}–${g[g.length - 1].idx + 1}` : String(g[0].idx + 1),
       distance_m: d, timer_s: t, avg_speed: t ? d / t : null,
       avg_hr: avg("avg_hr"), max_hr: g.some((l) => l.max_hr != null) ? Math.max(...g.map((l) => l.max_hr ?? 0)) : null, avg_power: avg("avg_power"), avg_cadence: avg("avg_cadence"),
       intensity: [...new Set(g.map((l) => l.intensity).filter(Boolean))].join(", "),
@@ -1610,16 +1763,19 @@ function lapGroups(laps, n) {
   return out;
 }
 const thIcon = (icon, label, num = true) => `<th class="${num ? "num" : ""}"><span class="th-icon">${icon ? metricIcon(icon) : ""}${label}</span></th>`;
-function lapsTable(a, n) {
-  const rows = lapGroups(a.laps, n);
+function lapsTable(a, src, n) {
+  const device = n === "device";
+  const rows = lapGroups(device ? src.device : src.km1, device ? 1 : n, !device);
+  const ride = !["run", "walk", "hike"].includes(a.category);
   const has = (k) => rows.some((r) => r[k] != null && r[k] !== 0);
   // Intensity only when it changes (a workout that never left its warm-up step marks all laps "warmup").
-  const showInt = new Set(a.laps.map((l) => l.intensity)).size > 1;
+  const showInt = device && new Set(src.device.map((l) => l.intensity)).size > 1;
   const cols = [
-    ["", "#", false, (r) => r.label],
+    ["", device ? "#" : "km", false, (r) => r.label],
     ["distance_total", "Distance", true, (r) => km(r.distance_m)],
     ["moving_time", "Time", true, (r) => dur(r.timer_s)],
-    has("distance_m") && ["avg_pace", "Pace", true, (r) => (r.distance_m ? pace(r.avg_speed) : "–")],
+    has("distance_m") && (ride ? ["speed", "Speed", true, (r) => (r.distance_m && r.avg_speed ? `${num(r.avg_speed * 3.6, 1)} km/h` : "–")]
+      : ["avg_pace", "Pace", true, (r) => (r.distance_m ? pace(r.avg_speed) : "–")]),
     has("avg_hr") && ["avg_heart_rate", "Avg HR", true, (r) => bpm(r.avg_hr)],
     has("max_hr") && ["max_heart_rate", "Max HR", true, (r) => bpm(r.max_hr)],
     has("avg_power") && ["avg_power", "Avg power", true, (r) => watts(r.avg_power)],
@@ -1680,6 +1836,26 @@ function drawActivityRoute(route) {
     const kinds = SURFACE_KINDS.filter((k) => route.surface.shares?.[k]);
     legend.innerHTML = `<span class="route-legend-title">Surface</span><div class="route-legend-kinds">${kinds.map((k) =>
       `<span><i style="background:${SURFACE_MAP_COLOR[k]}"></i>${SURFACE_LABEL[k]}</span>`).join("")}</div>`;
+  }
+  else if (route.mode === "intervals" && route.sections && pts.length > 1) {
+    // Sections between the chart lines: work where the section is faster (or harder) than
+    // halfway between the slowest and the fastest section, else recovery.
+    const sig = route.st.speed?.some((v) => v) ? route.st.speed : route.st.power || route.st.hr || [];
+    const n = Math.max(sig.length, 1), bd = [0, ...route.sections.at, n - 1];
+    const means = bd.slice(1).map((i1, k) => {
+      const v = sig.slice(bd[k], i1 + 1).filter((x) => x != null);
+      return v.length ? v.reduce((x, y) => x + y, 0) / v.length : null;
+    });
+    const known = means.filter((m) => m != null), mid = (Math.min(...known) + Math.max(...known)) / 2;
+    const work = means.map((m) => m != null && known.length > 1 && m >= mid);
+    let k = 0;
+    for (let i = 1; i < pts.length; i++) {
+      while (k < bd.length - 2 && pts[i].i > bd[k + 1]) k++;
+      features.push({ type: "Feature", properties: { c: INTERVAL_MAP_COLOR[work[k] ? "work" : "rest"] },
+                      geometry: { type: "LineString", coordinates: [pts[i - 1].p, pts[i].p] } });
+    }
+    legend.innerHTML = `<span class="route-legend-title">Intervals</span><div class="route-legend-kinds">
+      <span><i style="background:${INTERVAL_MAP_COLOR.work}"></i>Work</span><span><i style="background:${INTERVAL_MAP_COLOR.rest}"></i>Recovery</span></div>`;
   }
   else if (scale && pts.length > 1) {
     const vals = pts.map((x) => x.v).filter((v) => v != null && (scale.any || v > 0)).sort((x, y) => x - y);
@@ -2033,15 +2209,14 @@ function densify(tracks) {
 
 // One level below a tab (an activity, a segment…): a square back button left of the page
 // header on wide screens; on narrow ones it folds above the header as a text link.
-const backLink = (href, label, cls = "") => `<a class="back ${cls}" href="${href}" title="Back to ${esc(label)}" aria-label="Back to ${esc(label)}">
-  <span class="back-box side-box">${ICON.up}</span><span class="back-text">← ${esc(label)}</span></a>`;
-// Back link plus previous / next item (e.g. activity) links: on wide screens squares left and
-// right of the page header; on narrow ones one row of text links above it. A missing side is left out.
-const backNavRow = (href, label, prev, next) => {
-  const nav = (cls, h, text, icon) => (h ? `<a class="nav-link ${cls}" href="${h}" title="${text}" aria-label="${text}">
-    <span class="nav-box side-box">${icon}</span><span class="nav-text">${cls === "prev" ? "‹ " + text : text + " ›"}</span></a>` : "");
-  return `<div class="back-row">${backLink(href, label, "in-row")}<span class="page-nav">${nav("prev", prev, "Previous", ICON.prev)}${nav("next", next, "Next", ICON.next)}</span></div>`;
-};
+const backLink = (href, label) => `<a class="back" href="${href}" title="Back to ${esc(label)}" aria-label="Back to ${esc(label)}">
+  <span class="back-box">${ICON.back}</span><span class="back-text">← ${esc(label)}</span></a>`;
+// Previous / next item (e.g. activity) at the right of the page header, in the style of the
+// view switch (Tiles / List). Newer on the left, older on the right, like the newest-first
+// list. A missing side is left out.
+const prevNextHtml = (prev, next) => (prev || next ? `<div class="switch" role="group">
+  ${next ? `<button data-go="${next}" title="Next activity">${ICON.chevLeft}<span>Next</span></button>` : ""}
+  ${prev ? `<button data-go="${prev}" title="Previous activity"><span>Previous</span>${ICON.chevRight}</button>` : ""}</div>` : "");
 
 function pageHead(title, badges = "", right = "") {
   return `<div class="page-head"><h2>${title}</h2><div class="badges">${badges}</div><span class="spacer"></span>${right}</div>`;

@@ -323,3 +323,47 @@ def test_min_sections_keep_every_section_30_s_long():
     # cool-down under 30 s: to the end
     assert workout.min_sections(bouts, 490) == [(0, 160), (400, 490)]
     assert workout.split_points([(0, 160), (400, 490)]) == [160, 400, 490]
+
+
+@pytest.mark.parametrize("hr_effort, kind", [(None, "race"), (0.5, "tempo")])
+def test_ride_race_needs_heart_rate_at_threshold(hr_effort, kind):
+    """IF 0.95 for 2 h is a race only with the heart rate of one; without it (a hard group ride
+    with the heart rate down) it is the next kind that fits."""
+    a, ch = _session(
+        [(7200, 0.95)],
+        speed_of=_bike_speed,
+        effort_of=(lambda lvl: hr_effort) if hr_effort else None,
+    )
+    f = workout.features("road_ride", ch)
+    a["np_power"] = 0.95 * FTP
+    a["workout_stats"] = json.dumps(workout.stats(f))
+    assert _kind("road_ride", a, ch, RIDE_HIST).kind == kind
+
+
+def test_section_lines_are_kept_until_the_training_type_changes(tmp_path):
+    from starlette.testclient import TestClient
+
+    from trailbook.api import create_app
+
+    c = db.connect(tmp_path / "s.db")
+    c.execute("INSERT INTO persons (id, label) VALUES ('anna', 'Anna')")
+    blocks = [(600, 2.8)] + [(90, 5.0), (120, 2.6)] * 6 + [(600, 2.8)]
+    iv = _store(c, "anna", "2026-02-10", "run", "run", *_session(blocks, power=False))
+    workout.backfill(c)
+    c.close()
+    client = TestClient(create_app(tmp_path / "s.db"))
+    url = f"/api/activities/{iv}"
+    lines = {"kind": "intervals", "splits": [700.4, 600]}
+    assert client.patch(url, json={"section_lines": lines}).status_code == 200
+    saved = json.loads(client.get(url).json()["section_lines"])
+    assert saved == {"kind": "intervals", "splits": [600, 700]}
+    bad = {"kind": "tempo", "splits": [1]}
+    assert client.patch(url, json={"section_lines": bad}).status_code == 400
+    client.patch(url, json={"name": "Track"})  # other edits keep them
+    assert client.get(url).json()["section_lines"]
+    client.patch(url, json={"workout": "easy"})  # another training type drops them
+    assert client.get(url).json()["section_lines"] is None
+    client.patch(url, json={"workout": None})
+    client.patch(url, json={"section_lines": lines})
+    client.patch(url, json={"section_lines": None})  # Edit › Reset lines
+    assert client.get(url).json()["section_lines"] is None

@@ -32,13 +32,17 @@ const dark = () => document.documentElement.dataset.theme === "dark";
 //   targets: workout step targets (sample index range, low and high value), drawn dashed
 //   onHover(i | null): the hovered sample index (for the map), onState(): pins/zoom changed,
 //   onOrder([key]): the charts were reordered by dragging a card
+//   climbs on a series: s.climbs = { items: [{ i0, i1 }], label(i0, i1) => { lines, color },
+//               onChange() }  the stretch drawn thick in its colour, a tag of values above it,
+//               circles at both ends on hover to change the range
 //   sections: { keys: [key], at: [sample index], label(key, i0, i1) => [[text, colour | null]],
-//               onChange([index]) }  interval sections: thin lines at `at` on the charts in
+//               lines (text rows in the strip, default 2), onChange([index]) }, or a list of
+//               them (each chart in at most one set)  interval sections and climbs: thin lines at `at` on the charts in
 //               `keys` and a strip above each with the values of every section (label). A line
 //               can be dragged; on the strip a ball with − over a line removes it, a ball with +
 //               elsewhere adds one. Changes apply to all those charts.
 function chartGroup(root, { x, kind, series, hidden = [], sections = null, onHover = () => {}, onState = () => {}, onOrder = () => {} }) {
-  const g = { kind, plots: [], pins: [], range: null, hoverIdx: null, dragged: false, mark: null, hidden: new Set(hidden), sec: sections };
+  const g = { kind, plots: [], pins: [], range: null, hoverIdx: null, dragged: false, mark: null, hidden: new Set(hidden), secs: [].concat(sections || []) };
   const syncKey = "tb-" + Math.random().toString(36).slice(2);
   const xs = () => x[g.kind];
   const X_TITLE = { distance: ["Distance (km)", "Distance from the start."], time: ["Elapsed time (h:mm)", "Time from the start, pauses and stops included."],
@@ -95,7 +99,7 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, onHov
     el.innerHTML = `<div class="card-head"><h3 class="chart-title" data-tip="${esc(s.tip)}">${s.iconHtml || (s.icon ? metricIcon(s.icon, 18) : "")}<span>${s.title || s.label}</span></h3></div>
       <div class="chart-row">
         <div class="chart-frame">
-          ${hasSec(s) ? `<div class="chart-sections"><div class="sec-cells"></div><span class="sec-ball sec-add" hidden>+</span></div>` : ""}
+          ${hasSec(s) ? `<div class="chart-sections" style="height:${18 + 14 * (secOf(s).lines || 2)}px"><div class="sec-cells"></div><span class="sec-ball sec-add" hidden>+</span></div>` : ""}
           <div class="chart-ylabel" data-tip="${esc(s.tip)}"><span>${s.yTitle || s.label}${s.unit ? ` (${s.unit})` : ""}</span></div>
           <div class="chart-plot"></div>
           ${s.marks ? `<div class="chart-marks"${s.marksHidden ? " hidden" : ""}></div>` : ""}
@@ -153,7 +157,12 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, onHov
           ...(date ? { splits: dateSplits, values: dateLabels } : { values: (u, vals, ax, space, incr) => vals.map((v) => fmtX(v, false, incr)) }) },
         { font: CHART_FONT, stroke: muted, space: 22, gap: 2, border: { show: true, stroke: axis, width: 1 },
           ...(s.ySplits ? { splits: (u) => s.ySplits.filter((v) => v >= u.scales.y.min && v <= u.scales.y.max) } : {}),
-          size: (u, vals) => (vals ? Math.max(...vals.map((v) => String(v).length)) * 6.4 + 8 : 24),
+          // one width for the y axis of every chart in the group: the plots start at the same x,
+          // so a moment (cursor, pins, interval lines) is one straight line down the page
+          size: (u, vals) => {
+            g.yw[s.key] = vals ? Math.max(...vals.map((v) => String(v).length)) * 6.4 + 8 : 24;
+            return Math.max(...Object.values(g.yw));
+          },
           grid: { stroke: line, width: 0.6, dash: [2, 3] }, ticks: { stroke: axis, size: 3, width: 1 },
           values: (u, vals, ax, space, incr) => vals.map((v) => (s.fmt ? s.fmt(v) : num(v, s.ySplits ? 0 : stepDec(incr)))) },
       ],
@@ -161,7 +170,7 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, onHov
         // soft shadow under the series line
         drawClear: [(u) => drawZones(u, s)],
         drawAxes: [(u) => { u.ctx.save(); u.ctx.shadowColor = s.zones ? "rgba(0,0,0,.18)" : withAlpha(s.color, 0.55); u.ctx.shadowBlur = 6; u.ctx.shadowOffsetY = 2; }],
-        draw: [(u) => { u.ctx.restore(); drawSurface(u, s); drawTargets(u, s); drawExt(u, s); drawSections(u, s); drawMark(u, s); drawFrame(u, axis); placeSections(u, s); drawPins(u); placeTags(u, s); placeMarks(u, s); }],
+        draw: [(u) => { u.ctx.restore(); drawSurface(u, s); drawTargets(u, s); drawClimbs(u, s); drawExt(u, s); drawSections(u, s); drawMark(u, s); drawFrame(u, axis); placeSections(u, s); placeClimbs(u, s); drawPins(u); placeTags(u, s); placeMarks(u, s); }],
         setCursor: [(u) => cursorMoved(u, s)],
         setSelect: [(u) => {
           if (u.select.width < 4) return;
@@ -256,9 +265,12 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, onHov
     for (const c of clusters) c.items.forEach(({ el }, k) => { el.style.transform = `translateY(${c.top + k * step}px)`; });
   }
 
-  // Interval sections: lines at g.sec.at (sample indices) and the strip of values above the plot.
-  function hasSec(s) { return Boolean(g.sec && g.sec.keys.includes(s.key)); }
-  const secBounds = () => [0, ...g.sec.at, xs().length - 1];
+  // Sections (interval lines, climbs): each set in g.secs has its own lines (sample indices
+  // in `at`) on the charts of its `keys`, and the strip of values above those plots.
+  const secOf = (s) => g.secs.find((c) => c.keys.includes(s.key)) || null;
+  function hasSec(s) { return Boolean(secOf(s)); }
+  const secBounds = (c) => [0, ...c.at, xs().length - 1];
+  const isHot = (c, k) => g.secHot?.c === c && g.secHot.k === k;
   // the sample nearest to an x value (x values never decrease)
   const nearestIdx = (v) => {
     const a = xs();
@@ -267,44 +279,62 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, onHov
     return lo > 0 && Math.abs(a[lo - 1] - v) <= Math.abs(a[lo] - v) ? lo - 1 : lo;
   };
   function drawSections(u, s) {
-    if (!hasSec(s)) return;
+    const c = secOf(s);
+    if (!c) return;
     const ctx = u.ctx, { left, top, width, height } = u.bbox, dpr = devicePixelRatio || 1;
     ctx.save();
     ctx.beginPath(); ctx.rect(left, top, width, height); ctx.clip();
     ctx.strokeStyle = cssVar("--muted") || "#8a8f98"; ctx.globalAlpha = 0.6; ctx.lineWidth = dpr;
-    for (const i of g.sec.at) {
+    for (const i of c.at) {
       const px = Math.round(u.valToPos(xs()[i], "x", true)) + 0.5;
       ctx.beginPath(); ctx.moveTo(px, top); ctx.lineTo(px, top + height); ctx.stroke();
     }
     ctx.restore();
   }
   function placeSections(u, s) {
-    const b = u._tb?.sec;
-    if (!b) return;
+    const b = u._tb?.sec, c = secOf(s);
+    if (!b || !c) return;
+    const ci = g.secs.indexOf(c);
     const w = u.over.clientWidth, off = u.over.offsetLeft, px = (i) => u.valToPos(xs()[i], "x");
-    const bd = secBounds();
+    // the centre of the canvas line (drawn at a whole device pixel + 0.5) in CSS px of the plot
+    const dpr = devicePixelRatio || 1;
+    const lx = (i) => (Math.round(u.valToPos(xs()[i], "x", true)) + 0.5 - u.bbox.left) / dpr;
+    const bd = secBounds(c);
+    const ext = Math.max(0, u.over.getBoundingClientRect().top - b.strip.getBoundingClientRect().bottom);
     b.cells.innerHTML = bd.slice(1).map((i1, k) => {
       const i0 = bd[k], x0 = Math.max(0, px(i0)), x1 = Math.min(w, px(i1));
       if (x1 - x0 < 1) return "";
-      const lines = x1 - x0 >= 34 ? g.sec.label(s.key, i0, i1) : [];
-      return `<div class="sec-cell${k ? " edge" : ""}" style="left:${off + x0}px;width:${x1 - x0}px">${lines.map(([t, c]) =>
-        `<span${c ? ` style="color:${c}"` : ` class="sub"`}>${t}</span>`).join("")}</div>`;
-    }).join("") + g.sec.at.map((i, k) => {
-      const x0 = px(i);
-      return x0 < 0 || x0 > w ? "" : `<span class="sec-ball sec-del" data-k="${k}" style="left:${off + x0}px">−</span>`;
+      const lines = x1 - x0 >= 34 ? c.label(s.key, i0, i1) : [];
+      return `<div class="sec-cell" style="left:${off + x0}px;width:${x1 - x0}px">${lines.map(([t, col]) =>
+        `<span${col ? ` style="color:${col}"` : ` class="sub"`}>${t}</span>`).join("")}</div>`;
+    }).join("") + c.at.map((i, k) => {
+      const x0 = lx(i);
+      // the line in the strip runs on down to the plot's top edge (one unbroken line)
+      return x0 < 0 || x0 > w ? "" : `<span class="sec-line${isHot(c, k) ? " hot" : ""}" data-c="${ci}" data-k="${k}" style="left:${off + x0}px;bottom:${-ext}px"></span>
+        <span class="sec-ball sec-del" data-k="${k}" style="left:${off + x0}px">−</span>`;
     }).join("");
     // grab handles over the lines (kept while dragging: only moved)
     const hs = b.handles;
-    if (hs.children.length !== g.sec.at.length) hs.innerHTML = g.sec.at.map((_, k) => `<div class="sec-handle" data-k="${k}"><i></i></div>`).join("");
-    [...hs.children].forEach((h, k) => { const x0 = px(g.sec.at[k]); h.style.left = `${x0}px`; h.hidden = x0 < 0 || x0 > w; });
+    if (hs.children.length !== c.at.length) hs.innerHTML = c.at.map((_, k) => `<div class="sec-handle" data-c="${ci}" data-k="${k}"><i></i></div>`).join("");
+    [...hs.children].forEach((h, k) => { const x0 = lx(c.at[k]); h.style.left = `${x0}px`; h.hidden = x0 < 0 || x0 > w; });
   }
   const redrawSections = () => g.plots.forEach(({ u }) => u.redraw(false));
-  const sectionsChanged = () => { redrawSections(); g.sec.onChange?.([...g.sec.at]); };
-  function bindSections(u, el) {
+  const sectionsChanged = (c) => { redrawSections(); c.onChange?.([...c.at]); };
+  function bindSections(u, el, c) {
     const strip = el.querySelector(".chart-sections"), add = strip.querySelector(".sec-add");
     const handles = Object.assign(document.createElement("div"), { className: "sec-handles" });
+    const ci = g.secs.indexOf(c);
     u.over.appendChild(handles);
-    u._tb.sec = { cells: strip.querySelector(".sec-cells"), handles };
+    u._tb.sec = { cells: strip.querySelector(".sec-cells"), handles, strip };
+    // the hovered (or dragged) line lights up in every chart of its set, its strip part too
+    const hot = (k) => {
+      g.secHot = k == null ? null : { c, k };
+      const on = (x) => k != null && Number(x.dataset.c) === ci && Number(x.dataset.k) === k;
+      root.querySelectorAll(".sec-line").forEach((l) => l.classList.toggle("hot", on(l)));
+      root.querySelectorAll(".sec-handle").forEach((h) => h.classList.toggle("hot", on(h)));
+    };
+    handles.addEventListener("mouseover", (e) => { const h = e.target.closest(".sec-handle"); if (h) hot(Number(h.dataset.k)); });
+    handles.addEventListener("mouseout", (e) => { if (e.target.closest(".sec-handle") && !root.classList.contains("sec-dragging")) hot(null); });
     // a line is dragged, not a zoom or a pin
     handles.addEventListener("mousedown", (e) => e.stopPropagation());
     handles.addEventListener("click", (e) => e.stopPropagation());
@@ -317,14 +347,15 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, onHov
       h.classList.add("drag"); root.classList.add("sec-dragging");
       const move = (ev) => {
         const r = u.over.getBoundingClientRect();
-        const lo = (g.sec.at[k - 1] ?? 0) + 1, hi = (g.sec.at[k + 1] ?? xs().length - 1) - 1;
+        const lo = (c.at[k - 1] ?? 0) + 1, hi = (c.at[k + 1] ?? xs().length - 1) - 1;
         const i = Math.max(lo, Math.min(hi, nearestIdx(u.posToVal(ev.clientX - r.left, "x"))));
-        if (i !== g.sec.at[k]) { g.sec.at[k] = i; redrawSections(); }
+        if (i !== c.at[k]) { c.at[k] = i; redrawSections(); }
       };
       const up = () => {
         h.removeEventListener("pointermove", move); h.removeEventListener("pointerup", up); h.removeEventListener("pointercancel", up);
         h.classList.remove("drag"); root.classList.remove("sec-dragging");
-        sectionsChanged();
+        if (!h.matches(":hover")) hot(null);
+        sectionsChanged(c);
       };
       h.addEventListener("pointermove", move); h.addEventListener("pointerup", up); h.addEventListener("pointercancel", up);
     });
@@ -332,7 +363,7 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, onHov
     let addAt = null;
     strip.addEventListener("mousemove", (e) => {
       const r = u.over.getBoundingClientRect(), px = e.clientX - r.left;
-      const near = g.sec.at.some((i) => Math.abs(u.valToPos(xs()[i], "x") - px) < 12);
+      const near = c.at.some((i) => Math.abs(u.valToPos(xs()[i], "x") - px) < 12);
       const i = nearestIdx(u.posToVal(px, "x"));
       addAt = !near && px >= 0 && px <= u.over.clientWidth && i > 0 && i < xs().length - 1 ? i : null;
       add.hidden = addAt == null;
@@ -341,12 +372,105 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, onHov
     strip.addEventListener("mouseleave", () => { add.hidden = true; addAt = null; });
     strip.addEventListener("click", (e) => {
       const del = e.target.closest(".sec-del");
-      if (del) g.sec.at.splice(Number(del.dataset.k), 1);
-      else if (addAt != null && !g.sec.at.includes(addAt)) { g.sec.at.push(addAt); g.sec.at.sort((p, q) => p - q); }
+      if (del) c.at.splice(Number(del.dataset.k), 1);
+      else if (addAt != null && !c.at.includes(addAt)) { c.at.push(addAt); c.at.sort((p, q) => p - q); }
       else return;
       add.hidden = true; addAt = null;
-      sectionsChanged();
+      sectionsChanged(c);
     });
+  }
+
+  // Climbs on a chart (s.climbs = { items: [{ i0, i1 }], label(i0, i1) => { lines: [[text, colour |
+  // null]], color }, onChange() }): the stretch of the line drawn thicker in the climb's colour,
+  // its values in a small tag above it. Hovering a climb shows a circle at its start and end;
+  // dragging one changes the climb's range (the tag recomputes).
+  function drawClimbs(u, s) {
+    if (!s.climbs?.items.length) return;
+    const ctx = u.ctx, { left, top, width, height } = u.bbox, dpr = devicePixelRatio || 1;
+    const X = (i) => u.valToPos(xs()[i], "x", true), Y = (v) => u.valToPos(v, "y", true);
+    ctx.save();
+    ctx.beginPath(); ctx.rect(left, top, width, height); ctx.clip();
+    ctx.lineJoin = "round"; ctx.lineCap = "round";
+    for (const c of s.climbs.items) {
+      ctx.strokeStyle = s.climbs.label(c.i0, c.i1).color || s.color;
+      ctx.lineWidth = (g.climbHot?.c === c ? 5 : 3.5) * dpr;
+      ctx.beginPath();
+      for (let i = c.i0; i <= c.i1; i++) if (s.values[i] != null) ctx.lineTo(X(i), Y(s.values[i]));
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+  function placeClimbs(u, s) {
+    const b = u._tb?.climbs;
+    if (!b) return;
+    const w = u.over.clientWidth, X = (i) => u.valToPos(xs()[i], "x"), Y = (v) => u.valToPos(v, "y");
+    b.tags.innerHTML = s.climbs.items.map((c) => {
+      const x0 = X(c.i0), x1 = X(c.i1), xc = (x0 + x1) / 2;
+      if (x1 < 0 || x0 > w) return "";
+      let hi = -Infinity;
+      for (let i = c.i0; i <= c.i1; i++) if (s.values[i] != null && s.values[i] > hi) hi = s.values[i];
+      const { lines } = s.climbs.label(c.i0, c.i1);
+      // above the climb's highest point; kept inside the plot at the top
+      const y = Math.max(14 * lines.length + 6, Y(hi) - 6);
+      return `<div class="climb-tag" style="left:${Math.min(w - 4, Math.max(4, xc))}px;top:${y}px">${lines.map(([t, col]) =>
+        `<span${col ? ` style="color:${col}"` : ` class="sub"`}>${t}</span>`).join("")}</div>`;
+    }).join("");
+    const hot = g.climbHot?.u === u ? g.climbHot.c : null;
+    b.ends.forEach((h, k) => {
+      h.classList.toggle("on", Boolean(hot));
+      if (!hot) return;
+      const i = k ? hot.i1 : hot.i0;
+      h.style.left = `${X(i)}px`; h.style.top = `${Y(s.values[i] ?? 0)}px`;
+      h.style.setProperty("--c", s.climbs.label(hot.i0, hot.i1).color || s.color);
+    });
+  }
+  // the climb under the pointer (10 px of slack at both ends), or null
+  function climbAt(u, s, i) {
+    if (i == null || !s.climbs) return null;
+    const px = u.valToPos(xs()[i], "x"), X = (j) => u.valToPos(xs()[j], "x");
+    return s.climbs.items.find((c) => px >= X(c.i0) - 10 && px <= X(c.i1) + 10) || null;
+  }
+  function hoverClimb(u, s, i) {
+    if (!s.climbs || g.climbDrag) return;
+    const c = climbAt(u, s, i);
+    if ((g.climbHot?.c || null) === c) return;
+    g.climbHot = c ? { u, c } : null;
+    u.redraw(false);
+  }
+  function bindClimbs(u, s) {
+    const layer = Object.assign(document.createElement("div"), { className: "climb-layer" });
+    const tags = Object.assign(document.createElement("div"), { className: "climb-tags" });
+    const ends = [0, 1].map(() => Object.assign(document.createElement("div"), { className: "climb-end" }));
+    layer.append(tags, ...ends);
+    u.over.appendChild(layer);
+    u._tb.climbs = { tags, ends };
+    ends.forEach((h, k) => {
+      h.addEventListener("mousedown", (e) => e.stopPropagation()); // not a zoom
+      h.addEventListener("click", (e) => e.stopPropagation()); // not a pin
+      h.addEventListener("pointerdown", (e) => {
+        const c = g.climbHot?.c;
+        if (!c) return;
+        e.preventDefault(); e.stopPropagation();
+        h.setPointerCapture(e.pointerId);
+        g.climbDrag = true; h.classList.add("drag");
+        const items = s.climbs.items, n = xs().length;
+        const prev = items.filter((x) => x !== c && x.i1 <= c.i0).reduce((m, x) => Math.max(m, x.i1), 0);
+        const next = items.filter((x) => x !== c && x.i0 >= c.i1).reduce((m, x) => Math.min(m, x.i0), n - 1);
+        const move = (ev) => {
+          const i = nearestIdx(u.posToVal(ev.clientX - u.over.getBoundingClientRect().left, "x"));
+          if (k === 0) c.i0 = Math.max(prev, Math.min(c.i1 - 2, i));
+          else c.i1 = Math.min(next, Math.max(c.i0 + 2, i));
+          u.redraw(false);
+        };
+        const up = () => {
+          h.removeEventListener("pointermove", move); h.removeEventListener("pointerup", up); h.removeEventListener("pointercancel", up);
+          g.climbDrag = false; h.classList.remove("drag");
+          s.climbs.onChange?.();
+        };
+        h.addEventListener("pointermove", move); h.addEventListener("pointerup", up); h.addEventListener("pointercancel", up);
+      });
+    });
+    u.over.addEventListener("mouseleave", () => { if (!g.climbDrag && g.climbHot?.u === u) { g.climbHot = null; u.redraw(false); } });
   }
 
   // Road surface (from map data) as a hatched strip along the bottom of one chart.
@@ -488,6 +612,7 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, onHov
   function cursorMoved(u, s) {
     const i = u.cursor.idx, b = u._tb;
     const show = i != null && u.cursor.left >= 0;
+    hoverClimb(u, s, show ? i : null);
     b.tip.hidden = b.xflag.hidden = !show;
     if (!show && u._tgt) { u._tgt = null; u.redraw(false); }
     if (!show) {
@@ -554,6 +679,7 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, onHov
   function build() {
     g.plots.forEach(({ u }) => u.destroy());
     g.plots = [];
+    g.yw = {};
     root.innerHTML = "";
     for (const s of series) {
       const el = block(s);
@@ -566,7 +692,8 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, onHov
       u.over.appendChild(tip);
       u.root.appendChild(xflag); u.root.appendChild(pins);
       u._tb = { tip, xflag, pins, tags: s.tags ? el.querySelector(".chart-tags") : null, marks: el.querySelector(".chart-marks") };
-      if (hasSec(s)) { bindSections(u, el); placeSections(u, s); }
+      if (hasSec(s)) { bindSections(u, el, secOf(s)); placeSections(u, s); }
+      if (s.climbs) { bindClimbs(u, s); placeClimbs(u, s); }
       // Reset: a refresh pictogram in the plot's top right corner, only when needed.
       const reset = Object.assign(document.createElement("button"), { className: "chart-reset", hidden: true, title: "Reset zoom and pins" });
       reset.dataset.chartReset = "";
@@ -608,6 +735,12 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, onHov
     if (g.range) g.plots.forEach(({ u }) => u.setScale("x", { min: g.range[0], max: g.range[1] }));
     renderPins();
     fitSide();
+    alignAxes();
+  }
+  // Charts built before the widest y axis was known take its width now.
+  function alignAxes() {
+    const w = Math.max(0, ...Object.values(g.yw));
+    g.plots.forEach(({ u }) => { if (Math.abs((u.axes[1]._size || 0) - w) > 0.5) u.setSize({ width: u.width, height: u.height }); });
   }
   // The side column of every chart in the group is as wide as the widest stat or legend
   // (one width for all, so the charts stay equally wide, without empty space beside the pills).
@@ -875,9 +1008,10 @@ function chartSlopes(v, dir, th = 3) {
   const tip = Object.assign(document.createElement("div"), { className: "tb-tip", hidden: true });
   document.addEventListener("DOMContentLoaded", () => document.body.appendChild(tip));
   document.addEventListener("mouseover", (e) => {
-    const t = e.target.closest?.("[data-tip]");
-    if (!t || !t.dataset.tip) { tip.hidden = true; return; }
-    tip.textContent = t.dataset.tip;
+    const t = e.target.closest?.("[data-tip], [data-tip-html]");
+    if (!t || !(t.dataset.tip || t.dataset.tipHtml)) { tip.hidden = true; return; }
+    // data-tip: plain text; data-tip-html: built by the app (bold parts), never user text
+    if (t.dataset.tipHtml) tip.innerHTML = t.dataset.tipHtml; else tip.textContent = t.dataset.tip;
     tip.hidden = false;
     const r = t.getBoundingClientRect();
     tip.style.left = `${Math.min(innerWidth - 290, Math.max(8, r.left))}px`;

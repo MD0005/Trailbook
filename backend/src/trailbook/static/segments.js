@@ -201,13 +201,19 @@ function weatherHelp(polyline, reverse, w, prof, what = "segment") {
   const level = score >= 10 ? 3 : score >= 4 ? 2 : score >= 1.5 ? 1 : score > -1.5 ? 0 : score > -4 ? -1 : score > -10 ? -2 : -3;
   const from = w.wind_dir != null ? COMPASS[Math.round(w.wind_dir / 45) % 8] : "";
   const weight = prof.wind !== 1 ? ` (× ${num(prof.wind, 2)} for ${prof.label})` : "";
-  const windLine = tail == null ? "Wind: no data → ±0"
-    : `Wind: ${Math.abs(tail) < 3 ? "about neutral" : tail > 0 ? "tailwind" : "headwind"} ${num(Math.abs(tail))} km/h along the ${what} (${num(w.wind_speed)} km/h from the ${from})${weight} → ${signed(windTerm)}`;
-  const loopLine = loopTerm <= -0.5 ? `\nWind both ways (${num(along.mixed * 100)} % of the ${what} cancels out): headwind costs more than tailwind gives → ${signed(loopTerm)}` : "";
-  const tempLine = `Temperature: ${num(t)} °C${tempTerm ? (t < prof.lo ? ", cold" : ", hot") : ", comfortable"} for ${prof.label} (${prof.lo}–${prof.hi} °C) → ${signed(tempTerm)}`;
-  const wetLine = `${isSnow(code) ? "Snow" : code >= 95 ? "Thunderstorm" : "Rain"}: ${wet ? `${num(wet, 1)} mm` : "dry"} → ${signed(wetTerm)}`;
-  const tip = `${HELP_WORDS[level]} (${signed(score)})\n\n${windLine}${loopLine}\n${tempLine}\n${wetLine}\n\nPoints: 1 ≈ 1 km/h of tailwind on a bike. Hourly model weather for the area.`;
-  return { score, level, tip };
+  // The tooltip (HTML): the verdict in bold, then each part with its name in bold, a blank
+  // line between them.
+  const part = (name, text) => `<b>${name}</b> ${esc(text)}`;
+  const parts = [
+    part("Wind", tail == null ? "no data → ±0"
+      : `${Math.abs(tail) < 3 ? "about neutral" : tail > 0 ? "tailwind" : "headwind"} ${num(Math.abs(tail))} km/h along the ${what} (${num(w.wind_speed)} km/h from the ${from})${weight} → ${signed(windTerm)}`),
+    loopTerm <= -0.5 && part("Wind both ways", `${num(along.mixed * 100)} % of the ${what} cancels out: headwind costs more than tailwind gives → ${signed(loopTerm)}`),
+    part("Temperature", `${num(t)} °C${tempTerm ? (t < prof.lo ? ", cold" : ", hot") : ", comfortable"} for ${prof.label} (${prof.lo}–${prof.hi} °C) → ${signed(tempTerm)}`),
+    part(isSnow(code) ? "Snow" : code >= 95 ? "Thunderstorm" : "Rain", `${wet ? `${num(wet, 1)} mm` : "dry"} → ${signed(wetTerm)}`),
+  ].filter(Boolean);
+  const title = `${HELP_WORDS[level]} (${signed(score)})`;
+  const tip = `<b>${title}</b>\n\n${parts.join("\n\n")}\n\n<span class="tip-note">Points: 1 ≈ 1 km/h of tailwind on a bike. Hourly model weather for the area.</span>`;
+  return { score, level, tip, title };
 }
 const parseWx = (e) => {
   if (!e.weather) return undefined; // not looked up yet
@@ -220,7 +226,7 @@ function helpMeter(h) {
   const f = Math.max(-1, Math.min(1, h.score / 15)), w = Math.max(Math.abs(f) * 50, 3);
   // the bar covers the 1 px axis column, so it sits flush on the axis on either side
   const pos = f >= 0 ? `left:50%;width:${w}%` : `right:calc(50% - 1px);width:calc(${w}% + 1px)`;
-  return `<span class="wx-meter l${h.level}" data-tip="${esc(h.tip)}" aria-label="${esc(h.tip.split("\n")[0])}"><b></b><i class="${f >= 0 ? "pos" : "neg"}" style="${pos}"></i></span>`;
+  return `<span class="wx-meter l${h.level}" data-tip-html="${esc(h.tip)}" aria-label="${esc(h.title)}"><b></b><i class="${f >= 0 ? "pos" : "neg"}" style="${pos}"></i></span>`;
 }
 // Weather cell: sky icon, temperature, wind arrow (where it blows) and speed, then the meter
 // (rides and runs outdoors only). Indoor and virtual activities: no weather at all.
