@@ -1,9 +1,13 @@
-# Trailbook
+# Trailbook — extended sports and fitness statistics for Garmin
 
-**Your training log, at home.** Trailbook is a Home Assistant add-on that keeps every
-workout you have ever recorded — from Garmin Connect, a Strava export or plain FIT/GPX
-files — and turns it into maps, charts and statistics. Everything runs on your own Home
-Assistant box, even a small one like the Home Assistant Yellow, and your data never leaves it.
+**Your Garmin training log, at home.** Trailbook is a Home Assistant add-on built around
+Garmin Connect: connect your account once and every activity you have ever recorded — and
+every new one — lands in Home Assistant as maps, charts and statistics. Everything runs on
+your own Home Assistant box, even a small one like the Home Assistant Yellow, and your data
+never leaves it.
+
+Trailbook gets the most out of a Garmin watch or bike computer. Other sources (a Strava
+export, FIT/GPX/TCX files) are there to bring in older history or a second device.
 
 ![Supports aarch64](https://img.shields.io/badge/aarch64-yes-green.svg)
 ![Supports amd64](https://img.shields.io/badge/amd64-yes-green.svg)
@@ -59,15 +63,22 @@ Assistant box, even a small one like the Home Assistant Yellow, and your data ne
 - Several people in one install, each with their own activities, heart rate and power
   thresholds (with the date they changed) and settings.
 
-### Getting your data in
-- **Garmin Connect** — connect with your personal API key; the whole history is downloaded
-  once and new activities arrive automatically.
+### Garmin Connect — the main source
+- Connect with your personal Garmin Connect API key: the whole history is downloaded once,
+  then new activities arrive automatically.
+- You get everything your Garmin recorded: the original FIT files with all their data
+  (heart rate, power, running dynamics, laps, workout steps, the thresholds your watch used),
+  plus what only Garmin Connect knows — activity titles, the place, training effect, Garmin's
+  training load and Body Battery change.
+- 🚧 Coming next from Garmin: sleep, stress, HRV, resting heart rate, steps and weight.
+
+### Other sources — for older history
 - **Strava** — upload the export ZIP (titles, descriptions and activities entered by hand
-  come with it) or single files. Activities you already have are skipped.
+  come with it) or single files; handy for the years before your Garmin.
 - **A folder** — FIT, GPX and TCX files (also `.gz`) saved to a folder, for example by a
   Home Assistant automation; one subfolder per person, or the watch decides.
 - **Upload** — a Garmin export ZIP or single files.
-- Duplicates are recognised across all sources.
+- Activities you already have are recognised and skipped, whatever the source.
 
 ### Backup and moving
 - One-click export of everything (database, settings and all files) to a single ZIP, and
@@ -92,8 +103,8 @@ Or by hand:
 ## First steps
 
 1. **Settings › People** — add the people whose training you keep.
-2. **Settings › General** — choose where activities come from: Garmin Connect, a folder or
-   an upload. Old history from Strava goes in under *Other sources*.
+2. **Settings › General** — choose **Garmin Connect** (recommended) and paste each person's
+   personal API key. Old history from Strava goes in under *Other sources*.
 3. Wait for the first import; progress is shown in **Settings › Imported**.
 4. **Settings › People** — check the heart rate and power thresholds; training load and
    zones depend on them.

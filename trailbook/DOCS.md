@@ -1,7 +1,8 @@
 # Trailbook
 
-Training log for FIT files: activity list, route map, statistics and charts. Opens from the
-sidebar (Ingress).
+Training log built around Garmin Connect: your whole activity history and every new
+activity as maps, charts and statistics. Strava exports and FIT/GPX/TCX files can bring in
+older history. Opens from the sidebar (Ingress).
 
 ## Data
 

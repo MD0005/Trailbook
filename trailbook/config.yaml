@@ -3,7 +3,7 @@
 name: Trailbook
 version: "0.1.0"
 slug: trailbook
-description: Self-hosted training log — FIT import, route map, statistics and charts
+description: Garmin training log at home — route map, statistics and charts
 url: https://github.com/MD0005/Trailbook
 image: ghcr.io/md0005/trailbook-{arch}
 arch:
