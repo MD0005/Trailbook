@@ -62,7 +62,8 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - id: base
-        run: echo "from=$(sed -n 's/^ *${{ matrix.arch }}: *//p' trailbook/build.yaml)" >> "$GITHUB_OUTPUT"
+        run: |
+          echo "from=$(sed -n 's/^ *${{ matrix.arch }}: *//p' trailbook/build.yaml)" >> "$GITHUB_OUTPUT"
       - uses: docker/build-push-action@v6
         with:
           context: .
