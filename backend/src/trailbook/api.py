@@ -42,6 +42,7 @@ from . import (
     sports,
     streams,
     surface,
+    tilechart,
     weather,
     workout,
 )
@@ -160,29 +161,25 @@ def activity_filters(q, alias: str = "a", person: bool = True) -> tuple[list[str
     return where, params
 
 
+_WORKOUT = "COALESCE(workout_override, workout)"  # training type in force
+
+
+def _workout_filter(q) -> tuple[list[str], list]:
+    """Activities page filter `workouts`: comma list of training type keys, "none" = not set."""
+    chosen = [v for v in (q.get("workouts") or "").split(",") if v]
+    if not chosen:
+        return [], []
+    keys = [v for v in chosen if v != "none"]
+    parts = [f"{_WORKOUT} IN ({','.join('?' for _ in keys)})"] if keys else []
+    if "none" in chosen:
+        parts.append(f"{_WORKOUT} IS NULL")
+    return ["(" + " OR ".join(parts) + ")"], keys
+
+
 def _map_filters(q) -> tuple[str, list]:
     """Shared filters plus 'has a route', for the map endpoints."""
     where, params = activity_filters(q)
     return " AND ".join(["a.has_gps = 1", *where]), params
-
-
-def _speed_series(c: sqlite3.Connection, activity_id: int, points: int = 48) -> list:
-    """Speed (m/s) averaged into `points` equal time buckets, for small tile charts."""
-    row = c.execute(
-        "SELECT encoding, data FROM streams WHERE activity_id = ? AND channel = 'speed'",
-        (activity_id,),
-    ).fetchone()
-    if row is None:
-        return []
-    values = streams.decode(row["encoding"], row["data"])
-    if not values:
-        return []
-    size = max(1, len(values) // points)
-    out = []
-    for i in range(0, len(values), size):
-        chunk = [v for v in values[i : i + size] if v is not None]
-        out.append(round(sum(chunk) / len(chunk), 3) if chunk else None)
-    return out[:points]
 
 
 def _order(q, sorts: dict[str, str], default: str, tiebreak: str) -> str:
@@ -600,16 +597,10 @@ def create_app(db_path: str | Path) -> Starlette:
         # Training type counts under the other filters (the Training type badge lists them).
         base = f"WHERE {' AND '.join(where)}" if where else ""
         base_params = list(params)
-        wk = "COALESCE(workout_override, workout)"
-        # workouts: comma list of training type keys; "none" = no training type
-        chosen = [v for v in (q.get("workouts") or "").split(",") if v]
-        if chosen:
-            keys = [v for v in chosen if v != "none"]
-            parts = [f"{wk} IN ({','.join('?' for _ in keys)})"] if keys else []
-            if "none" in chosen:
-                parts.append(f"{wk} IS NULL")
-            where.append("(" + " OR ".join(parts) + ")")
-            params = [*params, *keys]
+        wk = _WORKOUT
+        w_where, w_params = _workout_filter(q)
+        where += w_where
+        params = [*params, *w_params]
         clause = f"WHERE {' AND '.join(where)}" if where else ""
         limit = _int(request, "limit", 50, 1, 1000)
         offset = _int(request, "offset", 0, 0, 10**9)
@@ -641,9 +632,9 @@ def create_app(db_path: str | Path) -> Starlette:
                 [*params, limit, offset],
             ).fetchall()
             items = [dict(r) for r in rows]
-            if q.get("chart") == "pace":
+            if q.get("chart") in ("pace", "chart"):  # small chart per tile (tilechart.py)
                 for item in items:
-                    item["speed_series"] = _speed_series(c, item["id"])
+                    item["tile_chart"] = tilechart.tile_chart(c, item["id"])
             workout_counts = {
                 (r[0] or "none"): r[1]
                 for r in c.execute(
@@ -667,6 +658,13 @@ def create_app(db_path: str | Path) -> Starlette:
             th = analysis.activity_thresholds(c, row)  # FTP used (the Edit panel shows it)
             a["ftp_used"] = th.ftp
             a["ftp_source"] = (th.sources or {}).get("ftp")
+            # the tempo line of the training type detection (90 % of the sport's threshold HR):
+            # Easy's "Above tempo" on the heart rate chart uses it
+            prof = workout.profile(row["activity_type"])
+            lt = (th.lthr or (th.hr_max or 190) * analysis.LTHR_SHARE_OF_MAX) * (
+                prof.lthr_share if prof else 1.0
+            )
+            a["tempo_hr"] = round(lt * workout.RULES["tempo_hr"])
             a["workout_options"] = list(workout.options(row["activity_type"]))
             a["laps"] = [
                 dict(r)
@@ -715,16 +713,23 @@ def create_app(db_path: str | Path) -> Starlette:
                 (aid, aid),
             ).fetchone()
             a["connect"] = json.loads(g["summary"]) if g else None
-            # Previous / next activity in time: same person, everyone with ?neighbours=all.
-            every = request.query_params.get("neighbours") == "all"
-            pf, pa = ("", ()) if every else ("AND person_id = ?", (row["person_id"],))
+            # Previous / next activity in time, within the activities page filters (from, to,
+            # types, workouts; person in the All view): same person, everyone with
+            # ?neighbours=all.
+            q = request.query_params
+            every = q.get("neighbours") == "all"
+            nw, npar = activity_filters(q, "", person=every)
+            if not every:
+                nw, npar = [*nw, "person_id = ?"], [*npar, row["person_id"]]
+            w_where, w_params = _workout_filter(q)
+            nf = " ".join(f"AND {w}" for w in [*nw, *w_where])
             key = (row["start_time_utc"], row["start_time_utc"], aid)
             for name, op, order in (("prev_id", "<", "DESC"), ("next_id", ">", "ASC")):
                 n = c.execute(
                     f"""SELECT id FROM activities
-                        WHERE (start_time_utc {op} ? OR (start_time_utc = ? AND id {op} ?)) {pf}
+                        WHERE (start_time_utc {op} ? OR (start_time_utc = ? AND id {op} ?)) {nf}
                         ORDER BY start_time_utc {order}, id {order} LIMIT 1""",
-                    (*key, *pa),
+                    (*key, *npar, *w_params),
                 ).fetchone()
                 a[name] = n["id"] if n else None
             a["files"] = [

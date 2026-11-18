@@ -215,7 +215,8 @@ header button.icon svg { width: 18px; height: 18px; }
 .tile-filters { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
 .tile-filters input, .tile-filters select { min-width: 160px; }
 .tiles { display: grid; gap: 12px; }
-.tiles.small { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
+/* Small tiles: ~17 % narrower than Tiles (one more per row), the chart box 25 % lower */
+.tiles.small { grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); }
 .tiles.large { grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); }
 .tile { display: flex; flex-direction: column; gap: 8px; padding: 12px; border-radius: 12px;
         background: var(--surface-2); color: var(--fg); }
@@ -1339,3 +1340,50 @@ a.effort-rec.plain-link:hover { text-decoration: underline; color: var(--accent)
 .climb-end.on { opacity: 1; transform: none; pointer-events: auto; }
 .climb-end.on:hover, .climb-end.drag { transform: scale(1.25); }
 .climb-end.drag { cursor: grabbing; }
+/* a stretch under the cursor (Easy above Z2…): its colour in the value flag */
+.chart-tip-dot { display: inline-block; width: 10px; height: 4px; border-radius: 2px; margin-right: 5px; vertical-align: middle; }
+/* Tile chart (Activities › Tiles: Chart): fills the whole map box, no padding */
+svg.tile-chart { width: 100%; height: 100%; display: block; }
+/* Commute tile: the route alone on a plain, slightly tinted background */
+.tile-map:has(.tile-trace) { background: color-mix(in srgb, var(--accent) 6%, var(--surface-2)); }
+/* Tile chart: the training type in the top left corner, on the frame of the map weather widget */
+.tile-kind { position: absolute; top: 7px; left: 7px; z-index: 2; padding: 3px 8px; border-radius: 7px;
+             background: color-mix(in srgb, var(--surface) 78%, transparent); backdrop-filter: blur(3px);
+             box-shadow: var(--shadow); font-size: 11px; font-weight: 600; color: var(--fg); pointer-events: none; }
+.tiles.small .tile-map { height: 120px; }
+.tiles.small .tile-head .tile-title { flex: 1; }
+/* distance and time on the right of the name, two bold lines, no labels */
+.tile-dist { flex: none; display: flex; flex-direction: column; align-items: flex-end; line-height: 1.25;
+             font-size: 12.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+/* Small tile without route, heart rate or speed: the sport's icon, large and faint */
+.tile-sport { display: flex; opacity: .25; }
+.tile-sport svg { width: 64px; height: 64px; }
+/* tile names on one line, a long one cut with "…" */
+.tile-head .tile-title b { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Chart tiles: one row on top - the training type left, on hover the averages in the middle (a
+   lighter frame), the segment right; the averages give way (cut with "…") when space is short */
+.tile-top { position: absolute; top: 7px; left: 7px; right: 7px; z-index: 2; display: grid;
+            grid-template-columns: minmax(auto, 1fr) minmax(0, auto) minmax(auto, 1fr); align-items: center; gap: 6px;
+            pointer-events: none; } /* equal sides: the middle is the tile's centre while it fits */
+.tile-top .tile-kind, .tile-top .seg-badge.tile-seg { position: static; max-width: none; }
+.tile-top > :first-child { justify-self: start; }
+.tile-top > :last-child { justify-self: end; }
+.tile-avg { justify-self: center; max-width: 100%; overflow: hidden; text-overflow: ellipsis; padding: 3px 9px;
+            border-radius: 7px; background: color-mix(in srgb, var(--surface) 55%, transparent); backdrop-filter: blur(3px);
+            box-shadow: var(--shadow); font-size: 11px; font-weight: 600; color: var(--fg); white-space: nowrap;
+            font-variant-numeric: tabular-nums; opacity: 0; transform: translateY(-3px); transition: opacity .15s, transform .15s; }
+.tile:hover .tile-avg { opacity: 1; transform: none; }
+/* Waiting (loaderHtml): a cyclist riding, the wheels turning and the road passing under */
+.loader { display: inline-flex; flex-direction: column; align-items: center; gap: 4px; }
+.loader-bike { width: 72px; height: 44px; overflow: visible; color: var(--accent); }
+.loader-bike * { fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+.loader-wheel path { stroke-width: 1.1; opacity: .6; }
+.loader-head { fill: currentColor; }
+.loader-road { stroke: var(--muted); stroke-width: 1.6; stroke-dasharray: 7 6; animation: loader-road .5s linear infinite; }
+.loader-wheel { transform-box: fill-box; transform-origin: center; animation: loader-spin .55s linear infinite; }
+.loader-ride { animation: loader-bob .55s ease-in-out infinite alternate; }
+@keyframes loader-spin { to { transform: rotate(360deg); } }
+@keyframes loader-road { to { stroke-dashoffset: 13; } }
+@keyframes loader-bob { to { transform: translateY(-1px); } }
+@media (prefers-reduced-motion: reduce) { .loader-wheel, .loader-road, .loader-ride { animation: none; } }
+.page-loader { display: flex; justify-content: center; padding: 48px 16px; }

@@ -33,8 +33,9 @@ from datetime import date
 
 from . import analysis, sports, streams
 
-WORKOUT_VERSION = 6  # v2 FTP per sport, v3 all endurance sports, v4 tempo without block, v5 games,
-# v6 race needs heart rate at threshold in every sport (rides: and IF)
+WORKOUT_VERSION = 8  # v2 FTP per sport, v3 all endurance sports, v4 tempo without block, v5 games,
+# v6 race needs heart rate at threshold in every sport (rides: and IF), v7-8 tempo block stored
+# for the charts and dropped again
 
 KINDS: dict[str, tuple[str, str]] = {
     "easy": ("Easy", "Spokojny"),
@@ -282,19 +283,32 @@ def zone_share(hr: list, moving: list, ref: float, lo: float) -> float | None:
 
 def longest_block(sig: list, moving: list, ref: float, lo: float, dip: int = 60) -> int:
     """Longest stretch (s) with sig/ref >= lo, dips below it of up to `dip` s allowed."""
+    return longest_block_at(sig, moving, ref, lo, dip)[0]
+
+
+def longest_block_at(
+    sig: list, moving: list, ref: float, lo: float, dip: int = 60
+) -> tuple[int, int, int]:
+    """`longest_block` and where it is: (seconds, first index, index after the last)."""
     best = cur = below = 0
-    for v, m in zip(sig, moving, strict=False):
+    out = (0, 0, 0)
+    start = 0
+    for i, (v, m) in enumerate(zip(sig, moving, strict=False)):
         if not m:
             continue
         if v and v / ref >= lo:
+            if cur == 0:
+                start = i
             cur += 1 + below
             below = 0
-            best = max(best, cur)
+            if cur > best:
+                best = cur
+                out = (best, start, i + 1)
         else:
             below += 1
             if below > dip:
                 cur = below = 0
-    return best
+    return out
 
 
 # ---- features ----------------------------------------------------------------------------

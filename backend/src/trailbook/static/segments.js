@@ -400,7 +400,7 @@ async function renderSegment(id, params) {
     <div class="card" data-top10><h3>Top 10</h3>${effortTable(d.top, g, { polyline: s.polyline })}</div>
     <div class="card" data-all><div class="card-row"><h3 style="margin:0">All efforts</h3><span class="hint" data-count>${countText(first.items.length, first.total)}</span></div>
       ${effortTable(first.items, g, { sort: effortSort, polyline: s.polyline })}
-      ${first.items.length < first.total ? `<div class="sentinel" data-sentinel><span class="hint">Loading…</span></div>` : ""}</div>`
+      ${first.items.length < first.total ? `<div class="sentinel" data-sentinel>${loaderHtml()}</div>` : ""}</div>`
     : `<div class="card">${hint(s.pending ? "Looking for efforts in all activities…" : CURRENT === "all" ? "No activity covers this segment in this period." : `${esc(personLabel(CURRENT))} has no effort on this segment in this period.`)}</div>`}`;
 
   const headEl = view.querySelector(".page-head");
@@ -477,7 +477,7 @@ async function renderSegmentFromActivity(params) {
       <form class="card-row" data-search><input name="q" placeholder="Search by name…" value="${esc(params.q || "")}" style="min-width:240px"><button class="primary">Search</button></form>
       <div class="scroll"><table class="data"><thead><tr><th>Date</th><th>Type</th><th>Name</th><th class="num">Distance</th><th class="num">Moving time</th>${CURRENT === "all" ? "<th>Person</th>" : ""}</tr></thead>
       <tbody data-rows>${data.items.map(row).join("") || `<tr><td colspan="6" class="hint">No activities with GPS.</td></tr>`}</tbody></table></div>
-      ${data.items.length < data.total ? `<div class="sentinel" data-sentinel><span class="hint">Loading…</span></div>` : ""}</div>`;
+      ${data.items.length < data.total ? `<div class="sentinel" data-sentinel>${loaderHtml()}</div>` : ""}</div>`;
   view.querySelector("[data-search]").onsubmit = (e) => {
     e.preventDefault();
     const v = e.target.q.value.trim();

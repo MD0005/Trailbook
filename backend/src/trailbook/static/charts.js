@@ -30,10 +30,13 @@ const dark = () => document.documentElement.dataset.theme === "dark";
 //   mark: what hovering the stat highlights - "max" | "min" (a point), "up" | "down" (the climbs or
 //   descents), { ranges: [[i0, i1]] }, a number (a line at that value, e.g. an average)
 //   targets: workout step targets (sample index range, low and high value), drawn dashed
-//   onHover(i | null): the hovered sample index (for the map), onState(): pins/zoom changed,
+//   onHover(i | null): the hovered sample index (for the map), onRanges([[i0, i1]] | null): the
+//   stretches a hovered stat marks (for the map), onState(): pins/zoom changed,
 //   onOrder([key]): the charts were reordered by dragging a card
 //   climbs on a series: s.climbs = { items: [{ i0, i1 }], label(i0, i1) => { lines, color },
-//               onChange() }  the stretch drawn thick in its colour, a tag of values above it,
+//               onChange(), edit: false (only drawn thick: no circles), lines [] = no tag,
+//               colorAt(v) (each value its own colour instead of one per stretch),
+//               tip(i0, i1, i) => html (a line in the value flag while the cursor is in a stretch) }  the stretch drawn thick in its colour, a tag of values above it,
 //               circles at both ends on hover to change the range
 //   sections: { keys: [key], at: [sample index], label(key, i0, i1) => [[text, colour | null]],
 //               lines (text rows in the strip, default 2), onChange([index]) }, or a list of
@@ -41,7 +44,7 @@ const dark = () => document.documentElement.dataset.theme === "dark";
 //               `keys` and a strip above each with the values of every section (label). A line
 //               can be dragged; on the strip a ball with − over a line removes it, a ball with +
 //               elsewhere adds one. Changes apply to all those charts.
-function chartGroup(root, { x, kind, series, hidden = [], sections = null, onHover = () => {}, onState = () => {}, onOrder = () => {} }) {
+function chartGroup(root, { x, kind, series, hidden = [], sections = null, onHover = () => {}, onRanges = () => {}, onState = () => {}, onOrder = () => {} }) {
   const g = { kind, plots: [], pins: [], range: null, hoverIdx: null, dragged: false, mark: null, hidden: new Set(hidden), secs: [].concat(sections || []) };
   const syncKey = "tb-" + Math.random().toString(36).slice(2);
   const xs = () => x[g.kind];
@@ -392,11 +395,23 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, onHov
     ctx.beginPath(); ctx.rect(left, top, width, height); ctx.clip();
     ctx.lineJoin = "round"; ctx.lineCap = "round";
     for (const c of s.climbs.items) {
-      ctx.strokeStyle = s.climbs.label(c.i0, c.i1).color || s.color;
+      const base = s.climbs.label(c.i0, c.i1).color || s.color, colorAt = s.climbs.colorAt;
       ctx.lineWidth = (g.climbHot?.c === c ? 5 : 3.5) * dpr;
-      ctx.beginPath();
-      for (let i = c.i0; i <= c.i1; i++) if (s.values[i] != null) ctx.lineTo(X(i), Y(s.values[i]));
-      ctx.stroke();
+      // one path per run of the same colour (colorAt: each value its own colour, e.g. its zone)
+      let col = null, prev = null;
+      for (let i = c.i0; i <= c.i1; i++) {
+        const v = s.values[i];
+        if (v == null) continue;
+        const ci = colorAt ? colorAt(v) || base : base;
+        if (ci !== col) {
+          if (col) ctx.stroke();
+          ctx.strokeStyle = col = ci; ctx.beginPath();
+          if (prev != null) ctx.moveTo(X(prev), Y(s.values[prev]));
+        }
+        ctx.lineTo(X(i), Y(v));
+        prev = i;
+      }
+      if (col) ctx.stroke();
     }
     ctx.restore();
   }
@@ -410,6 +425,7 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, onHov
       let hi = -Infinity;
       for (let i = c.i0; i <= c.i1; i++) if (s.values[i] != null && s.values[i] > hi) hi = s.values[i];
       const { lines } = s.climbs.label(c.i0, c.i1);
+      if (!lines.length) return ""; // a stretch only drawn thick, no values
       // above the climb's highest point; kept inside the plot at the top
       const y = Math.max(14 * lines.length + 6, Y(hi) - 6);
       return `<div class="climb-tag" style="left:${Math.min(w - 4, Math.max(4, xc))}px;top:${y}px">${lines.map(([t, col]) =>
@@ -431,11 +447,13 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, onHov
     return s.climbs.items.find((c) => px >= X(c.i0) - 10 && px <= X(c.i1) + 10) || null;
   }
   function hoverClimb(u, s, i) {
-    if (!s.climbs || g.climbDrag) return;
+    if (!s.climbs || s.climbs.edit === false || g.climbDrag) return;
+    // only the chart under the pointer (the others move with it through the cursor sync)
+    if (!u.over.matches(":hover")) { if (g.climbHot?.u === u) { g.climbHot = null; g.plots.forEach(({ u: p }) => p.redraw(false)); } return; }
     const c = climbAt(u, s, i);
-    if ((g.climbHot?.c || null) === c) return;
+    if (g.climbHot?.u === u && g.climbHot.c === c) return;
     g.climbHot = c ? { u, c } : null;
-    u.redraw(false);
+    g.plots.forEach(({ u: p }) => p.redraw(false)); // a shared stretch thickens on every chart
   }
   function bindClimbs(u, s) {
     const layer = Object.assign(document.createElement("div"), { className: "climb-layer" });
@@ -460,7 +478,8 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, onHov
           const i = nearestIdx(u.posToVal(ev.clientX - u.over.getBoundingClientRect().left, "x"));
           if (k === 0) c.i0 = Math.max(prev, Math.min(c.i1 - 2, i));
           else c.i1 = Math.min(next, Math.max(c.i0 + 2, i));
-          u.redraw(false);
+          g.plots.forEach(({ u: p }) => p.redraw(false)); // a stretch shared by charts moves on all
+
         };
         const up = () => {
           h.removeEventListener("pointermove", move); h.removeEventListener("pointerup", up); h.removeEventListener("pointercancel", up);
@@ -625,6 +644,9 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, onHov
     b.tip.innerHTML = s.lines?.length
       ? [{ label: s.label, color: s.color, values: s.values }, ...s.lines].map((l) => `<div><span class="chart-tip-name">${l.label}</span> <b style="color:${l.color}">${fmtY(s, l.values[i])}</b></div>`).join("")
       : `<span class="chart-tip-name">${s.label}</span> <b style="color:${colorAt(s, v)}">${fmtY(s, v)}</b>${z?.label ? ` <span class="chart-tip-name">· ${z.label}</span>` : ""}${surfaceAt(s, i) ? `<div class="chart-tip-target"><span class="surface-swatch s-${surfaceAt(s, i)}"></span>${SURFACE_LABEL[surfaceAt(s, i)]}</div>` : ""}${t ? `<div class="chart-tip-target"><span class="chart-tip-swatch"></span>Target ${num(t.lo, s.dec)}–${num(t.hi, s.dec)}${s.unit ? " " + s.unit : ""}${v != null && (v < t.lo || v > t.hi) ? ` <span class="chart-tip-out">${v < t.lo ? "below" : "above"}</span>` : ""}</div>` : ""}`;
+    // a stretch under the cursor (s.climbs.tip): its line in the value flag
+    const st = s.climbs?.tip && s.climbs.items.find((c) => i >= c.i0 && i <= c.i1);
+    if (st) b.tip.insertAdjacentHTML("beforeend", `<div class="chart-tip-target">${s.climbs.tip(st.i0, st.i1, i)}</div>`);
     if (u._tgt !== t) { u._tgt = t; u.redraw(false); }
     const top = v == null ? 0 : u.valToPos(v, "y");
     const left = u.cursor.left, w = u.over.clientWidth;
@@ -715,8 +737,9 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, onHov
           g.mark = { ...m, u }; st.classList.add("on"); u.redraw(false);
           if (prev && prev !== u) prev.redraw(false);
           if (m.i != null) onHover(m.i); // a point is shown on the map too
+          if (m.ranges?.length) onRanges(m.ranges); // and stretches (best 20 min, climbs, above Z2…)
         };
-        st.onmouseleave = () => { g.mark = null; st.classList.remove("on"); u.redraw(false); onHover(null); };
+        st.onmouseleave = () => { g.mark = null; st.classList.remove("on"); u.redraw(false); onHover(null); onRanges(null); };
       });
       // A value pill highlights its point (current value, max, min) in its own colour.
       el.querySelectorAll("[data-tag]").forEach((st) => {

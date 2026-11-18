@@ -56,7 +56,7 @@ const ICON = {
   help: svg(`<circle cx="12" cy="12" r="9.5"/><path d="M9.3 9.2a2.8 2.8 0 0 1 5.4 1c0 1.9-2.7 2.4-2.7 4.1"/><circle cx="12" cy="17.6" r=".4" fill="currentColor"/>`),
   gear: svg(`<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>`),
   list: svg(`<path d="M8 6h13M8 12h13M8 18h13"/><circle cx="3.5" cy="6" r="1"/><circle cx="3.5" cy="12" r="1"/><circle cx="3.5" cy="18" r="1"/>`),
-  tilesSmall: svg(`<rect x="3" y="3" width="5" height="5" rx="1"/><rect x="10" y="3" width="5" height="5" rx="1"/><rect x="17" y="3" width="4" height="5" rx="1"/><rect x="3" y="10" width="5" height="5" rx="1"/><rect x="10" y="10" width="5" height="5" rx="1"/><rect x="17" y="10" width="4" height="5" rx="1"/><rect x="3" y="17" width="5" height="4" rx="1"/><rect x="10" y="17" width="5" height="4" rx="1"/><rect x="17" y="17" width="4" height="4" rx="1"/>`),
+  tilesSmall: svg(`<rect x="3" y="3" width="18" height="18" rx="3.5"/><path d="M7.5 17v-3.5M10.5 17v-7M13.5 17v-5M16.5 17v-9" stroke-width="2.2"/>`),
   tilesLarge: svg(`<rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x="13" y="3" width="8" height="8" rx="1.5"/><rect x="3" y="13" width="8" height="8" rx="1.5"/><rect x="13" y="13" width="8" height="8" rx="1.5"/>`),
   grip: svg(`<circle cx="9" cy="6" r="1"/><circle cx="15" cy="6" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="9" cy="18" r="1"/><circle cx="15" cy="18" r="1"/>`),
   chevron: svg(`<path d="M6 9l6 6 6-6"/>`),
@@ -107,7 +107,7 @@ const dur = (s) => {
   if (s == null) return "–";
   s = Math.round(s);
   const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
-  return h ? `${h} h ${String(m).padStart(2, "0")} min` : `${m} min ${String(sec).padStart(2, "0")} s`;
+  return h ? `${h}h ${String(m).padStart(2, "0")}min` : `${m}min ${String(sec).padStart(2, "0")}s`;
 };
 const hours = (s) => (s == null ? "–" : `${num(s / 3600, s < 36000 ? 1 : 0)} h`);
 const pace = (mps) => {
@@ -300,6 +300,22 @@ function setupTheme() {
 // ---- generic table: sortable header + filter row ------------------------------------
 
 const PAGE_SIZE = 50;
+// Waiting: a cyclist riding along a road (wheels turning, the road passing under), with a small
+// label. Used while a page takes long to load and at the end of lists that load more on scroll.
+function loaderHtml(label = "Loading…") {
+  return `<div class="loader" role="status" aria-live="polite">
+    <svg class="loader-bike" viewBox="0 0 72 44" aria-hidden="true">
+      <line class="loader-road" x1="0" y1="40.5" x2="72" y2="40.5"/>
+      <g class="loader-ride">
+        <g class="loader-wheel"><circle cx="18" cy="30" r="9"/><path d="M18 21v18M9 30h18M11.6 23.6l12.8 12.8M24.4 23.6 11.6 36.4"/></g>
+        <g class="loader-wheel"><circle cx="54" cy="30" r="9"/><path d="M54 21v18M45 30h18M47.6 23.6l12.8 12.8M60.4 23.6 47.6 36.4"/></g>
+        <path class="loader-frame" d="M18 30 28 18h15l11 12M28 18l8 12H18M36 30l7-12M26 14h6M43 18l-1-5h5"/>
+        <path class="loader-rider" d="M29 14l9-6 5 5M38 8l-6 9 4 6"/><circle class="loader-head" cx="40" cy="4.5" r="3"/>
+      </g>
+    </svg>
+    <span class="hint">${label}</span></div>`;
+}
+
 let observers = [];
 function stopObservers() { observers.forEach((o) => o.disconnect()); observers = []; }
 const countText = (shown, total) => (shown < total ? `${num(shown)} of ${num(total)}` : `${num(total)} row(s)`);
@@ -330,7 +346,7 @@ function tableHtml(columns, rows, params, total) {
     <div class="scroll"><table class="data" data-spread>
       <thead><tr>${head}</tr>${columns.some((c) => c.filter) ? `<tr class="filters-row">${filters}</tr>` : ""}</thead>
       <tbody data-rows>${body}</tbody></table></div>
-    ${rows.length < total ? `<div class="sentinel" data-sentinel><span class="hint">Loading…</span></div>` : ""}`;
+    ${rows.length < total ? `<div class="sentinel" data-sentinel>${loaderHtml()}</div>` : ""}`;
 }
 
 // Spare table width as equal visible gaps. Text columns are left-aligned (room shows on their
@@ -591,22 +607,75 @@ function statStrip(items, cls = "") {
 
 // ---- Activities ---------------------------------------------------------------------
 
-const VIEWS = [["large", "Tiles", ICON.tilesLarge], ["list", "List", ICON.list]];
+// Tiles: the route on a static map; Charts: smaller tiles with a chart of the training type (tilechart.py).
+const VIEWS = [["large", "Tiles", ICON.tilesLarge], ["small", "Charts", ICON.tilesSmall], ["list", "List", ICON.list]];
 
-// Small speed-over-time chart for large tiles (higher = faster), with the average pace.
-function paceSpark(series) {
-  const pts = (series || []).map((v, i) => [i, v]).filter(([, v]) => v);
-  if (pts.length < 2) return `<span class="hint">no pace data</span>`;
-  const W = 300, H = 120, P = 8;
-  const vals = pts.map(([, v]) => v), lo = Math.min(...vals), hi = Math.max(...vals) || 1;
-  const n = (series.length - 1) || 1;
-  const xy = pts.map(([i, v]) => [P + (i / n) * (W - 2 * P), H - P - ((v - lo) / (hi - lo || 1)) * (H - 2 * P)]);
-  const line = xy.map(([x, y], i) => `${i ? "L" : "M"}${x.toFixed(1)},${y.toFixed(1)}`).join("");
-  const area = `${line}L${xy[xy.length - 1][0].toFixed(1)},${H - P}L${xy[0][0].toFixed(1)},${H - P}Z`;
-  const avg = vals.reduce((a, b) => a + b, 0) / vals.length;
-  return `<div class="spark"><span class="hint">Avg ${pace(avg)} · best ${pace(hi)}</span>
-    <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
-    <path d="${area}" fill="var(--accent)" opacity=".12"/><path d="${line}" fill="none" stroke="var(--accent)" stroke-width="2" vector-effect="non-scaling-stroke"/></svg></div>`;
+// Small chart filling a large tile (tilechart.py), no numbers, the colours of the activity charts:
+// heart rate blocks (Intervals: the sections; Easy, Long, Tempo, Race, games: stretches of one
+// zone), Hills - the altitude profile in green with the climbs darker, Commute - the route alone
+// in the heart rate zone colours; without the data - speed over time.
+function tileChart(tc) {
+  const W = 400, H = 160, svg = (body) => `<svg class="tile-chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">${body}</svg>`;
+  if (!tc) return `<span class="hint">no chart data</span>`;
+  const zoneColor = (z, n) => (z ? rampColor(ROUTE_SCALES.hr.stops, n > 1 ? (z - 1) / (n - 1) : 0) : "var(--muted)");
+  if (tc.kind === "blocks") {
+    // blocks side by side (no gaps), height = heart rate from the resting to the maximum, a
+    // dashed line at the average heart rate. Each block: its zone colour under a light vertical
+    // gloss (lighter at the top) and a faint shadow along its left edge, so two blocks of one
+    // zone side by side still read as two.
+    const n = tc.zones || 5;
+    const defs = `<defs><linearGradient id="tb-gloss" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#fff" stop-opacity=".38"/><stop offset=".45" stop-color="#fff" stop-opacity=".08"/>
+        <stop offset="1" stop-color="#000" stop-opacity=".06"/></linearGradient>
+      <linearGradient id="tb-edge" x1="0" y1="0" x2="1" y2="0">
+        <stop offset="0" stop-color="#000" stop-opacity=".13"/><stop offset="1" stop-color="#000" stop-opacity="0"/></linearGradient></defs>`;
+    const rects = tc.bars.map(([x0, x1, h, z], k) => {
+      const bh = Math.max(2, h * H), x = (x0 * W).toFixed(2), y = (H - bh).toFixed(2), w = ((x1 - x0) * W + 0.4).toFixed(2);
+      const edge = k ? `<rect x="${x}" y="${y}" width="${Math.min(4, (x1 - x0) * W * 0.3).toFixed(2)}" height="${bh.toFixed(2)}" fill="url(#tb-edge)"/>` : "";
+      return `<rect x="${x}" y="${y}" width="${w}" height="${bh.toFixed(2)}" fill="${zoneColor(z, n)}"/>
+        <rect x="${x}" y="${y}" width="${w}" height="${bh.toFixed(2)}" fill="url(#tb-gloss)"/>${edge}`;
+    }).join("");
+    const avg = tc.avg ? `<line x1="0" x2="${W}" y1="${(H - tc.avg * H).toFixed(1)}" y2="${(H - tc.avg * H).toFixed(1)}" stroke="var(--fg)" stroke-opacity=".18" stroke-width=".7" stroke-dasharray="3 3" vector-effect="non-scaling-stroke"/>` : "";
+    return svg(defs + rects + avg);
+  }
+  if (tc.kind === "track") {
+    // the route alone, like a map without the map: a thick line in the heart rate zone colours
+    // on a plain background, kept in proportion and centred
+    const n = tc.zones || 5, pad = 14, s = Math.min((W - 2 * pad) / (tc.w || 1), (H - 2 * pad) / (tc.h || 1));
+    const ox = (W - (tc.w || 0) * s) / 2, oy = (H - (tc.h || 0) * s) / 2;
+    const P = ([x, y]) => `${(ox + x * s).toFixed(1)},${(H - oy - y * s).toFixed(1)}`;
+    const all = tc.pts.map(P).join(" "), anyZone = tc.pts.some((q) => q[2]);
+    let segs = "";
+    for (let i = 1; i < tc.pts.length; i++) {
+      // below zone 1 in the zone 1 colour (a grey line disappears on the background); no heart
+      // rate anywhere (a ride without an HR strap, motor sports): one plain zone 1 green
+      const col = anyZone ? zoneColor(tc.pts[i][2] || 1, n) : ROUTE_SCALES.hr.stops[0];
+      segs += `<line x1="${P(tc.pts[i - 1]).replace(",", '" y1="')}" x2="${P(tc.pts[i]).replace(",", '" y2="')}" stroke="${col}"/>`;
+    }
+    return `<svg class="tile-chart tile-trace" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet">
+      <polyline points="${all}" fill="none" stroke="var(--surface)" stroke-width="13" stroke-linejoin="round" stroke-linecap="round"/>
+      <g stroke-width="8" stroke-linecap="round">${segs}</g></svg>`;
+  }
+  const vals = tc.alt || tc.speed || [];
+  if (vals.filter((v) => v != null).length < 2) return `<span class="hint">no chart data</span>`;
+  const known = vals.filter((v) => v != null), lo = Math.min(...known), hi = Math.max(...known), pad = (hi - lo) * 0.08 || 1;
+  const X = (i) => (i / (vals.length - 1)) * W, Y = (v) => H - ((v - lo + pad) / (hi - lo + 2 * pad)) * H;
+  const path = (a, b) => {
+    let d = "";
+    for (let i = a; i <= b; i++) if (vals[i] != null) d += `${d ? "L" : "M"}${X(i).toFixed(1)},${Y(vals[i]).toFixed(1)}`;
+    return d;
+  };
+  const area = (a, b) => `${path(a, b)}L${X(b).toFixed(1)},${H}L${X(a).toFixed(1)},${H}Z`;
+  if (tc.alt) {
+    // climbs: rises between the turning points of the profile (as Hills on the altitude chart)
+    const piv = chartPivots(vals, Math.max(5, (hi - lo) * 0.12)), ups = [];
+    for (let k = 1; k < piv.length; k++) if (vals[piv[k]] > vals[piv[k - 1]]) ups.push([piv[k - 1], piv[k]]);
+    return svg(`<path d="${area(0, vals.length - 1)}" fill="#93cf99" opacity=".45"/>
+      ${ups.map(([a, b]) => `<path d="${area(a, b)}" fill="#4f9d56" opacity=".55"/>`).join("")}
+      <path d="${path(0, vals.length - 1)}" fill="none" stroke="#4f9d56" stroke-width="2" vector-effect="non-scaling-stroke"/>`);
+  }
+  return svg(`<path d="${area(0, vals.length - 1)}" fill="#86aef5" opacity=".3"/>
+    <path d="${path(0, vals.length - 1)}" fill="none" stroke="#86aef5" stroke-width="2" vector-effect="non-scaling-stroke"/>`);
 }
 
 function activitySummary(t) {
@@ -622,17 +691,25 @@ function activitySummary(t) {
 }
 
 async function renderActivities(params) {
+  // Filters and sort stay for this tab: "#/activities" with no parameters (the back button, the
+  // tab link from an activity) brings them back; leaving the tab or reloading forgets them.
+  const KEEP = ["from", "to", "types", "workouts", "person", "sort", "dir"];
+  if (!Object.keys(params).length && TAB.filter && Object.keys(TAB.filter).length) {
+    location.replace("#/activities?" + new URLSearchParams(TAB.filter));
+    return;
+  }
+  TAB.filter = Object.fromEntries(KEEP.filter((k) => params[k]).map((k) => [k, params[k]]));
   params = { sort: "date", dir: "desc", ...params };
   const mode = VIEWS.some(([k]) => k === TAB.view) ? TAB.view : "large";
   const isAll = CURRENT === "all";
   const q = { limit: PAGE_SIZE, sort: params.sort, dir: params.dir, ...filterQuery(params) };
   if (!isAll) q.person = CURRENT;
   else if (params.person) q.person = params.person;
-  const tileContent = store.get("tile-content") === "pace" ? "pace" : "route";
-  if (mode === "large") { if (tileContent === "pace") q.chart = "pace"; else q.track = "1"; }
+  if (mode === "large") q.track = "1";
+  if (mode === "small") q.chart = "chart";
   const fetchPage = (offset) => api("activities?" + new URLSearchParams({ ...q, offset }));
   const [data] = await Promise.all([fetchPage(0),
-    mode === "large" && tileContent === "route" ? (async () => { BASEMAPS ??= await api("basemaps"); })() : null]);
+    mode === "large" ? (async () => { BASEMAPS ??= await api("basemaps"); })() : null]);
 
   const columns = [
     { key: "date", label: "Date", icon: "date", sort: true,
@@ -655,36 +732,54 @@ async function renderActivities(params) {
 
   // Segment badge: the (first) segment's name, "+n" when there are more.
   const segBadge = (a, cls = "") => `<span class="seg-badge ${cls}" title="Segment${a.segment_count > 1 ? "s" : ""} in this activity">${esc(a.segment_name || "Segment")}${a.segment_count > 1 ? ` +${a.segment_count - 1}` : ""}</span>`;
-  const tile = (a) => `
-    <a class="tile ${mode}" href="#/activity/${a.id}">
-      ${mode === "large" ? `<div class="tile-map">${a.segment_count ? segBadge(a, "tile-seg") : ""}${tileContent === "pace" ? paceSpark(a.speed_series) : a.polyline ? staticMap(a.polyline, { W: 400, H: 160, cls: "tile-track", tiles: "faded-tiles" }) : `<span class="hint">${a.indoor ? "indoor" : "no route"}</span>`}</div>` : ""}
+  const kind = (a) => (workoutOf(a) ? esc(workoutLabel(workoutOf(a))) : "");
+  // Hovering a chart tile: the averages in a light frame at the top centre - heart rate, pace (on
+  // foot) or speed, and power on rides.
+  const tileAverages = (a) => {
+    const foot = ["run", "walk", "hike"].includes(a.category);
+    const parts = [
+      a.avg_hr ? bpm(a.avg_hr) : "",
+      // no speed for games (a match's average speed says nothing)
+      a.distance_m && a.avg_speed && !["team", "racket"].includes(a.category) ? (foot ? pace(a.avg_speed) : `${num(a.avg_speed * 3.6, 1)} km/h`) : "",
+      a.category === "ride" && a.avg_power ? watts(a.avg_power) : "",
+    ].filter(Boolean);
+    return parts.length ? `<span class="tile-avg">${parts.join(" · ")}</span>` : "";
+  };
+  const head = (a, small) => `
       <div class="tile-head">
         <span class="tile-icon">${typeIcon(a.activity_type)}</span>
-        <span class="tile-title"><b>${esc(a.name || typeLabel(a.activity_type))}${a.segment_count && mode !== "large" ? ` ${segBadge(a)}` : ""}</b>
-        <span class="hint">${a.name ? `${esc(typeLabel(a.activity_type))} · ` : ""}${localTime(a)}${workoutOf(a) ? ` · ${esc(workoutLabel(workoutOf(a)))}` : ""}${isAll ? ` · ${esc(personLabel(a.person_id))}` : ""}</span></span>
-      </div>
+        <span class="tile-title"><b>${esc(a.name || typeLabel(a.activity_type))}</b>
+        <span class="hint">${a.name ? `${esc(typeLabel(a.activity_type))} · ` : ""}${localTime(a)}${kind(a) && !small ? ` · ${kind(a)}` : ""}${isAll ? ` · ${esc(personLabel(a.person_id))}` : ""}</span></span>
+        ${small ? `<span class="tile-dist">${a.distance_m ? `<b>${km(a.distance_m)}</b>` : ""}<b>${dur(a.moving_s)}</b></span>` : ""}
+      </div>`;
+  const tile = (a) => (mode === "small" ? `
+    <a class="tile small" href="#/activity/${a.id}">
+      <div class="tile-map"><div class="tile-top">${kind(a) ? `<span class="tile-kind">${kind(a)}</span>` : "<span></span>"}${tileAverages(a)}${a.segment_count ? segBadge(a, "tile-seg") : "<span></span>"}</div>${a.tile_chart ? tileChart(a.tile_chart) : `<span class="tile-sport">${typeIcon(a.activity_type, 64)}</span>`}</div>
+      ${head(a, true)}
+    </a>` : `
+    <a class="tile ${mode}" href="#/activity/${a.id}">
+      <div class="tile-map">${a.segment_count ? segBadge(a, "tile-seg") : ""}${a.polyline ? staticMap(a.polyline, { W: 400, H: 160, cls: "tile-track", tiles: "faded-tiles" }) : `<span class="hint">${a.indoor ? "indoor" : "no route"}</span>`}</div>
+      ${head(a, false)}
       <div class="tile-stats">
         ${a.distance_m ? `<span><span class="hint">Distance</span>${km(a.distance_m)}</span>` : ""}
         <span><span class="hint">Time</span>${dur(a.moving_s)}</span>
-        ${mode === "large" && a.distance_m ? `<span><span class="hint">Pace</span>${pace(a.avg_speed)}</span>` : ""}
+        ${a.distance_m ? `<span><span class="hint">Pace</span>${pace(a.avg_speed)}</span>` : ""}
         <span><span class="hint">Avg HR</span>${bpm(a.avg_hr)}</span>
-        ${mode === "large" ? `<span><span class="hint">Ascent</span>${meters(a.ascent_m)}</span>` : ""}
+        <span><span class="hint">Ascent</span>${meters(a.ascent_m)}</span>
       </div>
-    </a>`;
+    </a>`);
 
   const filterCols = columns.filter((c) => c.filter);
   const body = mode === "list"
     ? tableHtml(columns, data.items, params, data.total)
     : `${listBar(columns, params, data.items.length, data.total)}
        <div class="tiles ${mode}" data-rows>${data.items.map(tile).join("") || hint("Nothing matches the filters.")}</div>
-       ${data.items.length < data.total ? `<div class="sentinel" data-sentinel><span class="hint">Loading…</span></div>` : ""}`;
+       ${data.items.length < data.total ? `<div class="sentinel" data-sentinel>${loaderHtml()}</div>` : ""}`;
 
   const showSummary = TAB.kpis ?? false;
   view.innerHTML = `
     ${pageHead("Activities", `
       ${timeBadge(params)}${typeBadge(params)}${workoutBadge(params, data.workout_counts)}
-      ${badgeHtml("options", "Options", "", { panel: `<div class="opt-panel">${row("Tiles", selectCtl("tile-content", [["route", "Route map"], ["pace", "Pace chart"]], tileContent))}
-        <div class="hint" style="margin-top:6px">More chart types (intervals) will follow.</div></div>` })}
       <button class="badge ${showSummary ? "on" : ""}" data-kpis>Summary</button>`,
       switchHtml("view", VIEWS.map(([k, label, icon]) => [k, `${icon}<span>${label}</span>`]), mode))}
     <div data-summary ${showSummary ? "" : "hidden"}>${activitySummary(data.totals)}</div>
@@ -703,10 +798,6 @@ async function renderActivities(params) {
     if (on) window.scrollTo({ top: 0, behavior: "smooth" });
   };
   view.querySelectorAll("[data-switch=view]").forEach((b) => b.onclick = () => { TAB.view = b.dataset.value; renderActivities(params); });
-  view.querySelectorAll("select[name=tile-content]").forEach((sel) => sel.onchange = () => {
-    store.set("tile-content", sel.value);
-    if (mode === "large") renderActivities(params);
-  });
   view.addEventListener("click", async (e) => {
     const b = e.target.closest("[data-delete]");
     if (!b) return;
@@ -748,7 +839,9 @@ const CHART_DEFS = [
 const chartDefault = (key, a) => ["hr", "speed", "altitude"].includes(key) || (a.category === "ride" && ["power", "cadence"].includes(key));
 
 async function renderActivity(id) {
-  const a = await api("activities/" + id + (CURRENT === "all" ? "?neighbours=all" : ""));
+  // Previous / next stay within the filters set on the Activities list (kept for this tab).
+  const nq = { ...filterQuery(TAB.filter || {}), ...(CURRENT === "all" ? { neighbours: "all", ...(TAB.filter?.person ? { person: TAB.filter.person } : {}) } : {}) };
+  const a = await api("activities/" + id + (Object.keys(nq).length ? "?" + new URLSearchParams(nq) : ""));
   // Section lines the person moved (Hills, Intervals): kept per activity for its training type;
   // without them the detected ones (intervals from the server, hills from the altitude line).
   let savedLines = null;
@@ -890,6 +983,34 @@ async function renderActivity(id) {
       ["Min", `${num(Math.min(...v))} %`, "min", "Lowest stamina"]];
     available.splice(pot, 1);
   }
+  // Easy: where the heart rate went over the tempo line: those stretches drawn thick on the heart
+  // rate chart, and an "Above tempo" stat (share and time; hover shows where, on the map too).
+  // Stretches: 30 s or longer, gaps under 20 s joined.
+  function easyAccents() {
+    // the limit: the detection's tempo line (90 % of the sport's threshold HR), so the stat and
+    // the training type agree (Garmin's zone 2 from % of max HR is often far lower)
+    const hr = available.find((q) => q.key === "hr"), lim = a.tempo_hr, t = chartX.time;
+    if (!hr || !lim) return;
+    const v = hr.raw, runs = [];
+    let above = 0, total = 0, run = null;
+    for (let i = 1; i < v.length; i++) {
+      const dt = Math.min(30, t[i] - t[i - 1]);
+      if (v[i] == null || dt <= 0) continue;
+      total += dt;
+      if (v[i] < lim) continue;
+      above += dt;
+      if (run && t[i] - t[run[1]] < 20) run[1] = i; else { if (run) runs.push(run); run = [i, i]; }
+    }
+    if (run) runs.push(run);
+    const long = runs.filter(([i0, i1]) => t[i1] - t[i0] >= 30);
+    if (!total) return;
+    hr.stats.push(["Above tempo", `${num((above / total) * 100)} % · ${clock(above)}`, { ranges: long }, // highlighted like every other stat
+      `Time with the heart rate at the tempo line or over (${num(lim)} bpm, 90 % of your threshold heart rate, the line the training type uses). Hover: where.`]);
+    // one strong colour (zone colours on a red line read badly); the zone is in the value flag
+    if (long.length) hr.climbs = { items: long.map(([i0, i1]) => ({ i0, i1 })), edit: false,
+      label: () => ({ lines: [], color: EASY_OVER_COLOR }),
+      tip: (i0, i1, i) => `<span class="chart-tip-dot" style="background:${EASY_OVER_COLOR}"></span>Above tempo${zoneOf("hr", v[i]) ? ` · Z${zoneOf("hr", v[i])[0]}` : ""} · ${clock(t[i1] - t[i0])} stretch` };
+  }
   // Climbs on the altitude chart (docs/MANUAL.md › Climbs). Hills: lines at the turning points of
   // the profile (a climb's foot or top; wiggles under 12 % of the altitude range, at least 15 m,
   // ignored; without any, the hill repeats the detector stored), values over every climb.
@@ -947,21 +1068,21 @@ async function renderActivity(id) {
   }
   // Interval sections: lines on the speed, heart rate, power and cadence charts; above each chart
   // the section's average (heart rate and power with the zone, speed with the section's time).
+  let zones = null;
+  try { zones = a.zones ? JSON.parse(a.zones) : null; } catch { zones = null; }
+  // zone of a value from Garmin's limits of this activity (as in the zone tiles): [number, colour] or null
+  const zoneOf = (kind, v) => {
+    const b = zones?.[kind]?.bounds;
+    if (!b || v == null) return null;
+    const lowFirst = kind === "hr" || b[0] === 0, his = lowFirst ? b.slice(1) : b;
+    if (lowFirst && v < b[0]) return null;
+    let k = his.findIndex((hi) => v < hi);
+    if (k < 0) k = his.length - 1; // above the last limit: the top zone
+    return [k + 1, rampColor(ROUTE_SCALES[kind].stops, his.length > 1 ? k / (his.length - 1) : 0)];
+  };
   const sections = iv && chartX ? (() => {
     const t = chartX.time, d = chartX.distance;
     const at = [...new Set(iv.splits.map((sec) => t.findIndex((v) => v >= sec)))].filter((i) => i > 0 && i < t.length - 1).sort((p, q) => p - q);
-    let zones = null;
-    try { zones = a.zones ? JSON.parse(a.zones) : null; } catch { zones = null; }
-    // zone of a value from Garmin's limits (as in the zone tiles): [number, colour] or null
-    const zoneOf = (kind, v) => {
-      const b = zones?.[kind]?.bounds;
-      if (!b || v == null) return null;
-      const lowFirst = kind === "hr" || b[0] === 0, his = lowFirst ? b.slice(1) : b;
-      if (lowFirst && v < b[0]) return null;
-      let k = his.findIndex((hi) => v < hi);
-      if (k < 0) k = his.length - 1; // above the last limit: the top zone
-      return [k + 1, rampColor(ROUTE_SCALES[kind].stops, his.length > 1 ? k / (his.length - 1) : 0)];
-    };
     // time-weighted average of samples i0..i1 (samples without a value left out)
     const avg = (v, i0, i1) => {
       let sum = 0, w = 0;
@@ -994,6 +1115,7 @@ async function renderActivity(id) {
     return { kind: "intervals", keys: ["speed", "hr", "power", "cadence"], at, label };
   })() : null;
   const climbs = chartX ? climbSections(workoutOf(a) === "hills") : null;
+  if (chartX && workoutOf(a) === "easy") easyAccents();
   const chartChoice = () => ({ ...(UI.data["activity-charts"] || {}) });
   const isShown = (key) => chartChoice()[key] ?? chartDefault(key, a);
   const visibleSeries = () => available.filter((x) => isShown(x.key));
@@ -1310,6 +1432,7 @@ async function renderActivity(id) {
     charts = chartGroup(chartsEl, {
       x: chartX, kind: xKind, series: visibleSeries(), sections: [sections, climbs].filter(Boolean),
       onHover: (i) => route && routeHover(route, i),
+      onRanges: (r) => route?.highlight?.(r), // a stat's stretches on the map too
       // Dragged into a new order: kept per person, like the chart list.
       onOrder: (keys) => {
         const all = [...keys, ...available.map((x) => x.key).filter((k) => !keys.includes(k))];
@@ -1683,6 +1806,8 @@ const ROUTE_SCALES = {
 // Bikes and long activities: a marker every 5 km, otherwise every km.
 const routeKmStep = (a) => (a.category === "ride" || (a.distance_m || 0) >= 40000 ? 5 : 1);
 const ROUTE_ICON = { speed: "speed", hr: "avg_heart_rate", power: "power", cadence: "cadence", altitude: "altitude", surface: "route", intervals: "interval_time" };
+// Easy's time above the tempo line on the heart rate chart: a colour that stands out on the red line.
+const EASY_OVER_COLOR = "#b42318";
 // Climb categories (docs/MANUAL.md › Climbs): the cycling scale - length × grade, which is the
 // gain × 100 - at least 3 % over 500 m, for every sport; on foot also "Hill" below Cat 4.
 const CLIMB_CATS = [["HC", 800, "#7b2d8e"], ["Cat 1", 640, "#c2252d"], ["Cat 2", 320, "#e4572e"], ["Cat 3", 160, "#ee8a1f"], ["Cat 4", 80, "#c79a00"]];
@@ -3164,8 +3289,14 @@ function setHeaderHeight() {
 }
 window.addEventListener("resize", setHeaderHeight, { passive: true });
 
+let pageLoader = null;
 async function route() {
   clearTimeout(timer);
+  // A page that takes long (over 0,4 s) shows the cyclist meanwhile; only while the old page is
+  // still there (a page that started drawing itself is left alone).
+  clearTimeout(pageLoader);
+  const shown = view.firstElementChild;
+  pageLoader = setTimeout(() => { if (view.firstElementChild === shown) view.innerHTML = `<div class="card page-loader">${loaderHtml()}</div>`; }, 400);
   stopObservers();
   disposeMap();
   document.body.classList.remove("fullmap");
@@ -3207,11 +3338,22 @@ async function route() {
     if (head) document.documentElement.style.setProperty("--head-h", head.offsetHeight + "px");
   } catch (e) {
     view.innerHTML = `<div class="card">${state("Error: " + esc(e.message), "bad")}</div>`;
+  } finally {
+    clearTimeout(pageLoader);
   }
 }
 
 applyAccent();
 window.addEventListener("hashchange", route);
+// On an activity the arrow keys press the header buttons: ← the left one (Next, newer),
+// → the right one (Previous, older). Not while typing or with a modifier key.
+document.addEventListener("keydown", (e) => {
+  if (!["ArrowLeft", "ArrowRight"].includes(e.key) || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+  if (!location.hash.startsWith("#/activity/") || e.target.closest?.("input, textarea, select, [contenteditable=true], .maplibregl-map")) return;
+  const label = e.key === "ArrowLeft" ? "Next" : "Previous";
+  const b = [...view.querySelectorAll(".page-head .switch button[data-go]")].find((x) => x.textContent.trim() === label);
+  if (b) { e.preventDefault(); location.hash = b.dataset.go; }
+});
 // Pages in training.js are loaded after this file; start once every script is in.
 if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", route);
 else route();

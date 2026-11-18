@@ -100,7 +100,18 @@ performance condition, stamina and potential stamina. Streams without data are n
   purple), with a tag above its highest point: gain and class in that colour, length, time.
   Hovering a climb shows a circle at both ends; dragging one changes the range, the tag
   recomputes. Not saved: a new visit shows the detected climbs again.
+- **Easy** (training type): on the heart rate chart the stretches at or over the tempo line (90 %
+  of the sport's threshold HR, the line the training type detection uses; 30 s or longer, gaps
+  under 20 s joined) are drawn thick in one dark red (#b42318; zone colours read badly on the red
+  line). The value flag over such a stretch adds "Above tempo · Z4 · 6:12 stretch" (Garmin's zone
+  of the value under the cursor, the stretch's time). The side column gets **Above tempo** (share
+  of the time with heart rate and the time); hovering it highlights the stretches like every
+  other stat (series colour), on the map too.
 - Hovering Max/Min draws a large dot with its value in a small label.
+- **Stats on the map too**: hovering a stat that marks something on the chart shows it on the
+  route map as well — a point (Max, Min) as the map's dot, stretches (Max 20 min / 1 h, Ascent,
+  Descent, Steepest and Longest climb, In target, Above tempo) as the amber highlight, the same one
+  best efforts and surface kinds use. A stat that is only a value (Avg, NP, Steps…) marks nothing.
 - **Road surface** (from OpenStreetMap, see SPEC): a hatched strip along the bottom of the
   altitude chart (or the first chart) — paved solid grey, gravel dotted, dirt diagonal
   stripes; unknown is not drawn — and one pill per kind in the side column (share of the

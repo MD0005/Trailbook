@@ -90,8 +90,11 @@ def test_activity_endpoints_on_sample_data(tmp_path):
 
     listing = client.get("/api/activities?limit=5").json()
     assert listing["total"] > 0 and len(listing["items"]) <= 5
-    charted = client.get("/api/activities?limit=3&chart=pace").json()["items"]
-    assert all("speed_series" in a and len(a["speed_series"]) <= 48 for a in charted)
+    # Charts view: a small chart per tile (tilechart.py), its kind by the training type
+    charted = client.get("/api/activities?limit=3&chart=chart").json()["items"]
+    kinds = {"blocks", "altitude", "track", "speed"}
+    assert all("tile_chart" in a for a in charted)
+    assert all(a["tile_chart"] is None or a["tile_chart"]["kind"] in kinds for a in charted)
     totals = listing["totals"]
     assert 0 < totals["active_days"] <= totals["count"]
     assert totals["longest_m"] <= totals["distance_m"] and totals["first"] <= totals["last"]
@@ -166,3 +169,10 @@ def test_activity_list_workout_filter_and_neighbours(setup):
     assert (a["prev_id"], a["next_id"]) == (1, 3)
     a = client.get("/api/activities/3").json()
     assert (a["prev_id"], a["next_id"]) == (2, None)
+    # previous / next stay within the list's filters
+    a = client.get("/api/activities/1?workouts=tempo").json()
+    assert (a["prev_id"], a["next_id"]) == (None, 2)
+    a = client.get("/api/activities/3?from=2026-01-02&to=2026-01-03").json()
+    assert (a["prev_id"], a["next_id"]) == (2, None)
+    a = client.get("/api/activities/2?from=2026-01-02").json()
+    assert (a["prev_id"], a["next_id"]) == (None, 3)

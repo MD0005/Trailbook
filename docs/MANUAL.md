@@ -173,6 +173,19 @@ Checked after Intervals, before Hills, Long, Tempo. All conditions must hold:
   rides and solo efforts with high power but a moderate heart rate out (they become Tempo or
   Long); a hot treadmill run has the heart rate of a race but not the intensity.
 
+## Easy on the charts (above the tempo line)
+
+**Limit** = the tempo line of the training type detection: 90 % of the sport's threshold HR
+(threshold HR from the watch, else 90 % of max HR; × the sport's share, e.g. cycling 0,95). The
+same line decides Tempo, so the stat and the training type never disagree. Garmin's zones are not
+used here: they are often set from % of max HR, and their zone 2 ends far lower (e.g. 136 bpm
+with max HR 191, while the tempo line at threshold HR 173 is 156 bpm), so an easy run would show
+"90 % above Z2".
+
+**Above tempo** = time with heart rate ≥ the limit ÷ time with heart rate (samples weighted by
+the time to the previous one, at most 30 s). Drawn thick: stretches at or over the limit at least
+30 s long, gaps under 20 s joined.
+
 ## Climbs (lines on the altitude chart)
 
 Computed in the page from the altitude line of the charts (`climbSections`, `climbCategory` in
