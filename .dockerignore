@@ -1,0 +1,5 @@
+*
+!backend/pyproject.toml
+!backend/src/
+**/__pycache__
+**/*.egg-info

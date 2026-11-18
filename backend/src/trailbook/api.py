@@ -1059,11 +1059,15 @@ def create_app(db_path: str | Path) -> Starlette:
         )
 
     async def upload(request: Request):
-        """Raw body upload of one .zip or .fit for a chosen person (one-time import)."""
+        """Raw body upload of one activity file or ZIP for a chosen person (one-time import).
+
+        FIT, GPX and TCX (also .gz) and ZIPs of them: Garmin and Strava exports."""
         pid = request.query_params.get("person", "")
         name = Path(request.query_params.get("name", "")).name
-        if not name.lower().endswith((".zip", ".fit")):
-            raise HTTPException(400, "only .zip or .fit files can be uploaded")
+        if not name.lower().endswith((".zip", *importer.ACTIVITY_SUFFIXES)):
+            raise HTTPException(
+                400, "only .zip, .fit, .gpx or .tcx files (also .gz) can be uploaded"
+            )
         with closing(conn()) as c:
             if (
                 pid == importer.UNASSIGNED
@@ -1074,6 +1078,10 @@ def create_app(db_path: str | Path) -> Starlette:
         stamp = importer.now_iso().replace(":", "").replace("-", "")
         target = uploads_dir / re.sub(r"[^A-Za-z0-9._-]+", "_", pid) / f"{stamp}-{safe}"
         target.parent.mkdir(parents=True, exist_ok=True)
+        n = 1
+        while target.exists():  # several files with one name in the same second
+            n += 1
+            target = target.with_name(f"{stamp}-{n}-{safe}")
         size = 0
         with target.open("wb") as fh:
             async for chunk in request.stream():

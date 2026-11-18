@@ -241,6 +241,9 @@ class ParsedActivity:
     laps: list[Lap] = field(default_factory=list)
     # Thresholds the watch used for this activity (see `watch_thresholds`).
     profile: dict[str, float | None] = field(default_factory=dict)
+    # A title the user gave the activity (GPX/TCX, Strava); FIT files have none.
+    title: str | None = None
+    description: str | None = None
 
 
 def _first(d: dict, *keys):

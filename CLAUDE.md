@@ -1,6 +1,9 @@
 # Trailbook — notes for Claude
 
 - **Git:** always work on `main` and commit directly to `main`. No feature branches, no PRs.
+- **Add-on release:** a commit that should reach Home Assistant bumps `version` in
+  `trailbook/config.yaml` (patch: `0.1.0` → `0.1.1`); CI builds the images only for a new
+  version. Never edit a released migration — append a new one (`db.MIGRATIONS`).
 - Talk to the owner in Polish; code, comments, docs and UI strings are English (PL via translations).
 - Target hardware: Home Assistant Yellow (Raspberry Pi CM4, aarch64). Every dependency must
   have prebuilt aarch64 wheels or be pure Python. No pandas/pyarrow/numpy-heavy stacks in

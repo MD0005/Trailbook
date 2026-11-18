@@ -1,6 +1,9 @@
 """Trailbook — self-hosted training log."""
 
-__version__ = "0.1.0"
+import os
+
+# The add-on image sets its version, so the UI shows which update is running.
+__version__ = os.environ.get("TRAILBOOK_VERSION") or "0.1.0"
 
 # Bump when the importer starts producing different or additional data,
 # so older activities can be reprocessed.

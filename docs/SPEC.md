@@ -149,6 +149,24 @@ with the Wellbeing stage, the full set of lifestyle data (steps, sleep, stress, 
    "assign by watch" is chosen), automatic folder scan. Scheduled runs happen in folder and
    Garmin mode (never for uploads).
 
+**Other sources** (Settings › General, a card shown whatever the data connection is): one-time
+imports of history kept elsewhere, uploaded for a chosen person through the same
+`POST /api/uploads`, one file after another (several files can be picked; the running import
+picks up files that arrive meanwhile). Today: **Strava** — the bulk export ZIP or single
+files. Formats read everywhere (folder, ZIPs, uploads): `.fit`, `.gpx`, `.tcx`, each also
+gzipped (`.gz`); the content decides the parser (`trackfile.kind`), not the name.
+- GPX/TCX (`trackfile.py`): time, position, altitude, distance (TCX; summed from positions in
+  GPX), heart rate, cadence (doubled on foot like FIT), power, temperature, speed (TCX; else
+  over a 5 s window); TCX laps, calories and totals; title (GPX `name`, TCX `Notes`), sport
+  (GPX `type`, TCX `Sport`). Ascent/descent from altitude with a 3 m dead band.
+- Strava ZIP (`strava.py`): `activities.csv` gives each file its title, description
+  (`activities.description`) and — for GPX/TCX without a sport — the Strava type; totals the
+  file lacks (calories, power) are taken from it. Activities entered by hand on Strava have
+  only a CSV row: imported as activities without a route (file row `activities.csv#<id>`,
+  id `strava:<id>`). Photos and other files in the ZIP are ignored.
+- No time zone in GPX/TCX/CSV: estimated (see `MANUAL.md` › Imported files without a time zone).
+- Duplicates: see 5.3.
+
 **One archive for every source** (unified on the Garmin API model): every file Trailbook
 reads is kept in `uploads/` next to the database. Garmin downloads and uploads are saved there
 directly; files of the watched folder are copied there after the scan (phase `archive` of the
@@ -236,6 +254,9 @@ Three keys, from cheap to strong:
 2. `sha256` of the file — the same file under a different name.
 3. FIT `file_id` (`serial_number` + `time_created`, fallback: first `record` timestamp + sport)
    — the same activity exported twice. Second occurrence → `duplicate`.
+4. GPX/TCX and manual Strava activities have no watch id (`gpx:<start>:<points>`,
+   `tcx:…`, `strava:<id>`): one that starts within 120 s of an activity the person already
+   has is a `duplicate` of it (a Strava copy of a watch activity imported from Garmin).
 
 ### 5.4 Statuses (`files.status`)
 | Status | Meaning |
@@ -284,8 +305,8 @@ Each file goes through stages. Each stage writes its own table.
 | 7 | Best efforts | Power / pace / HR bests in `best_efforts`. |
 | 8 | Load | Training load on the activity; `daily_load` recomputed from that date on. |
 
-**Activity name** = the Garmin Connect title (`activityName`, kept in `garmin_activities`).
-FIT files carry no title, so an activity from a folder or upload has no name and the UI
+**Activity name** = the Garmin Connect title (`activityName`, kept in `garmin_activities`), or
+the title in a GPX/TCX file or Strava's `activities.csv`. FIT files carry no title, so an activity from a folder or upload has no name and the UI
 shows its type. When Garmin later delivers the same activity (imported or duplicate), its
 title replaces the empty name. A name the user set (`name_overridden`) is never replaced.
 
@@ -835,11 +856,28 @@ covers it gets an *effort* with its time; the Segments tab ranks and tracks them
 
 ## 12. Add-on packaging
 
-- Repository layout: `repository.yaml` at root, add-on in `trailbook/`.
-- `config.yaml`: `arch: [aarch64, amd64]`, `ingress: true`, `panel_icon`, `stdin: true`,
-  `map: [share, media, addon_config]`, `image: ghcr.io/<owner>/trailbook-{arch}`.
-- Options: root folder, optional scan interval, log level.
-- GitHub Actions: lint + tests, build frontend, build multi-arch images, publish on tag.
+- Repository layout: `repository.yaml` at root, add-on in `trailbook/` (`config.yaml`,
+  `Dockerfile`, `build.yaml`, `DOCS.md`). The Dockerfile is built from the repository root
+  (`docker build -f trailbook/Dockerfile .`) so it can install `backend/`.
+- `config.yaml`: `arch: [aarch64, amd64]`, `ingress: true` (port 8099, no published port),
+  `panel_icon`, `map: share (rw), media (ro), addon_config (rw)`,
+  `image: ghcr.io/md0005/trailbook-{arch}`. No add-on options yet: everything is set in the UI
+  and stored in the database.
+- Image: HA `base-python` (Alpine), `pip install backend` (pure Python), one process
+  `trailbook serve`; `init: true` reaps the job subprocesses. Environment: `TRAILBOOK_DB=
+  /data/trailbook.db`, `TRAILBOOK_ALLOWED_ROOTS=/share:/media:/config`, `TRAILBOOK_EXPORT_DIR=
+  /share/trailbook-exports`, `TRAILBOOK_VERSION` (= add-on version, shown in the UI).
+- The UI works under Ingress because every URL is relative and routing uses `#`; static files
+  are sent with `Cache-Control: no-cache`, so an update never shows a stale UI.
+- **Shipping a change:** commit to `main` with a bumped `version` in `trailbook/config.yaml`.
+  GitHub Actions (`.github/workflows/addon.yml`) runs lint + tests on every push and builds both
+  images only when that version is not on GHCR yet. When the run is green: HA › Settings ›
+  Add-ons › Add-on store › ⋮ › Check for updates → Update. Commits without a bump are not
+  shipped.
+- Database changes ship by themselves: migrations (`db.MIGRATIONS`) run on start. They only go
+  forward — an older version refuses a newer database — so a rollback is an HA backup of the
+  add-on taken before the update.
+- To do: `hassio.addon_stdin` trigger (5.1), add-on icon/logo.
 - Local development: backend and frontend run on a PC against a sample folder; no HA needed.
 
 ---

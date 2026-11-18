@@ -281,3 +281,24 @@ Every sport. The first method the activity has data for; duration = moving time.
 A changed threshold recomputes all of the person's activities. The ⚠ on the Fitness page:
 resting HR default or HR max from the recordings (not accepted with *Use estimate*), or a
 year using watch values more than 365 days away.
+
+## Imported files without a time zone (GPX, TCX, Strava)
+
+FIT files say how far local time is from UTC; GPX, TCX and Strava's `activities.csv` give UTC
+only. Trailbook picks the offset in this order:
+
+1. The person's activity nearest in time that has an offset, if it is at most 120 days away
+   and in the same summer-time season (EU rule: last Sunday of March to last Sunday of
+   October, 01:00 UTC).
+2. From the start position: `round(longitude / 15)` hours, plus one hour in the summer-time
+   season when the longitude is between −25° and 45° (Europe).
+3. No position (manual Strava activity): the nearest activity's offset, shifted by one hour
+   when the seasons differ.
+4. Nothing known: UTC.
+
+Example: a run in Warsaw (21° E) on 1 June with no Garmin activity nearby → 1 h + 1 h summer
+time = UTC+2.
+
+Limits: countries without summer time or with other rules east of 45° get the plain
+longitude estimate; places far from their time zone's meridian (e.g. Spain) can be an hour
+off. The time can be corrected only by editing the file today.

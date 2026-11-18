@@ -211,14 +211,15 @@ const hint = (text) => `<div class="hint">${text}</div>`;
 
 // File input with the same look as the other buttons; the native input stays (hidden), so
 // `input.files` works as before.
-const filePicker = (name, accept) => `<span class="file-pick"><input type="file" name="${name}" accept="${accept}" hidden><button type="button" data-file-pick>Choose file…</button><span class="hint" data-file-name></span></span>`;
+const filePicker = (name, accept, multiple = false) => `<span class="file-pick"><input type="file" name="${name}" accept="${accept}" ${multiple ? "multiple" : ""} hidden><button type="button" data-file-pick>${multiple ? "Choose files…" : "Choose file…"}</button><span class="hint" data-file-name></span></span>`;
 document.addEventListener("click", (e) => {
   const b = e.target.closest("[data-file-pick]");
   if (b) b.parentElement.querySelector("input[type=file]").click();
 });
 document.addEventListener("change", (e) => {
   if (!e.target.matches(".file-pick input[type=file]")) return;
-  e.target.parentElement.querySelector("[data-file-name]").textContent = e.target.files[0]?.name || "";
+  const files = e.target.files;
+  e.target.parentElement.querySelector("[data-file-name]").textContent = files.length > 1 ? `${num(files.length)} files` : files[0]?.name || "";
 });
 const state = (text, kind = "") => `<span class="state ${kind}">${text}</span>`;
 
@@ -1229,6 +1230,7 @@ async function renderActivity(id) {
         ${badgeHtml("edit", "Edit", "", { panel: editPanel })}${track ? `<div class="badge-wrap"><button class="badge" data-go="#/segments/new/activity?id=${id}&from=activity">Create segment</button></div>` : ""}</div><span class="spacer"></span>
       ${prevNextHtml(a.prev_id && `#/activity/${a.prev_id}`, a.next_id && `#/activity/${a.next_id}`)}</div>
     <div class="act-top" data-top></div>
+    ${a.description ? `<div class="card act-description">${esc(a.description)}</div>` : ""}
     ${track ? `<div class="card route-card"><div class="card-head"><h3 class="tile-title">${metricIcon("route", 18)}<span>Route</span></h3><span class="spacer"></span>
         <div class="badges">${badgeHtml("route-color", "Data", routeModeLabel(mode), { panel: `<div class="opt-panel">${pickList("route-color", ROUTE_MODES.map(([k, l]) => [k, l]), mode, () => "", routeModeIcon)}</div>`, right: true })}
         ${badgeHtml("route-km", "Markers", kmOn ? `Every ${routeKmStep(a)} km` : "None", { panel: `<div class="opt-panel">${pickList("route-km", [["off", "None"], ["on", `Every ${routeKmStep(a)} km`]], kmOn ? "on" : "off")}</div>`, right: true })}</div></div>
@@ -2859,6 +2861,23 @@ async function settingsGeneral(el) {
       <div data-upload-msg style="margin-top:8px"></div>
     </div>`;
 
+  const otherSourcesCard = `
+    <div class="card">
+      <h3>Other sources <span class="title-note">(one-time import, e.g. history from before Garmin)</span></h3>
+      <div class="panel-title">Strava</div>
+      <ol class="plain steps">
+        <li>Strava (web) › Settings › My Account › <b>Download or Delete Your Account</b> › Request your archive.</li>
+        <li>Upload the ZIP from the e-mail, or single .fit, .gpx and .tcx files (also .gz).</li>
+      </ol>
+      <div class="hint">The ZIP also brings titles, descriptions and activities entered by hand. Activities you already have are skipped.</div>
+      <div class="upload-row">
+        <select name="strava-person"><option value="">Choose a person…</option>${people.map((p) => `<option value="${esc(p.id)}">${esc(p.label)}</option>`).join("")}</select>
+        ${filePicker("strava-files", ".zip,.fit,.gpx,.tcx,.gz", true)}
+        <button class="primary" data-strava-upload>Upload and import</button>
+      </div>
+      <div data-strava-msg style="margin-top:8px"></div>
+    </div>`;
+
   const GSTATE = { new: ["not tested", "warn"], ok: ["connected", "ok"], error: ["paused", "warn"], auth_error: ["key refused", "bad"] };
   const garminRow = (p) => {
     const a = accounts[p.id];
@@ -2931,6 +2950,7 @@ async function settingsGeneral(el) {
       <span data-source-msg></span>
     </div>
     ${source === "folder" ? folderCards : source === "upload" ? uploadCard : garminCard}
+    ${otherSourcesCard}
     <div class="card">
       <h3>Road surface <span class="title-note">(from OpenStreetMap: the route's area is sent to a public map server)</span></h3>
       ${choice("surface_mode", "open", s.surface_mode, "When an activity is opened", "The first visit can take a few minutes.")}
@@ -3028,6 +3048,19 @@ async function settingsGeneral(el) {
       out.innerHTML = state("Started — progress in Settings › Imported", "ok");
     } catch (e) { out.innerHTML = state(esc(e.message), "bad"); }
   };
+  const sup = el.querySelector("[data-strava-upload]");
+  sup.onclick = async () => {
+    const out = el.querySelector("[data-strava-msg]");
+    const pid = el.querySelector("[name=strava-person]").value;
+    const files = [...el.querySelector("[name=strava-files]").files];
+    if (!pid || !files.length) { out.innerHTML = state("Choose a person and files", "warn"); return; }
+    sup.disabled = true;
+    try {
+      const r = await uploadFiles(pid, files, out);
+      out.innerHTML = state(`Uploaded · ${num(r.queued)} activities queued${r.failed ? ` · ${num(r.failed)} files refused` : ""} — progress in Settings › Imported`, r.failed ? "warn" : "ok");
+    } catch (e) { out.innerHTML = state(esc(e.message), "bad"); }
+    sup.disabled = false;
+  };
   const up = el.querySelector("[data-upload]");
   if (up) up.onclick = async () => {
     const out = el.querySelector("[data-upload-msg]");
@@ -3042,6 +3075,24 @@ async function settingsGeneral(el) {
     } catch (e) { out.innerHTML = state(esc(e.message), "bad"); }
     up.disabled = false;
   };
+}
+
+// Upload files one after another; the import job picks up each one as it arrives.
+async function uploadFiles(pid, files, out) {
+  let queued = 0, failed = 0;
+  for (const [i, file] of files.entries()) {
+    out.innerHTML = state(files.length > 1
+      ? `Uploading ${num(i + 1)} of ${num(files.length)}: ${esc(file.name)}…`
+      : `Uploading ${esc(file.name)} (${num(file.size / 1048576, 1)} MB)…`);
+    try {
+      const r = await api(`uploads?${new URLSearchParams({ person: pid, name: file.name })}`, { method: "POST", body: file, headers: {} });
+      queued += r.queued;
+    } catch (e) {
+      failed++;
+      if (files.length === 1) throw e;
+    }
+  }
+  return { queued, failed };
 }
 
 async function settingsPeople(el) {

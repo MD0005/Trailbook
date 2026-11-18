@@ -37,7 +37,7 @@ MANIFEST = "manifest.json"
 DB_NAME = "trailbook.db"
 CHUNK = 1 << 20
 EXPORT_RE = re.compile(r"^trailbook-export-[0-9A-Za-z_.-]+\.zip$")
-FILE_SUFFIXES = (".fit", ".zip")
+FILE_SUFFIXES = (".fit", ".zip", ".gz", ".gpx", ".tcx")
 # Machine-specific or transient settings that must not move with the database.
 TRANSIENT_SETTINGS = ("import_progress",)
 

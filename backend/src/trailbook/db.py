@@ -419,6 +419,10 @@ MIGRATIONS: list[str] = [
     """
     ALTER TABLE activities ADD COLUMN section_lines TEXT;
     """,
+    # v23 — description of an activity (Strava export); NULL = none.
+    """
+    ALTER TABLE activities ADD COLUMN description TEXT;
+    """,
 ]
 
 SCHEMA_VERSION = len(MIGRATIONS)

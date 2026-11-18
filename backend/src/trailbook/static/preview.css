@@ -501,6 +501,7 @@ header .brand .logo { width: 24px; height: 24px; color: var(--accent); }
 /* File picker: a normal button plus the chosen file name (the native input is hidden). */
 .file-pick { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
 .file-pick button { border: 1px solid var(--line); background: var(--surface); }
+.act-description { white-space: pre-line; }
 .file-pick [data-file-name] { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 260px; }
 /* Settings › People: the "add person" row stands apart from the table. */
 .add-row { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line); }

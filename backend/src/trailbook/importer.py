@@ -9,10 +9,10 @@ import sqlite3
 import zipfile
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from . import IMPORTER_VERSION, db, explorer, fitfile, geo, sports, streams
+from . import IMPORTER_VERSION, db, explorer, fitfile, geo, sports, strava, streams, trackfile
 
 TRACK_TOLERANCE_M = 5.0
 
@@ -38,6 +38,12 @@ DATA_SOURCES = ("folder", "upload", "garmin")
 UPLOADS_PREFIX = "@uploads/"
 FOLDER_ARCHIVE = "_folder"
 UNASSIGNED = "_unassigned"
+
+# Files read in folders, ZIPs and uploads: FIT, GPX and TCX, also gzipped (Strava exports).
+ACTIVITY_SUFFIXES = trackfile.ACTIVITY_SUFFIXES
+# A GPX/TCX/manual activity that starts this close to one the person already has is the
+# same one (e.g. a Strava copy of a watch activity imported from Garmin).
+SAME_START_S = 120
 
 # Statuses that describe a finished outcome for a file.
 DONE_STATUSES = ("imported", "skipped", "duplicate")
@@ -107,24 +113,20 @@ def _file_entries(
     root: Path, full: str, name: str, person_id: str, result: ScanResult
 ) -> Iterator[_Entry]:
     lower = name.lower()
-    if not (lower.endswith(".fit") or lower.endswith(".zip")):
+    if not lower.endswith((*ACTIVITY_SUFFIXES, ".zip")):
         return
     st = os.stat(full)
     rel = Path(full).relative_to(root).as_posix()
-    if lower.endswith(".fit"):
-        yield _Entry(person_id, rel, "", st.st_size, st.st_mtime)
-    else:
+    if lower.endswith(".zip"):
         yield from _zip_entries(full, person_id, rel, st, result)
+    else:
+        yield _Entry(person_id, rel, "", st.st_size, st.st_mtime)
 
 
 def _zip_entries(full: str, person_id: str, rel: str, st: os.stat_result, result: ScanResult):
     try:
         with zipfile.ZipFile(full) as zf:
-            members = [
-                i.filename
-                for i in zf.infolist()
-                if not i.is_dir() and i.filename.lower().endswith(".fit")
-            ]
+            members = zip_members(zf)
     except (zipfile.BadZipFile, OSError):
         result.ignored.append(rel)
         return
@@ -341,6 +343,20 @@ def backfill_watch(
     return len(rows)
 
 
+def zip_members(zf: zipfile.ZipFile) -> list[str]:
+    """Activities in a ZIP: activity files (Garmin or Strava export, a ZIP of files) and
+    the manual activities of a Strava export's activities.csv."""
+    files = [
+        i.filename for i in zf.infolist()
+        if not i.is_dir() and i.filename.lower().endswith(ACTIVITY_SUFFIXES)
+    ]  # fmt: skip
+    try:
+        manual = strava.manual_members(strava.read_zip(zf))
+    except (KeyError, UnicodeError, ValueError):
+        manual = []
+    return sorted(files + manual)
+
+
 def read_file_bytes(
     root: Path | None, rel_path: str, zip_member: str, uploads_dir: Path | None = None
 ) -> bytes:
@@ -354,8 +370,16 @@ def read_file_bytes(
         path = root / rel_path
     if zip_member:
         with zipfile.ZipFile(path) as zf:
-            return zf.read(zip_member)
-    return path.read_bytes()
+            data = zf.read(zip_member)
+    else:
+        data = path.read_bytes()
+    return trackfile.gunzip(data)
+
+
+def _file_path(rel: str, root: Path | None, uploads_dir: Path | None) -> Path | None:
+    if rel.startswith(UPLOADS_PREFIX):
+        return uploads_dir / rel[len(UPLOADS_PREFIX) :] if uploads_dir else None
+    return root / rel if root else None
 
 
 def _store_tiles(conn: sqlite3.Connection, activity_id: int, lats: list, lons: list) -> int:
@@ -404,15 +428,12 @@ def backfill_tiles(conn: sqlite3.Connection, progress=None) -> int:
 
 
 def register_upload(conn: sqlite3.Connection, uploads_dir: Path, person_id: str, path: Path) -> int:
-    """Queue an uploaded .fit or .zip (already saved under `uploads_dir`) for `person_id`."""
+    """Queue an uploaded activity file or ZIP (already saved under `uploads_dir`)."""
     rel = UPLOADS_PREFIX + path.relative_to(uploads_dir).as_posix()
     st = path.stat()
     if path.suffix.lower() == ".zip":
         with zipfile.ZipFile(path) as zf:
-            members = sorted(
-                i.filename for i in zf.infolist()
-                if not i.is_dir() and i.filename.lower().endswith(".fit")
-            )  # fmt: skip
+            members = zip_members(zf)
     else:
         members = [""]
     stamp = now_iso()
@@ -434,19 +455,27 @@ def run_queue(
 ) -> ImportResult:
     """Process all files with status `new`, oldest first, committing after each file."""
     root = Path(root) if root else None
-    rows = conn.execute(
-        "SELECT * FROM files WHERE status = 'new' ORDER BY mtime, rel_path, zip_member"
-    ).fetchall()
-    if limit is not None:
-        rows = rows[:limit]
-
     result = ImportResult()
-    for i, row in enumerate(rows, start=1):
-        outcome = import_file(conn, root, row, uploads_dir)
-        setattr(result, _RESULT_FIELD[outcome], getattr(result, _RESULT_FIELD[outcome]) + 1)
-        if progress:
-            progress(i, len(rows), row, outcome)
-    return result
+    done: set[int] = set()
+    # Files uploaded while the queue runs are picked up in another round.
+    while True:
+        rows = [
+            r for r in conn.execute(
+                "SELECT * FROM files WHERE status = 'new' ORDER BY mtime, rel_path, zip_member"
+            ).fetchall()
+            if r["id"] not in done
+        ]  # fmt: skip
+        if limit is not None:
+            rows = rows[: max(0, limit - len(done))]
+        if not rows:
+            return result
+        offset = len(done)
+        for i, row in enumerate(rows, start=offset + 1):
+            done.add(row["id"])
+            outcome = import_file(conn, root, row, uploads_dir)
+            setattr(result, _RESULT_FIELD[outcome], getattr(result, _RESULT_FIELD[outcome]) + 1)
+            if progress:
+                progress(i, offset + len(rows), row, outcome)
 
 
 _RESULT_FIELD = {
@@ -493,12 +522,24 @@ def _import_file(
     conn: sqlite3.Connection, root: Path | None, row: sqlite3.Row, uploads_dir: Path | None
 ) -> str:
     file_id = row["id"]
+    csv_row = _strava_row(row, root, uploads_dir)
+    if strava.is_manual(row["zip_member"]):
+        if csv_row is None:
+            return _set_status(conn, file_id, "error", error="row missing in activities.csv")
+        try:
+            parsed = strava.manual_activity(csv_row)
+        except trackfile.TrackFileError as exc:
+            return _set_status(conn, file_id, "skipped", skip_reason=str(exc))
+        sha = hashlib.sha256(f"strava:{csv_row.activity_id}".encode()).hexdigest()
+        return _store_other(conn, row, parsed, sha)
     try:
         data = read_file_bytes(root, row["rel_path"], row["zip_member"], uploads_dir)
-    except (OSError, KeyError, zipfile.BadZipFile) as exc:
+    except (OSError, KeyError, zipfile.BadZipFile, trackfile.TrackFileError) as exc:
         return _set_status(conn, file_id, "error", error=f"cannot read file: {exc}")
 
     sha = hashlib.sha256(data).hexdigest()
+    if trackfile.kind(data) in ("gpx", "tcx"):
+        return _import_track_file(conn, row, data, sha, csv_row)
     fid = fitfile.peek_file_id(data)
     person_id = _resolve_person(conn, row, fid)
 
@@ -547,6 +588,8 @@ def _import_file(
             activity_id=existing["id"],
         )  # fmt: skip
 
+    if csv_row is not None:
+        strava.apply(parsed, csv_row, from_file_only=False)
     conn.execute("BEGIN")
     try:
         activity_id = _store_activity(
@@ -562,6 +605,125 @@ def _import_file(
         conn.execute("ROLLBACK")
         raise
     return "imported"
+
+
+def _strava_row(row: sqlite3.Row, root: Path | None, uploads_dir: Path | None) -> strava.Row | None:
+    """The activities.csv row of a file inside a Strava export ZIP."""
+    if not row["zip_member"]:
+        return None
+    path = _file_path(row["rel_path"], root, uploads_dir)
+    return strava.rows_of(path).get(row["zip_member"]) if path else None
+
+
+def _import_track_file(
+    conn: sqlite3.Connection, row: sqlite3.Row, data: bytes, sha: str,
+    csv_row: strava.Row | None,
+) -> str:  # fmt: skip
+    """A GPX or TCX file. It has no watch serial, so the file row's person owns it."""
+    file_id = row["id"]
+    twin = conn.execute(
+        f"""SELECT status, skip_reason, activity_id FROM files
+            WHERE sha256 = ? AND id != ? AND status IN {DONE_STATUSES}
+            ORDER BY id LIMIT 1""",
+        (sha, file_id),
+    ).fetchone()
+    if twin is not None:
+        if twin["status"] == "skipped":
+            return _set_status(conn, file_id, "skipped", sha=sha, skip_reason=twin["skip_reason"])
+        return _set_status(conn, file_id, "duplicate", sha=sha, activity_id=twin["activity_id"])
+    try:
+        parsed = trackfile.parse(data)
+    except trackfile.TrackFileError as exc:
+        return _set_status(conn, file_id, "skipped", sha=sha, skip_reason=str(exc)[:200])
+    if csv_row is not None:
+        strava.apply(parsed, csv_row, from_file_only=True)
+    return _store_other(conn, row, parsed, sha)
+
+
+def _store_other(
+    conn: sqlite3.Connection, row: sqlite3.Row, parsed: fitfile.ParsedActivity, sha: str
+) -> str:
+    """Store a GPX/TCX or manual Strava activity, unless the person already has it (same id,
+    or another activity starting within SAME_START_S)."""
+    file_id = row["id"]
+    person_id = row["person_id"]
+    if parsed.utc_offset_s is None:
+        parsed.utc_offset_s = estimate_utc_offset(conn, person_id, parsed)
+    existing = conn.execute(
+        "SELECT id FROM activities WHERE fit_uid = ?", (parsed.fit_uid,)
+    ).fetchone()
+    if existing is not None and existing["id"] != row["activity_id"]:
+        return _set_status(
+            conn, file_id, "duplicate", sha=sha, fit_uid=parsed.fit_uid,
+            activity_id=existing["id"],
+        )  # fmt: skip
+    if existing is None:
+        start = parsed.start_time.astimezone(UTC)
+        same = conn.execute(
+            """SELECT id FROM activities WHERE person_id = ? AND start_time_utc BETWEEN ? AND ?
+               ORDER BY id LIMIT 1""",
+            (person_id, _iso(start - timedelta(seconds=SAME_START_S)),
+             _iso(start + timedelta(seconds=SAME_START_S))),
+        ).fetchone()  # fmt: skip
+        if same is not None:
+            return _set_status(
+                conn, file_id, "duplicate", sha=sha, fit_uid=parsed.fit_uid,
+                activity_id=same["id"],
+            )  # fmt: skip
+
+    conn.execute("BEGIN")
+    try:
+        activity_id = _store_activity(conn, person_id, parsed, existing["id"] if existing else None)
+        _set_status(
+            conn, file_id, "imported", sha=sha, fit_uid=parsed.fit_uid, activity_id=activity_id
+        )
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    return "imported"
+
+
+def _iso(t: datetime) -> str:
+    return t.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def estimate_utc_offset(
+    conn: sqlite3.Connection, person_id: str, p: fitfile.ParsedActivity
+) -> int | None:
+    """GPX/TCX files and Strava's CSV carry no time zone. Taken from the person's activity
+    nearest in time that has one, when it is within 120 days and in the same summer-time
+    season; otherwise from the longitude (+ EU summer time in Europe); then from the nearest
+    activity shifted by the summer-time hour; nothing known → UTC."""
+    start = p.start_time.astimezone(UTC)
+    near = conn.execute(
+        """SELECT utc_offset_s, start_time_utc FROM activities
+           WHERE person_id = ? AND utc_offset_s IS NOT NULL
+           ORDER BY ABS(julianday(start_time_utc) - julianday(?)) LIMIT 1""",
+        (person_id, _iso(start)),
+    ).fetchone()
+    other = None
+    if near is not None:
+        other = datetime.fromisoformat(near["start_time_utc"].replace("Z", "+00:00"))
+        if abs((other - start).days) <= 120 and eu_summer(other) == eu_summer(start):
+            return near["utc_offset_s"]
+    lon = p.summary.get("start_lon")
+    if lon is not None:
+        europe = -25 <= lon <= 45
+        return round(lon / 15) * 3600 + (3600 * eu_summer(start) if europe else 0)
+    if other is not None:
+        return near["utc_offset_s"] + 3600 * (eu_summer(start) - eu_summer(other))
+    return None
+
+
+def eu_summer(t: datetime) -> int:
+    """1 between the last Sundays of March and October (01:00 UTC), as in the EU."""
+
+    def last_sunday(month: int) -> datetime:
+        d = datetime(t.year, month, 31, 1, tzinfo=UTC)
+        return d - timedelta(days=(d.weekday() + 1) % 7)
+
+    return int(last_sunday(3) <= t.astimezone(UTC) < last_sunday(10))
 
 
 def _resolve_person(conn: sqlite3.Connection, row: sqlite3.Row, fid) -> str:
@@ -693,7 +855,10 @@ def _store_activity(
         "category": p.category,
         "activity_type": p.activity_type,
         "indoor": int(p.indoor),
-        "name": None,  # FIT has no title; a Garmin Connect title is set after import
+        # FIT has no title (a Garmin Connect title is set after import); GPX/TCX files
+        # and Strava exports may give one.
+        "name": p.title,
+        "description": p.description,
         "device": p.device,
         "importer_version": IMPORTER_VERSION,
         "analysis_version": 0,  # load and best efforts are computed after import
