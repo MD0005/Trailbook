@@ -604,6 +604,7 @@ All JSON, prefix `/api`. Read endpoints accept `person`, `from`, `to`, `category
 | POST | `/import/files/{id}/retry` | Retry an errored file. |
 | POST | `/import/files/{id}/dismiss` | Acknowledge a missing file, keep data. |
 | GET | `/tiles/...` | Map tile / style / glyph proxy with disk cache. |
+| GET | `/ha/records` | What the add-on pushes as `sensor.trailbook_records` (§12a). |
 
 ---
 
@@ -1051,6 +1052,40 @@ workouts* on. Code: `planner.py` (workouts, estimates, text), `icu.py` (key, syn
   add-on taken before the update.
 - To do: `hassio.addon_stdin` trigger (5.1), add-on icon/logo.
 - Local development: backend and frontend run on a PC against a sample folder; no HA needed.
+
+---
+
+## 12a. Record notifications in Home Assistant
+
+- Trailbook decides everything; HA only shows it. After every import run (`records.py`,
+  `cli.cmd_import`) new records become **record events**, and each new event is pushed once as
+  the state of `sensor.trailbook_records` through the Supervisor API
+  (`homeassistant.set_state`). Outside HA nothing is sent; `GET /api/ha/records` shows the
+  latest event.
+- **Record:** a new activity (`activities.records_seen = 0`) that is fully processed (analysis
+  and segments at the current version), started at most **14 days** ago, and took a top-3 place
+  on a list (all time, or this year) by beating a result already there (rank ≤ the list's length
+  without the new activities). Lists: per person, category and best effort (`pace`, `ride`,
+  `power`, `hr`), the longest distance (`longest`, run and ride), and per segment (the faster
+  effort when ridden twice). Each activity is checked once, then `records_seen = 1`; one still
+  unprocessed after 3 days is marked seen without events. Not a record: adding or editing a
+  segment, analysing again, deleting an activity, importing history (older than 14 days), the
+  first results on a list.
+- **Event = one record** (`record_events`, last 100 kept): who, the activity, what, the result,
+  `scope` (`all` when it placed of all time, else `year`), `rank`, the result it beat (`beaten`:
+  value, label, date), `delta_label`, and a ready notification in the style of the other home
+  notifications: `title` (`ALL-TIME RECORD`, `ALL-TIME 2ND BEST`, `2026 RECORD`, `2026 3RD
+  BEST`), `message` (two lines: `Asia · run 5 km · 21:20 (4:16 /km)` / `20 s better than 21:40
+  on 2024-05-01`), `icon` (`mdi:trophy` all-time record, `mdi:trophy-variant-outline` all-time
+  2nd/3rd, `mdi:medal` / `mdi:medal-outline` for this year), `color` `#E8B86D`. English only.
+- **Push:** state = the event id, attributes = the event (about 1 KB). Events go out oldest
+  first, each as its own state change; `pushed_at` is set only when HA accepted it. Events HA
+  missed (restart, away) are sent again every 5 min (`HA_RECORDS_RETRY_S`); one older than
+  2 days is dropped unsent. A pushed state is not restored by an HA restart: the sensor is
+  simply gone until the next record, so a restart never repeats a notification.
+- **In HA** (set up by hand, not shipped): automation *Trailbook - record notification*
+  (`automation.notification_trailbook_record`): state trigger on the sensor (`not_to`
+  unavailable, unknown, 0) → `custom_log_event` with the event's title, message, icon, color.
 
 ---
 

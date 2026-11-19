@@ -570,6 +570,20 @@ MIGRATIONS: list[str] = [
     ALTER TABLE activities RENAME COLUMN moving_s TO time_s;
     ALTER TABLE segment_efforts DROP COLUMN moving_s;
     """,
+    # v35 — record events for Home Assistant (records.py): an activity is checked for new
+    # top-3 places once; everything imported so far counts as checked.
+    """
+    ALTER TABLE activities ADD COLUMN records_seen INTEGER NOT NULL DEFAULT 0;
+    UPDATE activities SET records_seen = 1;
+    CREATE TABLE record_events (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        created_at  TEXT NOT NULL,
+        person_id   TEXT NOT NULL REFERENCES persons(id) ON DELETE CASCADE,
+        activity_id INTEGER NOT NULL REFERENCES activities(id) ON DELETE CASCADE,
+        data        TEXT NOT NULL,              -- the event as JSON (records.refresh)
+        pushed_at   TEXT                        -- sent to Home Assistant (records.publish)
+    );
+    """,
 ]
 
 SCHEMA_VERSION = len(MIGRATIONS)

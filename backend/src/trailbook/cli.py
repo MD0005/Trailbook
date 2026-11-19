@@ -9,7 +9,19 @@ import time
 from contextlib import closing
 from pathlib import Path
 
-from . import __version__, analysis, backup, db, garmin, importer, jobs, segments, sports, workout
+from . import (
+    __version__,
+    analysis,
+    backup,
+    db,
+    garmin,
+    importer,
+    jobs,
+    records,
+    segments,
+    sports,
+    workout,
+)
 
 
 def _set_low_priority() -> None:
@@ -151,6 +163,7 @@ def cmd_scan(conn, args) -> int:
                 )
 
             kinds = workout.backfill(conn, progress=workout_progress)
+            records.refresh_and_publish(conn)  # new top-3 places -> Home Assistant
             if kinds:
                 out(f"Workout kind detected for {kinds} activities.")
             if matched:

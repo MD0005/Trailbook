@@ -36,10 +36,12 @@ from . import (
     explorer,
     fitfile,
     garmin,
+    homeassistant,
     icu,
     importer,
     jobs,
     planner,
+    records,
     scheduler,
     segments,
     sports,
@@ -136,13 +138,8 @@ FILE_TEXT_FILTERS = {
 
 # Best efforts ranked per (kind, key): rk = 1 is the record (lowest time for pace/ride, highest
 # value otherwise; the earliest wins a tie), with when it was set. {where} filters oa (activities).
-# Best efforts plus one computed row per run and ride: the longest distance (kind "longest",
-# key 0, value = the activity's distance in m; higher is better), so it ranks, has records per
-# period and a previous best like every other effort, without being stored.
-EFFORTS_SQL = """(SELECT activity_id, kind, key, value, start_s, end_s FROM best_efforts
-    UNION ALL
-    SELECT id, 'longest', 0, distance_m, 0, elapsed_s FROM activities
-    WHERE distance_m > 0 AND category IN ('run', 'ride'))"""
+# Best efforts plus the longest distance per run and ride (records.EFFORTS_SQL).
+EFFORTS_SQL = records.EFFORTS_SQL
 
 _RECORDS_SQL = f"""SELECT o.kind, o.key, o.value, oa.start_time_utc, oa.utc_offset_s,
            oa.id AS activity_id,
@@ -161,6 +158,9 @@ def _prev_bests(c: sqlite3.Connection, a, where: list[str], params: list) -> dic
         [*params, a["start_time_utc"]],
     ).fetchall()
     return {(r["kind"], r["key"]): r for r in rows}
+
+
+HA_RECORDS_RETRY_S = 300  # how often record events Home Assistant missed are sent again
 
 
 # Time filter `last`: a period ending today, kept relative (a saved link stays "the last 3
@@ -1470,6 +1470,12 @@ def create_app(db_path: str | Path) -> Starlette:
             ]
         return JSONResponse({"kind": kind, "records": [dict(r) for r in rows], "years": years})
 
+    # The latest record event: what the add-on pushes to Home Assistant as
+    # sensor.trailbook_records (records.py).
+    async def ha_records(request: Request):
+        with closing(conn()) as c:
+            return JSONResponse(records.payload(records.latest(c)))
+
     # ---- segments ----------------------------------------------------------------------
 
     EFFORT_COLS = """e.id, e.segment_id, e.activity_id, e.start_time_utc, e.start_s, e.end_s,
@@ -2283,6 +2289,7 @@ def create_app(db_path: str | Path) -> Starlette:
         Route("/api/forecast", forecast),
         Route("/api/stats/totals", stats_totals),
         Route("/api/stats/records", stats_records),
+        Route("/api/ha/records", ha_records),
         Route("/api/workouts", workouts_list),
         Route("/api/workouts", workout_create, methods=["POST"]),
         Route("/api/workouts/order", workouts_order, methods=["PUT"]),
@@ -2370,14 +2377,36 @@ def create_app(db_path: str | Path) -> Starlette:
             except TimeoutError:
                 pass
 
+    # Record events Home Assistant did not get (it was restarting or away): sent again.
+    async def ha_records_loop():
+        while True:
+            await asyncio.sleep(HA_RECORDS_RETRY_S)
+
+            def work():
+                with closing(conn()) as c:
+                    if records.unpushed(c):
+                        records.publish(c)
+
+            try:
+                await run_in_threadpool(work)
+            except Exception:  # noqa: BLE001 - keep the loop alive
+                pass
+
     @asynccontextmanager
     async def lifespan(app):
         sched.start()
         surface_task = asyncio.create_task(surface_loop(), name="trailbook-surface")
         plan_task = asyncio.create_task(plan_loop(), name="trailbook-plans")
+        ha_task = (
+            asyncio.create_task(ha_records_loop(), name="trailbook-ha-records")
+            if homeassistant.available()
+            else None
+        )
         yield
         surface_task.cancel()
         plan_task.cancel()
+        if ha_task:
+            ha_task.cancel()
         await sched.stop()
 
     app = Starlette(

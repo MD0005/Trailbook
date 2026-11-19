@@ -449,3 +449,19 @@ off. The time can be corrected only by editing the file today.
   on either side, so the count of all tiles can differ from an exact boundary by about 1 %
   (more in small regions with long borders). Example: Poland has about 139 000 explorer tiles
   (zoom 14).
+
+## Record notifications (Home Assistant)
+
+- Lists: per person, per category (run, ride, …) and best effort (pace over a distance, ride
+  time over a distance, power and heart rate over a duration, the longest distance), and per
+  segment; each with its 3 best results of all time and of this calendar year (UTC year of
+  the start, like the other year filters). Times: lower is better; power, heart rate and
+  distance: higher is better; a tie goes to the earlier activity.
+- A record needs a result that beat one already on the list: with 2 results on a list a new
+  third is no record, a new first or second is. The difference is to the result it pushed down
+  at that place; for first place that is the old record.
+- One notification per record. It names the all-time place when there is one (adding
+  "2026 record" when the year place is better), else the place of this year.
+- Only activities started in the last 14 days count, so importing history never notifies.
+- Labels use the app's number format: `21:20`, `4:16 /km`, `32,1 km/h`, `310 W`, `12,35 km`,
+  differences `20 s`, `0,4 s` (below 10 s), `1:05` (a minute or more), `10 W`.

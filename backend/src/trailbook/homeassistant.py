@@ -23,22 +23,37 @@ def available() -> bool:
     return bool(os.environ.get("SUPERVISOR_TOKEN"))
 
 
-def _call(service: str, data: dict) -> bool:
+def _request(path: str, data: dict | None = None) -> int | None:
+    """HTTP status of a call to Home Assistant's REST API (POST with `data`, else GET); None
+    without a token or when it did not answer."""
     token = os.environ.get("SUPERVISOR_TOKEN")
     if not token:
-        return False
+        return None
     req = urllib.request.Request(
-        f"{API_URL}/services/persistent_notification/{service}",
-        data=json.dumps(data).encode(),
-        method="POST",
+        f"{API_URL}/{path}",
+        data=None if data is None else json.dumps(data).encode(),
+        method="GET" if data is None else "POST",
         headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
     )
     try:
         with urllib.request.urlopen(req, timeout=TIMEOUT_S) as resp:  # noqa: S310 (fixed host)
-            return 200 <= resp.status < 300
+            return resp.status
+    except urllib.error.HTTPError as exc:
+        return exc.code
     except (urllib.error.URLError, OSError) as exc:
-        log.warning("Home Assistant %s failed: %s", service, exc)
-        return False
+        log.warning("Home Assistant %s failed: %s", path, exc)
+        return None
+
+
+def _call(service: str, data: dict) -> bool:
+    status = _request(f"services/persistent_notification/{service}", data)
+    return status is not None and 200 <= status < 300
+
+
+def set_state(entity_id: str, state: str, attributes: dict) -> bool:
+    """Create or update an entity's state (it lives until Home Assistant restarts)."""
+    status = _request(f"states/{entity_id}", {"state": state, "attributes": attributes})
+    return status is not None and 200 <= status < 300
 
 
 def notify(notification_id: str, title: str, message: str) -> bool:
