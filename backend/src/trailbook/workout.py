@@ -8,7 +8,8 @@ written from both (via /api/types), so it always says what the code does.
 
 Everything is relative to the person: heart rate as a share of the sport's threshold HR, power
 as a share of FTP, and "typical" = the median of the person's own activities of the same
-family (moving power, speed, estimated power, moving time). No fixed bpm or watts.
+family (power and speed while in motion, estimated power, time). No fixed bpm or watts. Times
+and shares of time are the timer time (every recorded sample); there is no motion time.
 
 Order of the rules (the first that fits wins): Commute for walks and hikes, Intervals (or hill
 repeats), Race, Hills, Long, Tempo, Commute for easy rides and skates, Easy.
@@ -63,7 +64,7 @@ class Profile:
     en: str
     types: tuple[str, ...]
     kinds: tuple[str, ...]
-    moving: float | None  # m/s; None = no speed (moving while there is heart rate or power)
+    motion: float | None  # m/s; None = no speed (motion while there is heart rate or power)
     lthr_share: float = 1.0
     long_min: int = 90
     hills: tuple[int, int] | None = None
@@ -81,11 +82,11 @@ def _group(g: str, *without: str) -> tuple[str, ...]:
 RULES: dict[str, float] = {
     # tempo
     "tempo_hr": 0.90,  # "tempo or harder": at least this share of threshold HR
-    "tempo_share": 0.40,  # of the moving time
+    "tempo_share": 0.40,  # of the time
     "tempo_block_min": 12,  # one stretch, dips under it of up to 60 s allowed
     "tempo_share_any": 0.50,  # or this share without the block
     "tempo_ftp": 0.80,  # rides with power: 30 s power at least this share of FTP ...
-    "tempo_ftp_share": 0.50,  # ... for half of the moving time
+    "tempo_ftp_share": 0.50,  # ... for half of the time
     "tempo_ftp_block_min": 15,
     # race
     "race_hr": 0.95,
@@ -95,9 +96,9 @@ RULES: dict[str, float] = {
     "race_typical": 1.03,  # and at least this x their typical
     "race_peer_range": 0.25,  # "similar duration": +-25 %
     "race_days": 365,
-    "race_stops": 1.25,  # elapsed time at most this x moving time
+    "race_stops": 1.25,  # elapsed time at most this x the timer time (few pauses)
     # long
-    "long_median": 1.5,  # x the person's median moving time of the sport
+    "long_median": 1.5,  # x the person's median time of the sport
     # commute
     "commute_hr_share": 0.10,  # under this share of the time at tempo HR or harder ...
     "commute_if": 0.70,  # ... and IF under this (rides with power)
@@ -276,24 +277,24 @@ def otsu(vals: list) -> tuple[float, float, float] | None:
     return out
 
 
-def zone_share(hr: list, moving: list, ref: float, lo: float) -> float | None:
-    xs = [v / ref for v, m in zip(hr, moving, strict=False) if v and m]
+def zone_share(hr: list, motion: list, ref: float, lo: float) -> float | None:
+    xs = [v / ref for v, m in zip(hr, motion, strict=False) if v and m]
     return sum(1 for x in xs if x >= lo) / len(xs) if xs else None
 
 
-def longest_block(sig: list, moving: list, ref: float, lo: float, dip: int = 60) -> int:
+def longest_block(sig: list, motion: list, ref: float, lo: float, dip: int = 60) -> int:
     """Longest stretch (s) with sig/ref >= lo, dips below it of up to `dip` s allowed."""
-    return longest_block_at(sig, moving, ref, lo, dip)[0]
+    return longest_block_at(sig, motion, ref, lo, dip)[0]
 
 
 def longest_block_at(
-    sig: list, moving: list, ref: float, lo: float, dip: int = 60
+    sig: list, motion: list, ref: float, lo: float, dip: int = 60
 ) -> tuple[int, int, int]:
     """`longest_block` and where it is: (seconds, first index, index after the last)."""
     best = cur = below = 0
     out = (0, 0, 0)
     start = 0
-    for i, (v, m) in enumerate(zip(sig, moving, strict=False)):
+    for i, (v, m) in enumerate(zip(sig, motion, strict=False)):
         if not m:
             continue
         if v and v / ref >= lo:
@@ -325,7 +326,7 @@ class Features:
     hr: list
     alt: list
     dist: list
-    moving: list
+    motion: list
     grade: list | None
     epw: list | None
     ll: list | None
@@ -366,27 +367,27 @@ def features(activity_type: str | None, ch: dict[str, list], laps: list | None =
     ll = [
         (a, b) if a is not None and b is not None else None for a, b in zip(lat, lon, strict=True)
     ]
-    thr = prof.moving if prof and prof.moving is not None else None
-    if thr is None or not any(spd):  # no speed (machines): moving while there is HR or power
-        moving = [h is not None or bool(p) for h, p in zip(hr, pw, strict=True)]
+    thr = prof.motion if prof and prof.motion is not None else None
+    if thr is None or not any(spd):  # no speed (machines): motion while there is HR or power
+        motion = [h is not None or bool(p) for h, p in zip(hr, pw, strict=True)]
     else:
-        moving = [
+        motion = [
             (v is not None and v >= thr) or (fam != "run" and p is not None and p > 0)
             for v, p in zip(spd, pw, strict=True)
         ]
     grade = grade_series(dist, alt) if any(alt) and any(dist) else None
     epw = est_power(spd, dist, alt) if fam == "ride" and any(spd) else None
-    has_power = sum(1 for v in pw if v) > 0.5 * max(1, sum(moving))
-    return Features(fam, n, spd, pw, hr, alt, dist, moving, grade, epw, ll if any(ll) else None,
+    has_power = sum(1 for v in pw if v) > 0.5 * max(1, sum(motion))
+    return Features(fam, n, spd, pw, hr, alt, dist, motion, grade, epw, ll if any(ll) else None,
                     has_power)  # fmt: skip
 
 
 def stats(f: Features) -> dict:
-    """Per-activity medians kept for the person's history: moving power, speed, estimated
+    """Per-activity medians kept for the person's history: motion power, speed, estimated
     power (None when there are under 5 minutes of it)."""
 
     def med(sig: list | None) -> float | None:
-        xs = [v for v, m in zip(sig or [], f.moving, strict=False) if m and v]
+        xs = [v for v, m in zip(sig or [], f.motion, strict=False) if m and v]
         return round(stx.median(xs), 2) if len(xs) > 300 else None
 
     return {"p": med(f.pw) if f.has_power else None, "s": med(f.spd), "e": med(f.epw)}
@@ -394,10 +395,10 @@ def stats(f: Features) -> dict:
 
 @dataclass
 class History:
-    """The person's activities of the same group: medians and (id, day, moving s, intensity)
+    """The person's activities of the same group: medians and (id, day, time s, intensity)
     for "best for the duration"."""
 
-    moving: float | None = None
+    time: float | None = None
     power: float | None = None
     speed: float | None = None
     epower: float | None = None
@@ -405,7 +406,7 @@ class History:
 
 
 def history(rows: list) -> History:
-    """`rows`: (id, day, moving_s, workout_stats JSON) of one person and group."""
+    """`rows`: (id, day, time_s, workout_stats JSON) of one person and group."""
     st = [(r[0], r[1], r[2], json.loads(r[3]) if r[3] else {}) for r in rows]
 
     def med(xs: list) -> float | None:
@@ -413,7 +414,7 @@ def history(rows: list) -> History:
         return stx.median(xs) if xs else None
 
     h = History(
-        moving=med([m for _, _, m, _ in st]),
+        time=med([m for _, _, m, _ in st]),
         power=med([s.get("p") for *_, s in st]),
         speed=med([s.get("s") for *_, s in st]),
         epower=med([s.get("e") for *_, s in st]),
@@ -457,7 +458,7 @@ class Bouts:
         return [e - s for s, e in self.bouts]
 
 
-def _hysteresis(sig: list, moving: list, hi: float, lo: float, rules: dict) -> list:
+def _hysteresis(sig: list, motion: list, hi: float, lo: float, rules: dict) -> list:
     bouts, cur = [], None
     for i, v in enumerate(sig):
         if v is None:
@@ -465,7 +466,7 @@ def _hysteresis(sig: list, moving: list, hi: float, lo: float, rules: dict) -> l
                 bouts.append((cur, i))
                 cur = None
             continue
-        if cur is None and v >= hi and moving[i]:
+        if cur is None and v >= hi and motion[i]:
             cur = i
         elif cur is not None and v < lo:
             bouts.append((cur, i))
@@ -494,7 +495,7 @@ def detect(raw: list, f: Features, kind: str, scale: float = 1.0) -> Bouts | Non
     above its recovery. `scale` normalises the signal (HR by the threshold HR)."""
     rules = CHANNEL_RULES[kind]
     sig = rolling_mean([None if v is None else v / scale for v in raw], rules["smooth"])
-    vals = [v for v, m in zip(sig, f.moving, strict=False) if v is not None and m]
+    vals = [v for v, m in zip(sig, f.motion, strict=False) if v is not None and m]
     if len(vals) < 300:
         return None
     o = otsu(vals)
@@ -505,7 +506,7 @@ def detect(raw: list, f: Features, kind: str, scale: float = 1.0) -> Bouts | Non
     # enter a bout a little above the split, leave it a little below; never above the hard
     # level itself (very even bouts, e.g. pool laps, put the split right at their top)
     enter = min(t + 0.1 * d, hi - 0.1 * d)
-    found = _hysteresis(sig, f.moving, enter, min(t - 0.1 * d, enter - 0.2 * d), rules)
+    found = _hysteresis(sig, f.motion, enter, min(t - 0.1 * d, enter - 0.2 * d), rules)
     if len(found) < 2:
         return None
     sets, cur = [], [found[0]]
@@ -572,16 +573,17 @@ def classify(a: sqlite3.Row | dict, f: Features, th: analysis.Thresholds, h: His
         return Result("commute", "walk or hike")
     if fam == "game":
         return _game(f, th)
-    mv = a["moving_s"] or 0
+    mv = a["time_s"] or 0
     dist = a["distance_m"] or 0
     asc = a["ascent_m"] or 0
     lt = (th.lthr or (th.hr_max or 190) * analysis.LTHR_SHARE_OF_MAX) * prof.lthr_share
     ftp = th.ftp
-    hr, moving = f.hr, f.moving
+    hr = f.hr
+    every = [True] * len(hr)  # shares of the timer time: every recorded sample counts
     has_hr = any(v for v in hr)
-    z3 = zone_share(hr, moving, lt, RULES["tempo_hr"]) if has_hr else None
-    z4 = zone_share(hr, moving, lt, RULES["race_hr"]) if has_hr else None
-    blk = longest_block(hr, moving, lt, RULES["tempo_hr"]) if has_hr else 0
+    z3 = zone_share(hr, every, lt, RULES["tempo_hr"]) if has_hr else None
+    z4 = zone_share(hr, every, lt, RULES["race_hr"]) if has_hr else None
+    blk = longest_block(hr, every, lt, RULES["tempo_hr"]) if has_hr else 0
     np_ = a["np_power"]
     intensity_factor = np_ / ftp if np_ and ftp and fam == "ride" else None
 
@@ -614,7 +616,7 @@ def classify(a: sqlite3.Row | dict, f: Features, th: analysis.Thresholds, h: His
     if prof.hills and apk >= prof.hills[0] and asc >= prof.hills[1]:
         return Result("hills", f"{apk:.0f} m/km")
 
-    if mv >= max(prof.long_min * 60, RULES["long_median"] * (h.moving or 0)):
+    if mv >= max(prof.long_min * 60, RULES["long_median"] * (h.time or 0)):
         return Result("long", f"{mv / 60:.0f} min")
 
     # a block of tempo, or half the session at tempo even in shorter stretches (a steady ride
@@ -630,9 +632,9 @@ def classify(a: sqlite3.Row | dict, f: Features, th: analysis.Thresholds, h: His
         return Result("tempo", f"{z3:.0%} at 90 %+ threshold HR, block {blk // 60} min")
     if fam == "ride" and ftp and f.has_power:
         p30 = rolling_mean(f.pw, 30)
-        zs = [v / ftp for v, m in zip(p30, moving, strict=False) if m and v is not None]
+        zs = [v / ftp for v in p30 if v is not None]
         share = sum(1 for v in zs if v >= RULES["tempo_ftp"]) / len(zs) if zs else 0
-        pblk = longest_block(p30, moving, ftp, RULES["tempo_ftp"])
+        pblk = longest_block(p30, [True] * len(p30), ftp, RULES["tempo_ftp"])
         if share >= RULES["tempo_ftp_share"] and pblk >= RULES["tempo_ftp_block_min"] * 60:
             return Result("tempo", f"{share:.0%} at 80 %+ FTP, block {pblk // 60} min")
 
@@ -740,7 +742,7 @@ def _channel(f: Features, a, lt: float, has_hr: bool) -> tuple[list, str, float]
         sig = (
             f.pw
             if fam == "run"
-            else [p if m else None for p, m in zip(f.pw, f.moving, strict=True)]
+            else [p if m else None for p, m in zip(f.pw, f.motion, strict=True)]
         )
         return sig, "power" if fam == "ride" else "rpower", 1.0
     if fam == "run" and any(f.spd):
@@ -790,7 +792,7 @@ def _alike(b: Bouts, f: Features, lt: float, ftp, h: History, mv: float) -> list
         def ridden(i: int) -> float:
             j = min(i, b.n - 2)
             e, n0 = b.bouts[j][1], b.bouts[j + 1][0]
-            return sum(f.moving[e:n0]) / max(1, n0 - e)
+            return sum(f.motion[e:n0]) / max(1, n0 - e)
 
         keep = [
             i
@@ -837,7 +839,7 @@ def _history_rows(conn: sqlite3.Connection, person_id: str, fam: str) -> list:
     types = PROFILES[fam].types
     marks = ", ".join("?" * len(types))
     return conn.execute(
-        f"""SELECT id, substr(start_time_utc, 1, 10), moving_s, workout_stats
+        f"""SELECT id, substr(start_time_utc, 1, 10), time_s, workout_stats
             FROM activities WHERE person_id = ? AND activity_type IN ({marks})
               AND workout_stats IS NOT NULL""",
         (person_id, *types),

@@ -36,3 +36,4 @@ select = ["E", "F", "W", "I", "B", "UP"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = ["samples: imports the local sample-data/ (minutes); run with --samples"]

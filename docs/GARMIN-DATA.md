@@ -56,7 +56,7 @@ General
 
 - Sport, sub-sport, indoor / outdoor
 - Start time (UTC and local offset), elapsed time, timer time
-- Moving time *(differs: API gives `movingDuration`; from FIT it is computed from speed)*
+- *(Moving time: not in the FIT file, not used by Trailbook — time = the timer time)*
 - Distance
 - Calories (active); **[API only]** BMR calories during the activity
 - Steps (walking / running)

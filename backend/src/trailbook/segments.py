@@ -43,8 +43,6 @@ MIN_SEGMENT_M = 100.0
 SIMPLIFY_M = 2.0
 PIN_RADIUS_M = 50.0
 BBOX_MARGIN_DEG = 0.0005  # ~50 m
-MOVING_MIN_SPEED = 0.3  # m/s
-MOVING_MAX_DT = 10.0  # s, longer gaps are pauses
 TWO_WAY_MAX_CLIMB_M = 30.0  # end vs start altitude...
 TWO_WAY_MAX_GRADE = 0.03  # ...and at most 3 % of the length (short steep ramps stay one way)
 
@@ -138,11 +136,20 @@ def prepare(segment_id: int, points: list[tuple[float, float]], reverse: bool = 
     return Prepared(segment_id, proj, cps, length, u_start, u_end, reverse)
 
 
-def two_way(s) -> bool:
+TWO_WAY_MODES = ("auto", "on", "off")
+
+
+def two_way_auto(s) -> bool:
     """Flat enough to count in both directions (the end not much higher or lower)."""
     net = s["net_climb_m"]
     limit = min(TWO_WAY_MAX_CLIMB_M, TWO_WAY_MAX_GRADE * s["distance_m"])
     return net is not None and abs(net) <= limit
+
+
+def two_way(s) -> bool:
+    """Counted in both directions: the person's choice, or automatic (flat segments)."""
+    mode = s["two_way_mode"] if "two_way_mode" in s.keys() else "auto"
+    return mode == "on" or (mode != "off" and two_way_auto(s))
 
 
 def prepared(s: sqlite3.Row) -> list[Prepared]:
@@ -307,12 +314,6 @@ def effort_values(tr: Track, m: Match, seg_len: float, ch: dict[str, list]) -> d
     a, b = int(math.ceil(m.start_pos)), int(m.end_pos)
     lo, hi = tr.idx[a] if a < len(tr) else tr.idx[-1], tr.idx[min(b, len(tr) - 1)]
     elapsed = m.end_t - m.start_t
-    moving = 0.0
-    for k in range(int(m.start_pos), min(int(m.end_pos) + 1, len(tr) - 1)):
-        dt = tr.t[k + 1] - tr.t[k]
-        if 0 < dt <= MOVING_MAX_DT and tr.step[k] / dt >= MOVING_MIN_SPEED:
-            moving += dt
-    moving = min(moving, elapsed)
 
     def window(name: str) -> list:
         values = ch.get(name) or []
@@ -323,7 +324,6 @@ def effort_values(tr: Track, m: Match, seg_len: float, ch: dict[str, list]) -> d
     speed = [v for v in window("speed") if v is not None]
     return {
         "elapsed_s": round(elapsed, 1),
-        "moving_s": round(moving, 1),
         "avg_speed": round(seg_len / elapsed, 3) if elapsed > 0 else None,
         "max_speed": round(max(speed), 3) if speed else None,
         "avg_hr": round(_mean(hr), 1) if hr_vals else None,
@@ -373,16 +373,16 @@ def _match_pair(conn, activity: sqlite3.Row, seg: Prepared, pos: dict) -> list[t
         v = effort_values(tr, m, seg.length, extra)
         rows.append((
             seg.id, activity["id"], _start_iso(activity, m.start_t), round(m.start_t, 1),
-            round(m.end_t, 1), v["elapsed_s"], v["moving_s"], v["avg_speed"], v["avg_hr"],
+            round(m.end_t, 1), v["elapsed_s"], v["avg_speed"], v["avg_hr"],
             v["max_hr"], v["avg_power"], v["avg_cadence"], v["max_speed"], int(seg.reverse),
         ))  # fmt: skip
     return rows
 
 
 _INSERT = """INSERT INTO segment_efforts (segment_id, activity_id, start_time_utc, start_s,
-             end_s, elapsed_s, moving_s, avg_speed, avg_hr, max_hr, avg_power, avg_cadence,
+             end_s, elapsed_s, avg_speed, avg_hr, max_hr, avg_power, avg_cadence,
              max_speed, reverse)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"""
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"""
 
 _CANDIDATE_SQL = """
     a.has_gps = 1

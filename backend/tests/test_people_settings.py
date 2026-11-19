@@ -1,3 +1,4 @@
+import json
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -261,3 +262,34 @@ def test_folder_scan_ignores_uploads(conn, tmp_path):
     importer.run_queue(conn, root, uploads_dir=uploads)
     statuses = dict(conn.execute("SELECT rel_path, status FROM files").fetchall())
     assert statuses == {"alice/a.fit": "skipped", "@uploads/alice/u.fit": "skipped"}
+
+
+def test_files_list_garmin_days(client, tmp_path):
+    """Garmin Connect daily summaries are listed one row per day, with what they hold."""
+    cl, _ = client
+    c = db.connect(tmp_path / "t.db")
+    summary = {
+        "calendarDate": "2024-11-09",
+        "movement": {"steps": {"value": 8432}, "floorsAscended": {"value": 7}},
+        "stress": {"avgLevel": -1},  # not measured
+        "heartRate": {"restingValue": 51},
+        "intensityMinutes": {"moderate": 10, "vigorous": 5},
+        "hydration": {"consumedInMl": 0},  # nothing logged
+    }
+    c.execute(
+        "INSERT INTO garmin_days (person_id, day, summary, fetched_at) VALUES (?, ?, ?, ?)",
+        ("alice", "2024-11-09", json.dumps(summary), "2030-01-01T00:00:00Z"),
+    )
+    c.close()
+    data = cl.get("/api/import/files").json()
+    assert data["total"] == 4
+    day = data["items"][0]  # newest processed first
+    assert day["kind"] == "day" and day["day"] == "2024-11-09" and day["person_id"] == "alice"
+    assert day["day_contents"] == [["steps", 8432], ["floors", 7], ["resting_hr", 51],
+                                   ["intensity", 20]]  # fmt: skip
+    assert "summary" not in day
+    assert cl.get("/api/import/files?content=daily").json()["total"] == 1
+    assert cl.get("/api/import/files?recorded=2024-11-09").json()["total"] == 1
+    assert cl.get("/api/import/files?person=alice&status=skipped").json()["total"] == 2
+    items = cl.get("/api/import/files?sort=file&dir=asc").json()["items"]
+    assert [i["kind"] for i in items].count("day") == 1

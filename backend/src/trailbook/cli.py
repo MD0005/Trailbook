@@ -294,7 +294,7 @@ def cmd_status(conn, args) -> int:
     print("Activities by person, group and type:")
     for r in conn.execute(
         """SELECT p.label, a.category, a.activity_type, COUNT(*) n, SUM(a.distance_m) d,
-                  SUM(a.moving_s) t
+                  SUM(a.time_s) t
            FROM activities a JOIN persons p ON p.id = a.person_id
            GROUP BY p.label, a.category, a.activity_type
            ORDER BY p.label, a.category, n DESC"""
@@ -335,7 +335,7 @@ def cmd_activities(conn, args) -> int:
         indoor = "(in)" if r["indoor"] else "    "
         print(
             f"{r['id']:5} {r['start_time_utc']}  {r['activity_type']:14}{indoor} "
-            f"{_fmt_km(r['distance_m']):>10} {_fmt_duration(r['moving_s']):>9} "
+            f"{_fmt_km(r['distance_m']):>10} {_fmt_duration(r['time_s']):>9} "
             f"HR {r['avg_hr'] or '-':>3}  {r['name'] or ''}"
         )
     return 0

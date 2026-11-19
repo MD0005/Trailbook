@@ -166,10 +166,10 @@ function manualTypes() {
         ${mRows([
           ["Commute", "Walks and hikes, always."],
           ["Intervals", `Repeated hard bouts with real recoveries (${mLink("intervals", "Intervals in detail")}). The same climb repeated ${num(R.hill_repeats)}+ times is Hills.`],
-          ["Race", `≥ ${mPct(R.race_share)} of the moving time at ≥ ${mPct(R.race_hr)} of threshold HR, in every sport (no heart rate: never a race); rides with power also an intensity factor (NP ÷ FTP) of ${num(R.race_if, 2)}+. And ≥ ${mPct(R.race_best)} of your best intensity for a similar duration (±${mPct(R.race_peer_range)}, last ${num(R.race_days)} days), and ${mX(R.race_typical)} your typical, with few stops (elapsed at most ${mX(R.race_stops)} moving). A hot treadmill run has the heart rate of a race, not the performance.`],
+          ["Race", `≥ ${mPct(R.race_share)} of the time at ≥ ${mPct(R.race_hr)} of threshold HR, in every sport (no heart rate: never a race); rides with power also an intensity factor (NP ÷ FTP) of ${num(R.race_if, 2)}+. And ≥ ${mPct(R.race_best)} of your best intensity for a similar duration (±${mPct(R.race_peer_range)}, last ${num(R.race_days)} days), and ${mX(R.race_typical)} your typical, with few stops (elapsed at most ${mX(R.race_stops)} the timer time). A hot treadmill run has the heart rate of a race, not the performance.`],
           ["Hills", "As much climbing per kilometre as the sport's Hilly from."],
-          ["Long", `${mX(R.long_median)} your median moving time of the sport and at least its Long from.`],
-          ["Tempo", `≥ ${mPct(R.tempo_share)} of the moving time at ≥ ${mPct(R.tempo_hr)} of threshold HR with one ${num(R.tempo_block_min)}+ min stretch (dips up to a minute), or ≥ ${mPct(R.tempo_share_any)} in any stretches. Rides with power also: 30 s power at ≥ ${mPct(R.tempo_ftp)} of FTP for ${mPct(R.tempo_ftp_share)} of the time with a ${num(R.tempo_ftp_block_min)}+ min stretch.`],
+          ["Long", `${mX(R.long_median)} your median time of the sport and at least its Long from.`],
+          ["Tempo", `≥ ${mPct(R.tempo_share)} of the time at ≥ ${mPct(R.tempo_hr)} of threshold HR with one ${num(R.tempo_block_min)}+ min stretch (dips up to a minute), or ≥ ${mPct(R.tempo_share_any)} in any stretches. Rides with power also: 30 s power at ≥ ${mPct(R.tempo_ftp)} of FTP for ${mPct(R.tempo_ftp_share)} of the time with a ${num(R.tempo_ftp_block_min)}+ min stretch.`],
           ["Commute", `Easy rides and skates — under ${mPct(R.commute_hr_share)} of the time at tempo or harder, intensity factor under ${num(R.commute_if, 2)} — shorter than ${num(R.commute_min)} min or ending ${num(R.commute_ab_m / 1000)}+ km from the start.`],
           ["Easy", "Everything else."],
         ], ["Type", "Endurance sports — the first that fits"])}
@@ -196,7 +196,7 @@ function manualTypes() {
           ["Enough", `${num(R.iv_bouts)}+ bouts in a row, or 2 of ${mMin(R.iv_long_bout_s)}+ (2 × 20 min); ${mMin(R.iv_work_s)}+ of work (bikes ${mMin(R.iv_work_ride_s)}).`],
           ["Hard for you", `${mX(R.iv_typical)} your typical power or speed (pool ${mX(R.iv_typical_swim)}) — otherwise it is your normal pace with traffic lights. With FTP: bike ≥ ${mPct(R.iv_ftp_ride)}, running power ≥ ${mPct(R.iv_ftp_run)}; without: heart rate at the end of the bouts ≥ ${mPct(R.iv_hr_peak)} of threshold HR.`],
           ["Real recoveries", `Heart rate falls by ≥ ${mPct(R.iv_hr_drop)} of threshold HR (estimated power, heart rate alone ${mPct(R.iv_hr_drop_strict)}); in a race with surges it stays up. Not checked in the pool: wrist heart rate under water is unreliable.`],
-          ["Alike", `Lengths within ${mX(R.iv_alike_len)}, intensity varying by ${mPct(R.iv_alike_cv)} at most. Bike bouts under ${num(R.iv_short_bike_s)} s only above ${mPct(R.iv_short_bike_ftp)} of FTP, longer ones above ${mPct(R.iv_bike_ftp)}. Estimated power: heart rate climbs through each bout (+${mPct(R.iv_est_rise)}), recoveries ridden (${mPct(R.iv_est_ridden)} moving).`],
+          ["Alike", `Lengths within ${mX(R.iv_alike_len)}, intensity varying by ${mPct(R.iv_alike_cv)} at most. Bike bouts under ${num(R.iv_short_bike_s)} s only above ${mPct(R.iv_short_bike_ftp)} of FTP, longer ones above ${mPct(R.iv_bike_ftp)}. Estimated power: heart rate climbs through each bout (+${mPct(R.iv_est_rise)}), recoveries ridden (${mPct(R.iv_est_ridden)} in motion).`],
           ["Not the hill", `A bout steeper than ${mPct(R.iv_hill)} (bikes ${mPct(R.iv_hill_ride)}), or that much steeper than its recoveries, is the terrain and does not count. ${num(R.hill_repeats)}+ of them starting within ${num(R.hill_same_m)} m of each other: Hills.`],
         ], ["Check", "All must pass"])}`,
     },
@@ -205,7 +205,7 @@ function manualTypes() {
       body: mTiles([
         ["Threshold HR", "From Settings › People, else what the watch had set, else 90 % of your maximum heart rate. Each sport uses its share."],
         ["FTP", "Per sport: rides the cycling FTP, runs the running-power FTP. A ride without one borrows the nearest ride's. Edit corrects it per activity."],
-        ["Typical", "The median of your own activities of the family: moving power, speed, estimated power, moving time."],
+        ["Typical", "The median of your own activities of the family: power and speed while in motion, estimated power, time."],
         ["Best", `Your highest intensity (power, else speed) in activities of the family ±${mPct(R.race_peer_range)} as long, within ${num(R.race_days)} days.`],
       ]),
     },
@@ -397,11 +397,11 @@ function manualFitness() {
     },
     {
       id: "load", title: "Load per activity", sum: "Power, running pace or heart rate",
-      body: `<p>Every sport counts. Each activity uses the first method from the top it has the data for; hours = moving time.</p>
+      body: `<p>Every sport counts. Each activity uses the first method from the top it has the data for; hours = the timer time.</p>
         ${mTable(["Method", "Load", "Activities"], [
           ["<b>Power</b>", "TSS = hours × IF² × 100, IF = NP ÷ FTP", "A power stream and an FTP: rides (cycling FTP) and runs with running power (running FTP) from the watch; any sport with your FTP."],
           ["<b>Running pace</b>", "The same, IF = average speed ÷ threshold speed", "Outdoor runs, with a threshold pace set by you."],
-          ["<b>Heart rate</b>", "TRIMP per second, 1 hour at threshold HR = 100", "Any sport with heart rate; without a stream, the average HR over the moving time."],
+          ["<b>Heart rate</b>", "TRIMP per second, 1 hour at threshold HR = 100", "Any sport with heart rate; without a stream, the average HR over the timer time."],
           ["<b>No load</b>", "–", "No power and no heart rate (e.g. strength without a strap): in totals, not in fitness."],
         ], ["fit", "fit", "*"])}
         ${mPanel("Heart rate in detail")}

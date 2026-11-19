@@ -909,7 +909,7 @@ def _set_status(
 
 
 _ACTIVITY_COLUMNS = (
-    "elapsed_s timer_s moving_s distance_m ascent_m descent_m avg_hr max_hr avg_speed "
+    "elapsed_s timer_s time_s distance_m ascent_m descent_m avg_hr max_hr avg_speed "
     "max_speed avg_power max_power np_power avg_cadence max_cadence calories has_gps "
     "zones metabolic_calories devices "
     "start_lat start_lon bbox_min_lat bbox_min_lon bbox_max_lat bbox_max_lon"

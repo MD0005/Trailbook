@@ -107,7 +107,7 @@ def _store(c, pid, day, track, category="ride", hr=140.0, grade=0.05):
     time, lat, lon = track
     cur = c.execute(
         """INSERT INTO activities (person_id, fit_uid, start_time_utc, utc_offset_s, category,
-               activity_type, moving_s, has_gps, bbox_min_lat, bbox_min_lon, bbox_max_lat,
+               activity_type, time_s, has_gps, bbox_min_lat, bbox_min_lon, bbox_max_lat,
                bbox_max_lon, importer_version)
            VALUES (?, ?, ?, 3600, ?, ?, ?, 1, ?, ?, ?, ?, 1)""",
         (pid, f"{pid}-{day}", f"{day}T08:00:00Z", category,
@@ -260,9 +260,37 @@ def test_segments_api(sdb, monkeypatch):
     far = client.post("/api/segments/snap", json={"pins": [pt(300, 500), pt(1300, 500)]})
     assert far.status_code == 404
 
+    off = client.patch(f"/api/segments/{sid}", json={"two_way_mode": "off"}).json()
+    assert off["two_way_mode"] == "off" and not off["two_way"] and off["pending"]
+    bad = client.patch(f"/api/segments/{sid}", json={"two_way_mode": "sometimes"})
+    assert bad.status_code == 400
     renamed = client.patch(f"/api/segments/{sid}", json={"name": "Renamed"}).json()
     assert renamed["name"] == "Renamed"
     assert client.patch(f"/api/segments/{sid}", json={"any_type": True}).json()["pending"]
     assert client.delete(f"/api/segments/{sid}").status_code == 204
     assert c.execute("SELECT COUNT(*) FROM segment_efforts").fetchone()[0] == 0
     assert client.get(f"/api/segments/{sid}").status_code == 404
+
+
+def test_two_way_mode_overrides_automatic(tmp_path):
+    c = db.connect(tmp_path / "t.db")
+    c.execute("INSERT INTO persons (id, label) VALUES ('anna', 'Anna')")
+    flat = _store(c, "anna", "2026-10-01", path((0, 0), (1500, 0)), grade=0.01)
+    _store(c, "anna", "2026-10-02", path((1500, 0), (0, 0)), grade=0.01)
+    sid = segments.create_from_activity(c, flat, 40, 240, "Flat")
+    segments.backfill(c)
+
+    def reverse_count():
+        q = "SELECT COUNT(*) FROM segment_efforts WHERE segment_id = ? AND reverse = 1"
+        return c.execute(q, (sid,)).fetchone()[0]
+
+    assert reverse_count() == 1  # automatic: flat, so both ways
+    c.execute("UPDATE segments SET two_way_mode = 'off' WHERE id = ?", (sid,))
+    segments.reset_segment(c, sid)
+    segments.backfill(c)
+    assert reverse_count() == 0
+    c.execute("UPDATE segments SET two_way_mode = 'on', net_climb_m = 80 WHERE id = ?", (sid,))
+    segments.reset_segment(c, sid)
+    segments.backfill(c)
+    assert reverse_count() == 1  # on: both ways even when steep
+    c.close()

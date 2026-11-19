@@ -348,6 +348,23 @@ def _match_local(conn: sqlite3.Connection, person_id: str, item: dict) -> int | 
     return row[0] if row else None
 
 
+def _refresh_summary(conn: sqlite3.Connection, person_id: str, item: dict) -> None:
+    """A Connect activity we already have, seen again in the list: keep its newest list data
+    (no request of its own)."""
+    summary = _summary(item)
+    row = conn.execute(
+        """SELECT summary FROM garmin_activities
+           WHERE person_id = ? AND activity_id = ?""",
+        (person_id, int(item["activityId"])),
+    ).fetchone()
+    if row is None or row["summary"] == summary:
+        return
+    conn.execute(
+        "UPDATE garmin_activities SET summary = ? WHERE person_id = ? AND activity_id = ?",
+        (summary, person_id, int(item["activityId"])),
+    )
+
+
 def _store_matched(conn: sqlite3.Connection, person_id: str, item: dict, local_id: int) -> None:
     """A Connect activity we already have: keep its list data and its title, no download."""
     conn.execute(
@@ -504,6 +521,7 @@ def sync_person(
         known = _known(conn, pid, [int(i["activityId"]) for i in unknown])
         for item in unknown:
             if int(item["activityId"]) in known:
+                _refresh_summary(conn, pid, item)  # its newest list data
                 continue
             local = _match_local(conn, pid, item)
             if local is not None:  # already here (e.g. from a folder): list data only
@@ -626,6 +644,40 @@ def _fetch_details(conn: sqlite3.Connection, client: Client, pid: str, budget: i
 
 
 # ---- daily summaries (steps, floors, stress… of each day) ------------------------------------
+
+# What a daily summary holds, for Settings › Imported: (key, path in the summary). A part is
+# listed when its value is a number (a negative stress level = not measured).
+DAY_CONTENTS = (
+    ("steps", ("movement", "steps", "value")),
+    ("floors", ("movement", "floorsAscended", "value")),
+    ("resting_hr", ("heartRate", "restingValue")),
+    ("stress", ("stress", "avgLevel")),
+    ("body_battery", ("bodyBattery", "maxValue")),
+    ("respiration", ("respiration", "avgValue")),
+    ("spo2", ("pulseOx", "avgValue")),
+    ("intensity", ("intensityMinutes", "moderate")),
+    ("calories", ("calories", "burnedTotal")),
+    ("hydration", ("hydration", "consumedInMl")),
+)
+
+
+def day_contents(summary: dict) -> list[list]:
+    """[[key, value], …] of the parts a daily summary holds (DAY_CONTENTS order). Intensity
+    minutes count vigorous minutes twice, like Garmin."""
+    out = []
+    for key, path in DAY_CONTENTS:
+        v = summary
+        for k in path:
+            v = v.get(k) if isinstance(v, dict) else None
+        if not isinstance(v, (int, float)) or isinstance(v, bool) or v < 0:
+            continue
+        if key == "hydration" and v == 0:
+            continue  # nothing logged
+        if key == "intensity":
+            vig = (summary.get("intensityMinutes") or {}).get("vigorous")
+            v += 2 * vig if isinstance(vig, (int, float)) else 0
+        out.append([key, v])
+    return out
 
 
 def _store_days(conn: sqlite3.Connection, pid: str, body: bytes) -> int:

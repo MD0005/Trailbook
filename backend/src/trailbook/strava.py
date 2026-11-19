@@ -38,7 +38,6 @@ class Row:
 # a rounded copy in the athlete's units, later the exact SI value); the last one is used.
 _NUMERIC = {
     "elapsed time": "elapsed_s",
-    "moving time": "moving_s",
     "distance": "distance_m",
     "max speed": "max_speed",
     "average speed": "avg_speed",
@@ -195,18 +194,18 @@ def manual_activity(row: Row) -> fitfile.ParsedActivity:
     category, activity_type, indoor = classify(sport, sub_sport)
     v = row.values
     elapsed = v.get("elapsed_s")
-    moving = v.get("moving_s") or elapsed
+    time = elapsed  # Trailbook's time is the timer time; Strava's export has no timer: elapsed
     distance = v.get("distance_m")
     summary = {
         "elapsed_s": elapsed,
         "timer_s": elapsed,
-        "moving_s": moving,
+        "time_s": time,
         "distance_m": distance,
         "ascent_m": v.get("ascent_m"),
         "descent_m": v.get("descent_m"),
         "avg_hr": round(v["avg_hr"]) if v.get("avg_hr") else None,
         "max_hr": round(v["max_hr"]) if v.get("max_hr") else None,
-        "avg_speed": v.get("avg_speed") or (distance / moving if distance and moving else None),
+        "avg_speed": v.get("avg_speed") or (distance / time if distance and time else None),
         "max_speed": v.get("max_speed"),
         "avg_power": round(v["avg_power"]) if v.get("avg_power") else None,
         "max_power": round(v["max_power"]) if v.get("max_power") else None,

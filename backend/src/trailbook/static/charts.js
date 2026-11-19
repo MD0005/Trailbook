@@ -60,7 +60,7 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, onHov
   const syncKey = "tb-" + Math.random().toString(36).slice(2);
   const xs = () => x[g.kind];
   const X_TITLE = { distance: ["Distance (km)", "Distance from the start."], time: ["Elapsed time (h:mm)", "Time from the start, pauses and stops included."],
-                    moving: ["Moving time (h:mm)", "Time in motion only: pauses and stops left out."],
+                    timer: ["Timer time (h:mm)", "Time with the watch running: pauses left out."],
                     percent: ["Progress (%)", "Share of the whole activity: distance, or time when there is no distance."] };
   const fmtTime = (s, sec = false) => {
     const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), ss = Math.floor(s % 60);

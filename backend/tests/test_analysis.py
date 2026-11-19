@@ -74,7 +74,7 @@ def test_fitness_series_constant_load_converges():
 def _activity(c, pid, day, group="run", atype="run", hr=150.0, seconds=3600, speed=3.0, power=None):
     cur = c.execute(
         """INSERT INTO activities (person_id, fit_uid, start_time_utc, utc_offset_s, category,
-                                   activity_type, moving_s, timer_s, distance_m, avg_speed,
+                                   activity_type, time_s, timer_s, distance_m, avg_speed,
                                    avg_hr, max_hr, importer_version)
            VALUES (?, ?, ?, 3600, ?, ?, ?, ?, ?, ?, ?, ?, 1)""",
         (

@@ -137,8 +137,8 @@ performance condition, stamina and potential stamina. Streams without data are n
   300 m long with the highest average grade) and **Longest climb · +gain** (its length);
   both explain this on hover and highlight their stretch.
 - **Options** badge (page header), a panel with:
-  - **X axis**: Distance | Elapsed time (pauses and stops included) | Moving time (only while
-    moving: gaps over 10 s and standing still left out) | Percent (Distance when the activity
+  - **X axis**: Distance | Elapsed time (pauses and stops included) | Timer time (pauses on
+    the watch left out: a gap over 30 s counts 1 s) | Percent (Distance when the activity
     has one; fixed default every visit);
   - **Power & cadence avg**: None | 5 s | 10 s | 15 s | 30 s | 1 min | 5 min | 20 min —
     trailing average of the power and cadence lines (one choice for both; stats stay on
@@ -170,7 +170,7 @@ equally); hovering one marks its point. A pinned value shows every series of the
 - **Fitness and fatigue** (396 px) — fitness (muted steel blue `#6f8fbf`) filled (or a plain line, Options), fatigue a
   line; pills: Fitness and Fatigue at the end of the period. No daily load. Under its x axis
   a strip of **activity icons** (type icon on its day; icons closer than ~35 px share one spot (about three a month over a year; more when zoomed in)
-  with a count; hovering shows name, type, date, moving time and distance of each, a single
+  with a count; hovering shows name, type, date, time and distance of each, a single
   one opens the activity).
 - **Options** badge (page header, like Map › Options; saved per person, `ui_settings` key
   `fitness-options`): Activities Shown | Hidden, Fitness Filled | Line, Fatigue Shown |

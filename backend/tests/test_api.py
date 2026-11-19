@@ -77,7 +77,7 @@ def test_unknown_activity(setup):
     assert client.get("/api/activities/999/streams").status_code == 404
 
 
-@pytest.mark.skipif(not SAMPLE_DATA.is_dir(), reason="no local sample-data")
+@pytest.mark.samples
 def test_activity_endpoints_on_sample_data(tmp_path):
     root = tmp_path / "root"
     shutil.copytree(SAMPLE_DATA, root)

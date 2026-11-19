@@ -42,7 +42,7 @@ def _session(
         ch["power"] = []
     alt = ch["altitude"]
     a = {
-        "moving_s": t, "elapsed_s": t, "distance_m": d, "np_power": None, "indoor": 0,
+        "time_s": t, "elapsed_s": t, "distance_m": d, "np_power": None, "indoor": 0,
         "ascent_m": sum(max(0.0, y - x) for x, y in zip(alt, alt[1:], strict=False)),
         "start_time_utc": "2026-03-01T08:00:00Z", "workout_stats": None,
     }  # fmt: skip
@@ -62,8 +62,8 @@ def _bike_speed(level):  # speed on the flat for a share of FTP (air + rolling r
     return v
 
 
-RIDE_HIST = workout.History(moving=3600, power=170, speed=8, epower=150)
-RUN_HIST = workout.History(moving=2800, speed=3.3)
+RIDE_HIST = workout.History(time=3600, power=170, speed=8, epower=150)
+RUN_HIST = workout.History(time=2800, speed=3.3)
 
 
 @pytest.mark.parametrize(
@@ -137,11 +137,11 @@ def test_long_run():
 def _store(c, pid, day, category, atype, a, ch):
     cur = c.execute(
         """INSERT INTO activities (person_id, fit_uid, start_time_utc, utc_offset_s, category,
-                                   activity_type, moving_s, elapsed_s, distance_m, ascent_m,
+                                   activity_type, time_s, elapsed_s, distance_m, ascent_m,
                                    watch_lthr, watch_ftp, importer_version)
            VALUES (?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, 1)""",
         (
-            pid, f"{pid}-{day}", f"{day}T08:00:00Z", category, atype, a["moving_s"],
+            pid, f"{pid}-{day}", f"{day}T08:00:00Z", category, atype, a["time_s"],
             a["elapsed_s"], a["distance_m"], a["ascent_m"], LTHR, FTP,
         ),
     )  # fmt: skip
@@ -205,7 +205,7 @@ def test_families_and_options():
 def test_rowing_and_paddling_intervals_from_speed():
     blocks = [(900, 2.0)] + [(120, 3.0), (120, 1.4)] * 6 + [(600, 1.9)]
     a, ch = _session(blocks, power=False, effort_of=lambda lv: lv / 2.8)
-    hist = workout.History(moving=3000, speed=2.0)
+    hist = workout.History(time=3000, speed=2.0)
     assert _kind("kayak", a, ch, hist).kind == "intervals"
     a, ch = _session([(3000, 2.0)], power=False, effort_of=lambda lv: 0.4)
     assert _kind("kayak", a, ch, hist).kind == "easy"
@@ -220,15 +220,15 @@ def test_pool_swim_intervals_from_laps():
         laps += [lap(t, 95, 100), lap(t + 95, 20, 0)]
         t += 115
     ch = {"time": list(range(t)), "hr": [140.0] * t}
-    a = {"moving_s": 8 * 95, "elapsed_s": t, "distance_m": 800, "ascent_m": 0, "np_power": None,
+    a = {"time_s": 8 * 95, "elapsed_s": t, "distance_m": 800, "ascent_m": 0, "np_power": None,
          "indoor": 1, "start_time_utc": "2026-03-01T08:00:00Z", "workout_stats": None}  # fmt: skip
     f = workout.features("pool_swim", ch, laps)
     assert f.spd[10] == pytest.approx(100 / 95) and f.spd[100] == 0
     th = analysis.Thresholds(hr_max=190, lthr=LTHR)
-    hist = workout.History(moving=1800, speed=0.9)
+    hist = workout.History(time=1800, speed=0.9)
     assert workout.classify(a, f, th, hist).kind == "intervals"
     # the same at the usual speed: rests at the wall, not intervals
-    assert workout.classify(a, f, th, workout.History(moving=1800, speed=1.05)).kind != "intervals"
+    assert workout.classify(a, f, th, workout.History(time=1800, speed=1.05)).kind != "intervals"
 
 
 def test_games_from_the_heart_rate(tmp_path):

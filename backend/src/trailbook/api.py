@@ -36,8 +36,10 @@ from . import (
     explorer,
     fitfile,
     garmin,
+    icu,
     importer,
     jobs,
+    planner,
     scheduler,
     segments,
     sports,
@@ -63,7 +65,7 @@ class _RevalidatedStatic(StaticFiles):
 
 ACTIVITY_LIST_FIELDS = (
     "id person_id start_time_utc utc_offset_s category activity_type indoor name "
-    "elapsed_s moving_s distance_m ascent_m avg_hr max_hr avg_speed avg_power calories "
+    "elapsed_s time_s distance_m ascent_m avg_hr max_hr avg_speed avg_power calories "
     "has_gps workout workout_override"
 ).split()
 
@@ -74,34 +76,62 @@ ACTIVITY_SORTS = {
     "workout": "COALESCE(workout_override, workout)",
     "name": "name",
     "distance": "distance_m",
-    "moving": "moving_s",
+    "time": "time_s",
     "pace": "avg_speed",
     "hr": "avg_hr",
     "ascent": "ascent_m",
     "person": "person_id",
 }
 
+# Settings › Imported lists the files and, as one row per day, Garmin Connect's daily summaries
+# (garmin_days). Both come from this union (`x`), so sorting, filters and paging cover both.
+IMPORT_ITEMS_SQL = """
+    SELECT 'file' AS kind, f.id, f.person_id, COALESCE(f.source_rel, f.rel_path) AS rel_path,
+           f.rel_path LIKE '@uploads/%' AS archived, f.zip_member, f.size, f.status,
+           f.prev_status, f.skip_reason, f.error, f.activity_id, f.first_seen, f.missing_since,
+           f.dismissed, f.imported_at, f.fit_uid, f.fit_type, f.fit_created, f.device_serial,
+           a.start_time_utc, a.utc_offset_s, a.activity_type, a.name,
+           NULL AS day, NULL AS summary,
+           COALESCE(f.source_rel, f.rel_path) || '/' || COALESCE(f.zip_member, '') AS file_key,
+           COALESCE(a.name, f.skip_reason, f.fit_type, f.error) AS content_key,
+           COALESCE(a.name, '') || ' ' || COALESCE(a.activity_type, '') || ' ' ||
+               COALESCE(f.skip_reason, '') || ' ' || COALESCE(f.fit_type, '') || ' ' ||
+               COALESCE(f.error, '') AS content_text,
+           COALESCE(a.start_time_utc, f.fit_created) AS recorded_key
+    FROM files f LEFT JOIN activities a ON a.id = f.activity_id
+    UNION ALL
+    SELECT 'day', NULL, g.person_id, 'Garmin Connect', 0, NULL, NULL, 'imported',
+           NULL, NULL, NULL, NULL, g.fetched_at, NULL,
+           0, g.fetched_at, NULL, NULL, NULL, NULL,
+           NULL, NULL, NULL, NULL,
+           g.day, g.summary,
+           'Garmin Connect daily summary ' || g.day,
+           'daily summary',
+           'daily summary wellness steps floors heart rate stress body battery respiration '
+               || 'pulse ox spo2 calories intensity',
+           g.day
+    FROM garmin_days g
+"""
+# Columns of IMPORT_ITEMS_SQL only used to sort and filter (not sent).
+INTERNAL_ITEM_KEYS = {"summary", "file_key", "content_key", "content_text", "recorded_key"}
+
 FILE_SORTS = {
-    "status": "f.status",
-    "file": "COALESCE(f.source_rel, f.rel_path) || '/' || f.zip_member",
-    "person": "f.person_id",
-    "content": "COALESCE(a.name, f.skip_reason, f.fit_type, f.error)",
-    "recorded": "COALESCE(a.start_time_utc, f.fit_created)",
-    "fit": "f.fit_uid",
-    "processed": "f.imported_at",
+    "status": "x.status",
+    "file": "x.file_key",
+    "person": "x.person_id",
+    "content": "x.content_key",
+    "recorded": "x.recorded_key",
+    "fit": "x.fit_uid",
+    "processed": "x.imported_at",
 }
 
 # Column key -> SQL expression matched with LIKE '%value%'
 FILE_TEXT_FILTERS = {
-    "file": "(COALESCE(f.source_rel, f.rel_path) || ' ' || f.zip_member)",
-    "content": (
-        "(COALESCE(a.name, '') || ' ' || COALESCE(a.activity_type, '') || ' ' || "
-        "COALESCE(f.skip_reason, '') || ' ' || COALESCE(f.fit_type, '') || ' ' || "
-        "COALESCE(f.error, ''))"
-    ),
-    "fit": "f.fit_uid",
-    "recorded": "COALESCE(a.start_time_utc, f.fit_created)",
-    "processed": "f.imported_at",
+    "file": "x.file_key",
+    "content": "x.content_text",
+    "fit": "x.fit_uid",
+    "recorded": "x.recorded_key",
+    "processed": "x.imported_at",
 }
 
 # Best efforts ranked per (kind, key): rk = 1 is the record (lowest time for pace/ride, highest
@@ -578,7 +608,7 @@ def create_app(db_path: str | Path) -> Starlette:
             people = c.execute(
                 f"""SELECT p.id, p.label, p.color, p.icon, p.sort_order,
                            COUNT(a.id) activities, SUM(a.distance_m) distance_m,
-                           SUM(a.moving_s) moving_s, SUM(a.ascent_m) ascent_m,
+                           SUM(a.time_s) time_s, SUM(a.ascent_m) ascent_m,
                            SUM(a.calories) calories, MAX(a.start_time_utc) last_activity
                     FROM persons p LEFT JOIN activities a ON a.person_id = p.id {clause}
                     WHERE p.id != '_unassigned'
@@ -587,7 +617,7 @@ def create_app(db_path: str | Path) -> Starlette:
             ).fetchall()
             groups = c.execute(
                 f"""SELECT a.person_id, a.category, COUNT(*) activities,
-                           SUM(a.distance_m) distance_m, SUM(a.moving_s) moving_s
+                           SUM(a.distance_m) distance_m, SUM(a.time_s) time_s
                     FROM activities a WHERE 1 = 1 {clause}
                     GROUP BY a.person_id, a.category""",
                 params,
@@ -604,7 +634,7 @@ def create_app(db_path: str | Path) -> Starlette:
         items = []
         for p in people:
             item = dict(p)
-            item["groups"] = sorted(by_person.get(p["id"], []), key=lambda g: -(g["moving_s"] or 0))
+            item["groups"] = sorted(by_person.get(p["id"], []), key=lambda g: -(g["time_s"] or 0))
             items.append(item)
         return JSONResponse({"years": years, "people": items})
 
@@ -653,10 +683,10 @@ def create_app(db_path: str | Path) -> Starlette:
         order = _order(q, ACTIVITY_SORTS, "date", "id")
         with closing(conn()) as c:
             totals = c.execute(
-                f"""SELECT COUNT(*) count, SUM(distance_m) distance_m, SUM(moving_s) moving_s,
+                f"""SELECT COUNT(*) count, SUM(distance_m) distance_m, SUM(time_s) time_s,
                            SUM(ascent_m) ascent_m, SUM(calories) calories,
                            COUNT(DISTINCT substr(start_time_utc, 1, 10)) active_days,
-                           MAX(distance_m) longest_m, MAX(moving_s) longest_s,
+                           MAX(distance_m) longest_m, MAX(time_s) longest_s,
                            MIN(start_time_utc) first, MAX(start_time_utc) last
                     FROM activities {clause}""",
                 params,
@@ -1000,7 +1030,7 @@ def create_app(db_path: str | Path) -> Starlette:
         with closing(conn()) as c:
             rows = c.execute(
                 f"""SELECT a.id, a.person_id, a.activity_type, a.category,
-                           substr(a.start_time_utc, 1, 10) day, a.distance_m, a.moving_s,
+                           substr(a.start_time_utc, 1, 10) day, a.distance_m, a.time_s,
                            a.ascent_m, t.polyline
                     FROM activities a JOIN tracks t ON t.activity_id = a.id
                     WHERE {where} ORDER BY a.start_time_utc""",
@@ -1309,7 +1339,8 @@ def create_app(db_path: str | Path) -> Starlette:
         with closing(conn()) as c:
             rows = c.execute(
                 f"""SELECT id, person_id, start_time_utc, utc_offset_s, activity_type, category,
-                           name, distance_m, moving_s, ascent_m, load, workout,
+                           name, distance_m, time_s, ascent_m, load, workout, avg_speed,
+                           avg_power,
                            workout_override, indoor, {day} AS day
                     FROM activities WHERE {" AND ".join(where)} ORDER BY start_time_utc""",
                 params,
@@ -1320,7 +1351,17 @@ def create_app(db_path: str | Path) -> Starlette:
                     item["tile_chart"] = tilechart.tile_chart(c, item["id"])
             # steps, floors, stress of each day (one person only: they do not add up)
             days = analysis.daily_values(c, pid, start, end) if pid else {}
-        return JSONResponse({"activities": items, "days": days})
+            plans, last = [], None
+            if q.get("planned") == "1":
+                plans = icu.planned(c, pid, start, end)
+                last = c.execute(
+                    "SELECT MAX(day) FROM planned_workouts WHERE sync_state != 'delete'"
+                    + (" AND person_id = ?" if pid else ""),
+                    (pid,) if pid else (),
+                ).fetchone()[0]
+        return JSONResponse(
+            {"activities": items, "days": days, "planned": plans, "last_planned": last}
+        )
 
     async def forecast(request: Request):
         """Weather forecast and the latitude for the day length, at the start of the person's
@@ -1362,7 +1403,7 @@ def create_app(db_path: str | Path) -> Starlette:
             outer = ""
             rows = c.execute(
                 f"""SELECT {period} AS period, COUNT(*) AS count, SUM(distance_m) AS distance_m,
-                           SUM(moving_s) AS moving_s, SUM(ascent_m) AS ascent_m,
+                           SUM(time_s) AS time_s, SUM(ascent_m) AS ascent_m,
                            SUM(load) AS load, SUM(calories) AS calories,
                            COUNT(DISTINCT day) AS active_days
                     FROM ({inner}) {outer} GROUP BY period ORDER BY period""",
@@ -1370,8 +1411,8 @@ def create_app(db_path: str | Path) -> Starlette:
             ).fetchall()
             groups = c.execute(
                 f"""SELECT category, COUNT(*) AS count, SUM(distance_m) AS distance_m,
-                           SUM(moving_s) AS moving_s
-                    FROM ({inner}) {outer} GROUP BY category ORDER BY moving_s DESC""",
+                           SUM(time_s) AS time_s
+                    FROM ({inner}) {outer} GROUP BY category ORDER BY time_s DESC""",
                 params,
             ).fetchall()
             years = [
@@ -1432,7 +1473,7 @@ def create_app(db_path: str | Path) -> Starlette:
     # ---- segments ----------------------------------------------------------------------
 
     EFFORT_COLS = """e.id, e.segment_id, e.activity_id, e.start_time_utc, e.start_s, e.end_s,
-        e.elapsed_s, e.moving_s, e.avg_speed, e.max_speed, e.avg_hr, e.max_hr, e.avg_power,
+        e.elapsed_s, e.avg_speed, e.max_speed, e.avg_hr, e.max_hr, e.avg_power,
         e.avg_cadence, e.reverse,
         a.person_id, a.utc_offset_s, a.name AS activity_name, a.activity_type, a.weather"""
 
@@ -1513,6 +1554,7 @@ def create_app(db_path: str | Path) -> Starlette:
         d = dict(s)
         d["pending"] = s["match_version"] < segments.MATCH_VERSION
         d["two_way"] = segments.two_way(s)
+        d["two_way_auto"] = segments.two_way_auto(s)
         return d
 
     def _person_filter(request: Request) -> tuple[str, list]:
@@ -1781,6 +1823,14 @@ def create_app(db_path: str | Path) -> Starlette:
                     c.execute("UPDATE segments SET category = ? WHERE id = ?", (category, sid))
                     segments.reset_segment(c, sid)
                     job.start_segments()
+            if "two_way_mode" in body:
+                mode = body["two_way_mode"]
+                if mode not in segments.TWO_WAY_MODES:
+                    raise HTTPException(400, "two_way_mode must be auto, on or off")
+                if mode != s["two_way_mode"]:
+                    c.execute("UPDATE segments SET two_way_mode = ? WHERE id = ?", (mode, sid))
+                    segments.reset_segment(c, sid)
+                    job.start_segments()
             return JSONResponse(_segment_dict(_segment_or_404(c, sid)))
 
     async def segment_delete(request: Request):
@@ -1790,6 +1840,148 @@ def create_app(db_path: str | Path) -> Starlette:
         return Response(status_code=204)
 
     # ---- Garmin Connect ----------------------------------------------------------------
+
+    # ---- planned workouts (planner.py) and intervals.icu (icu.py) -----------------------
+
+    plan_wake = asyncio.Event()
+
+    def _plan_error(exc: planner.PlanError):
+        raise HTTPException(400, str(exc)) from exc
+
+    def _day_or_400(body: dict) -> str:
+        day = str(body.get("day") or "")
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", day):
+            raise HTTPException(400, "day must be a date (YYYY-MM-DD)")
+        return day
+
+    async def workouts_list(request: Request):
+        with closing(conn()) as c:
+            pid = _single_person(c, request)
+            ctx = planner.context(c, pid)
+            items = planner.templates(c, pid, ctx)
+            key = c.execute("SELECT 1 FROM icu_accounts WHERE person_id = ?", (pid,)).fetchone()
+        return JSONResponse({"workouts": items, "context": ctx, "account": bool(key)})
+
+    async def workout_create(request: Request):
+        body = await request.json()
+        with closing(conn()) as c:
+            pid = _single_person(c, request)
+            try:
+                tid = planner.save(c, pid, body)
+            except planner.PlanError as exc:
+                _plan_error(exc)
+        return JSONResponse({"id": tid})
+
+    async def workout_update(request: Request):
+        body = await request.json()
+        with closing(conn()) as c:
+            pid = _single_person(c, request)
+            try:
+                planner.save(c, pid, body, template_id=request.path_params["id"])
+            except planner.PlanError as exc:
+                _plan_error(exc)
+        return JSONResponse({"id": request.path_params["id"]})
+
+    async def workout_delete(request: Request):
+        with closing(conn()) as c:
+            c.execute("DELETE FROM workout_templates WHERE id = ?", (request.path_params["id"],))
+        return JSONResponse({"deleted": True})
+
+    async def workouts_order(request: Request):
+        body = await request.json()
+        with closing(conn()) as c:
+            pid = _single_person(c, request)
+            for k, tid in enumerate(body.get("ids") or []):
+                c.execute(
+                    "UPDATE workout_templates SET position = ? WHERE id = ? AND person_id = ?",
+                    (k, int(tid), pid),
+                )
+        return JSONResponse({"ok": True})
+
+    async def workout_estimate(request: Request):
+        """Estimate of a workout being edited (the creator's chart and summary)."""
+        body = await request.json()
+        with closing(conn()) as c:
+            pid = _single_person(c, request)
+            ctx = planner.context(c, pid)
+        if not body.get("steps"):
+            return JSONResponse({"estimate": None})
+        try:
+            w = planner.clean({**body, "name": body.get("name") or "-"})
+        except planner.PlanError as exc:
+            return JSONResponse({"estimate": None, "error": str(exc)})
+        return JSONResponse({"estimate": planner.estimate(w, ctx)})
+
+    async def planned_create(request: Request):
+        body = await request.json()
+        day = _day_or_400(body)
+        with closing(conn()) as c:
+            pid = _single_person(c, request)
+            try:
+                plan_id = icu.place(c, pid, int(body.get("workout_id") or 0), day)
+            except planner.PlanError as exc:
+                _plan_error(exc)
+        plan_wake.set()
+        return JSONResponse({"id": plan_id})
+
+    async def planned_move(request: Request):
+        day = _day_or_400(await request.json())
+        with closing(conn()) as c:
+            try:
+                icu.move(c, request.path_params["id"], day)
+            except planner.PlanError as exc:
+                _plan_error(exc)
+        plan_wake.set()
+        return JSONResponse({"ok": True})
+
+    async def planned_update(request: Request):
+        body = await request.json()
+        with closing(conn()) as c:
+            try:
+                icu.update(c, request.path_params["id"], body)
+            except planner.PlanError as exc:
+                _plan_error(exc)
+        plan_wake.set()
+        return JSONResponse({"ok": True})
+
+    async def planned_delete(request: Request):
+        with closing(conn()) as c:
+            icu.remove(c, request.path_params["id"])
+        plan_wake.set()
+        return JSONResponse({"deleted": True})
+
+    async def icu_accounts(request: Request):
+        with closing(conn()) as c:
+            return JSONResponse({"accounts": icu.accounts(c)})
+
+    async def icu_account_set(request: Request):
+        pid = request.path_params["id"]
+        body = await request.json()
+        key = str(body.get("api_key") or "").strip()
+        if len(key) < 10 or re.search(r"\s", key):
+            raise HTTPException(400, "this does not look like an intervals.icu API key")
+        with closing(conn()) as c:
+            _person_or_400(c, pid)
+            icu.set_account(c, pid, key)
+        return await icu_account_test(request)
+
+    async def icu_account_test(request: Request):
+        pid = request.path_params["id"]
+
+        def run() -> dict:
+            with closing(conn()) as c:
+                result = icu.test_account(c, pid)
+                result["account"] = icu.accounts(c).get(pid)
+                return result
+
+        result = await run_in_threadpool(run)
+        plan_wake.set()
+        return JSONResponse(result)
+
+    async def icu_account_delete(request: Request):
+        with closing(conn()) as c:
+            c.execute("DELETE FROM icu_accounts WHERE person_id = ?", (request.path_params["id"],))
+        return JSONResponse({"deleted": True})
 
     def _person_or_400(c: sqlite3.Connection, pid: str) -> None:
         if (
@@ -1874,6 +2066,18 @@ def create_app(db_path: str | Path) -> Starlette:
             p["state"] = "running?"  # started outside this server, or the process died
         return p
 
+    def _start_job(kind: str, start) -> bool:
+        """Mark `kind` running, then start its process: a quick job may finish (and write
+        'finished') before this request returns, so the mark must come first. The previous
+        progress comes back when the job could not start."""
+        before = backup.read_progress(db_path, kind)
+        backup.write_progress(db_path, kind, state="running", phase="start",
+                              started_at=backup.now_iso())  # fmt: skip
+        if start():
+            return True
+        backup.write_progress(db_path, kind, **before)
+        return False
+
     async def backup_status(request: Request):
         def collect():
             return {
@@ -1895,10 +2099,11 @@ def create_app(db_path: str | Path) -> Starlette:
         if not isinstance(body, dict):
             body = {}
         files = bool(body.get("files", True))
-        if not job.start_export(include_files=files, include_secrets=bool(body.get("secrets"))):
+        secrets = bool(body.get("secrets"))
+        if not _start_job(
+            "export", lambda: job.start_export(include_files=files, include_secrets=secrets)
+        ):
             return JSONResponse({"started": False, "reason": "another job is running"}, 409)
-        backup.write_progress(db_path, "export", state="running", phase="start",
-                              started_at=backup.now_iso())  # fmt: skip
         return JSONResponse({"started": True}, status_code=202)
 
     def _export_file(request: Request) -> Path:
@@ -1955,12 +2160,10 @@ def create_app(db_path: str | Path) -> Starlette:
             if uploaded:
                 archive.unlink(missing_ok=True)
             raise HTTPException(400, str(exc)) from exc
-        if not job.start_restore(archive, delete_archive=uploaded):
+        if not _start_job("restore", lambda: job.start_restore(archive, delete_archive=uploaded)):
             if uploaded:
                 archive.unlink(missing_ok=True)
             raise HTTPException(409, "another job is running")
-        backup.write_progress(db_path, "restore", state="running", phase="start",
-                              started_at=backup.now_iso())  # fmt: skip
         return JSONResponse({"started": True, "manifest": backup.summary(manifest)}, 202)
 
     async def import_scan(request: Request):
@@ -1977,10 +2180,10 @@ def create_app(db_path: str | Path) -> Starlette:
         q = request.query_params
         where, params = [], []
         if q.get("status"):
-            where.append("f.status = ?")
+            where.append("x.status = ?")
             params.append(q["status"])
         if q.get("person"):
-            where.append("f.person_id = ?")
+            where.append("x.person_id = ?")
             params.append(q["person"])
         for key, expr in FILE_TEXT_FILTERS.items():
             if q.get(key):
@@ -1989,26 +2192,23 @@ def create_app(db_path: str | Path) -> Starlette:
         clause = f"WHERE {' AND '.join(where)}" if where else ""
         limit = _int(request, "limit", 100, 1, 1000)
         offset = _int(request, "offset", 0, 0, 10**9)
-        order = _order(q, FILE_SORTS, "processed", "f.id")
+        order = _order(q, FILE_SORTS, "processed", "x.id")
         with closing(conn()) as c:
             total = c.execute(
-                f"""SELECT COUNT(*) FROM files f
-                    LEFT JOIN activities a ON a.id = f.activity_id {clause}""",
-                params,
+                f"SELECT COUNT(*) FROM ({IMPORT_ITEMS_SQL}) x {clause}", params
             ).fetchone()[0]
             rows = c.execute(
-                f"""SELECT f.id, f.person_id, COALESCE(f.source_rel, f.rel_path) AS rel_path,
-                           f.rel_path LIKE '@uploads/%' AS archived, f.zip_member, f.size,
-                           f.status,
-                           f.prev_status, f.skip_reason, f.error, f.activity_id, f.first_seen,
-                           f.missing_since, f.dismissed, f.imported_at,
-                           f.fit_uid, f.fit_type, f.fit_created, f.device_serial,
-                           a.start_time_utc, a.utc_offset_s, a.activity_type, a.name
-                    FROM files f LEFT JOIN activities a ON a.id = f.activity_id
-                    {clause} ORDER BY {order} LIMIT ? OFFSET ?""",
+                f"""SELECT * FROM ({IMPORT_ITEMS_SQL}) x
+                    {clause} ORDER BY {order}, x.day DESC LIMIT ? OFFSET ?""",
                 [*params, limit, offset],
             ).fetchall()
-        return JSONResponse({"total": total, "items": [dict(r) for r in rows]})
+        items = []
+        for r in rows:
+            item = {k: r[k] for k in r.keys() if k not in INTERNAL_ITEM_KEYS}
+            if r["kind"] == "day":
+                item["day_contents"] = garmin.day_contents(json.loads(r["summary"] or "{}"))
+            items.append(item)
+        return JSONResponse({"total": total, "items": items})
 
     async def import_file_forget(request: Request):
         with closing(conn()) as c:
@@ -2083,6 +2283,20 @@ def create_app(db_path: str | Path) -> Starlette:
         Route("/api/forecast", forecast),
         Route("/api/stats/totals", stats_totals),
         Route("/api/stats/records", stats_records),
+        Route("/api/workouts", workouts_list),
+        Route("/api/workouts", workout_create, methods=["POST"]),
+        Route("/api/workouts/order", workouts_order, methods=["PUT"]),
+        Route("/api/workouts/estimate", workout_estimate, methods=["POST"]),
+        Route("/api/workouts/{id:int}", workout_update, methods=["PUT"]),
+        Route("/api/workouts/{id:int}", workout_delete, methods=["DELETE"]),
+        Route("/api/planned", planned_create, methods=["POST"]),
+        Route("/api/planned/{id:int}", planned_move, methods=["PATCH"]),
+        Route("/api/planned/{id:int}", planned_update, methods=["PUT"]),
+        Route("/api/planned/{id:int}", planned_delete, methods=["DELETE"]),
+        Route("/api/icu", icu_accounts),
+        Route("/api/icu/{id}", icu_account_set, methods=["PUT"]),
+        Route("/api/icu/{id}", icu_account_delete, methods=["DELETE"]),
+        Route("/api/icu/{id}/test", icu_account_test, methods=["POST"]),
         Route("/api/garmin", garmin_accounts),
         Route("/api/garmin/alerts", garmin_alerts),
         Route("/api/garmin/{id}", garmin_account_set, methods=["PUT"]),
@@ -2129,12 +2343,41 @@ def create_app(db_path: str | Path) -> Starlette:
             except TimeoutError:
                 pass
 
+    # Planned workouts to intervals.icu: sleeps until the next send is due (or a change wakes
+    # it); nothing to send = one look an hour.
+    async def plan_loop():
+        while True:
+            with closing(conn()) as c:
+                due = icu.next_due(c)
+            wait = 3600.0
+            if due:
+                at = datetime.strptime(due, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
+                wait = max(0.0, min(wait, (at - datetime.now(UTC)).total_seconds()))
+                if wait == 0.0:
+
+                    def work():
+                        with closing(conn()) as c2:
+                            icu.sync_due(c2)
+
+                    try:
+                        await run_in_threadpool(work)
+                    except Exception:  # noqa: BLE001 - keep the loop alive, try again later
+                        await asyncio.sleep(icu.RETRY_S)
+                    continue
+            try:
+                await asyncio.wait_for(plan_wake.wait(), wait + 1)
+                plan_wake.clear()
+            except TimeoutError:
+                pass
+
     @asynccontextmanager
     async def lifespan(app):
         sched.start()
         surface_task = asyncio.create_task(surface_loop(), name="trailbook-surface")
+        plan_task = asyncio.create_task(plan_loop(), name="trailbook-plans")
         yield
         surface_task.cancel()
+        plan_task.cancel()
         await sched.stop()
 
     app = Starlette(

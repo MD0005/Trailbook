@@ -62,8 +62,6 @@ EXTRA_CHANNELS = {
 }
 
 # Gaps longer than this between two records are treated as pauses, not movement.
-MAX_MOVING_GAP_S = 30.0
-MIN_MOVING_SPEED = 0.3  # m/s
 
 
 class FitError(Exception):
@@ -792,7 +790,7 @@ def _summary(sessions: list[dict], ch: dict[str, list], on_foot: bool) -> dict:
     summary: dict = {
         "elapsed_s": elapsed,
         "timer_s": timer,
-        "moving_s": _moving_time(times, ch["distance"]) or timer,
+        "time_s": timer,  # the activity's time: the timer time (pauses left out)
         "distance_m": distance,
         "ascent_m": total("total_ascent"),
         "descent_m": total("total_descent"),
@@ -817,26 +815,9 @@ def _summary(sessions: list[dict], ch: dict[str, list], on_foot: bool) -> dict:
         # resting (BMR) share of the calories; active = total - metabolic
         "metabolic_calories": total("metabolic_calories"),
     }
-    if summary["avg_speed"] is None and distance and summary["moving_s"]:
-        summary["avg_speed"] = distance / summary["moving_s"]
+    if summary["avg_speed"] is None and distance and summary["time_s"]:
+        summary["avg_speed"] = distance / summary["time_s"]
     return summary
-
-
-def _moving_time(times: list[float], distances: list[float | None]) -> float | None:
-    """Sum of intervals in which the athlete actually moved."""
-    moving = 0.0
-    prev_t = prev_d = None
-    seen_distance = False
-    for t, d in zip(times, distances, strict=True):
-        if d is None:
-            continue
-        seen_distance = True
-        if prev_t is not None:
-            dt = t - prev_t
-            if 0 < dt <= MAX_MOVING_GAP_S and (d - prev_d) / dt >= MIN_MOVING_SPEED:
-                moving += dt
-        prev_t, prev_d = t, d
-    return moving if seen_distance and moving > 0 else None
 
 
 def _avg(values: list) -> float | None:

@@ -15,7 +15,7 @@ a metric not in a coloured group is drawn in `--muted`.
 
 Own drawings (`OWN_ICONS` in `preview.js`, same grid, 2.1 stroke, round joins) take
 precedence over the set: `sleep`, `date`, `type`, `name`, and replacements for the weak
-`avg_heart_rate`, `moving_time`, `avg_pace`, `total_ascent` and `total_descent`.
+`avg_heart_rate`, `timer_time`, `avg_pace`, `total_ascent` and `total_descent`.
 
 Activity types likewise: `OWN_TYPE_ICONS` in `preview.js` replaces weak drawings of the
 set, used by `typeIcon` everywhere — so far `treadmill_run` (the `run` runner on a deck
@@ -27,7 +27,7 @@ Segments cards. Activity tiles use the standard size.
 ## Where they are used
 
 - **Activities › List** — table headers (column `icon`, 18 px like the type icons):
-  date, type, name, distance, moving time, pace, avg HR, ascent.
+  date, type, name, distance, time, pace, avg HR, ascent.
 - **Settings › Imported** — FIT files that are not activities (sleep, HRV, monitoring, …) get
   a metric icon in front of their content (`FIT_TYPE_ICON` in `preview.js`).
 - Planned: Activity page (stats) and charts, each series in its group colour.

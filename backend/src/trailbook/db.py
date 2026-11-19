@@ -495,6 +495,81 @@ MIGRATIONS: list[str] = [
     """
     ALTER TABLE garmin_accounts ADD COLUMN days_to TEXT;
     """,
+    # v29 — segments: both directions chosen by the person: 'auto' (flat segments), 'on', 'off'.
+    """
+    ALTER TABLE segments ADD COLUMN two_way_mode TEXT NOT NULL DEFAULT 'auto';
+    """,
+    # v30 — planned workouts (planner.py) and the intervals.icu key that sends them on to
+    # Garmin (icu.py). `planned_workouts` keeps a copy of the workout as it was placed;
+    # sync_state: pending (sent when send_after has passed) / sent / error / delete (removed
+    # here, still to be removed from intervals.icu).
+    """
+    CREATE TABLE icu_accounts (
+        person_id   TEXT PRIMARY KEY REFERENCES persons(id) ON DELETE CASCADE,
+        api_key     TEXT NOT NULL,
+        key_hint    TEXT,
+        athlete_id  TEXT,
+        athlete     TEXT,
+        status      TEXT NOT NULL DEFAULT 'new',
+        last_error  TEXT,
+        checked_at  TEXT,
+        created_at  TEXT NOT NULL
+    );
+    CREATE TABLE workout_templates (
+        id          INTEGER PRIMARY KEY,
+        person_id   TEXT NOT NULL REFERENCES persons(id) ON DELETE CASCADE,
+        position    INTEGER NOT NULL DEFAULT 0,
+        name        TEXT NOT NULL,
+        sport       TEXT NOT NULL,
+        target      TEXT NOT NULL,
+        steps       TEXT NOT NULL,
+        created_at  TEXT NOT NULL,
+        updated_at  TEXT NOT NULL
+    );
+    CREATE TABLE planned_workouts (
+        id            INTEGER PRIMARY KEY,
+        person_id     TEXT NOT NULL REFERENCES persons(id) ON DELETE CASCADE,
+        day           TEXT NOT NULL,
+        template_id   INTEGER,
+        name          TEXT NOT NULL,
+        sport         TEXT NOT NULL,
+        target        TEXT NOT NULL,
+        steps         TEXT NOT NULL,
+        sync_state    TEXT NOT NULL DEFAULT 'pending',
+        send_after    TEXT,
+        icu_event_id  TEXT,
+        sync_error    TEXT,
+        sent_at       TEXT,
+        created_at    TEXT NOT NULL,
+        updated_at    TEXT NOT NULL
+    );
+    CREATE INDEX planned_person_day ON planned_workouts(person_id, day);
+    """,
+    # v31 — team, racket, gym… sports: moving time = timer time (sports.TIMER_TIME_GROUPS);
+    # their load and training type are computed again.
+    """
+    UPDATE activities SET moving_s = timer_s, analysis_version = 0, workout_version = 0
+    WHERE timer_s IS NOT NULL
+      AND category IN ('team', 'racket', 'fitness', 'mind_body', 'climbing', 'combat');
+    """,
+    # v32 — Garmin Connect's moving time (`movingDuration`) is kept with the list data: the
+    # history of each account is read again (list pages only; nothing is downloaded twice).
+    """
+    UPDATE garmin_accounts SET backfill_offset = 0, backfill_done = 0;
+    """,
+    # v33 — no moving time anywhere: an activity's time (`moving_s`) is the timer time (pauses
+    # on the watch left out), next to the elapsed time; load and training type again.
+    """
+    UPDATE activities SET moving_s = COALESCE(timer_s, elapsed_s), analysis_version = 0,
+           workout_version = 0
+    WHERE moving_s IS NOT COALESCE(timer_s, elapsed_s);
+    """,
+    # v34 — the column says what it holds: `time_s` (the timer time); segment efforts keep only
+    # their elapsed time (no moving time anywhere).
+    """
+    ALTER TABLE activities RENAME COLUMN moving_s TO time_s;
+    ALTER TABLE segment_efforts DROP COLUMN moving_s;
+    """,
 ]
 
 SCHEMA_VERSION = len(MIGRATIONS)

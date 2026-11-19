@@ -6,6 +6,10 @@
 const ICON_PIN = svg(`<path d="M12 21s-6-5.6-6-11a6 6 0 0 1 12 0c0 5.4-6 11-6 11z"/><circle cx="12" cy="10" r="2"/>`);
 const ICON_SLICE = svg(`<path d="M3 17c3-1 4-6 7-6s3 4 6 4 3-6 5-8"/><path d="M8 4v16M16 4v16" opacity=".55"/>`);
 const ON_FOOT = new Set(["run", "walk", "hike"]);
+// Segments counted in both directions: two arrows (top right of the map), both ends yellow.
+const ICON_TWO_WAY = svg(`<path d="M4 8h15l-4-4M20 16H5l4 4"/>`);
+const SEG_TWO_WAY_END = "#f5b400";
+const TWO_WAY_TIP = "Counted in both directions";
 
 // Pace for on-foot groups, speed otherwise.
 const segSpeed = (mps, group) => (!mps ? "–" : ON_FOOT.has(group) ? pace(mps) : `${num(mps * 3.6, 1)} km/h`);
@@ -31,7 +35,8 @@ function worldPx(lat, lon, z) {
   return [((lon + 180) / 360) * s, ((1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2) * s];
 }
 
-function staticMap(polyline, { W = 560, H = 230, cls = "seg-map", tiles: tileCls = "seg-tiles" } = {}) {
+// `dashed`: a segment (not an activity) is drawn dashed; `twoWay`: both ends yellow.
+function staticMap(polyline, { W = 560, H = 230, cls = "seg-map", tiles: tileCls = "seg-tiles", dashed = false, twoWay = false } = {}) {
   const pts = decodePolyline(polyline);
   if (pts.length < 2) return "";
   const source = loadMapSettings().map.source;
@@ -62,9 +67,9 @@ function staticMap(polyline, { W = 560, H = 230, cls = "seg-map", tiles: tileCls
   return `<svg class="${cls}" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
     <g class="${tileCls}">${tiles}</g>
     <path d="${d}" fill="none" style="stroke:var(--map-halo)" stroke-width="7" stroke-linejoin="round" stroke-linecap="round" opacity=".8"/>
-    <path d="${d}" fill="none" stroke="var(--accent)" stroke-width="4" stroke-linejoin="round" stroke-linecap="round"/>
-    <circle cx="${sx - x0}" cy="${sy - y0}" r="5" fill="#3ecf8e" style="stroke:var(--map-halo)" stroke-width="2"/>
-    <circle cx="${ex - x0}" cy="${ey - y0}" r="5" fill="#ff6b6b" style="stroke:var(--map-halo)" stroke-width="2"/></svg>`;
+    <path d="${d}" fill="none" stroke="var(--accent)" stroke-width="4" stroke-linejoin="round" stroke-linecap="${dashed ? "butt" : "round"}"${dashed ? ` stroke-dasharray="5 2"` : ""}/>
+    <circle cx="${sx - x0}" cy="${sy - y0}" r="5" fill="${twoWay ? SEG_TWO_WAY_END : "#3ecf8e"}" style="stroke:var(--map-halo)" stroke-width="2"/>
+    <circle cx="${ex - x0}" cy="${ey - y0}" r="5" fill="${twoWay ? SEG_TWO_WAY_END : "#ff6b6b"}" style="stroke:var(--map-halo)" stroke-width="2"/></svg>`;
 }
 
 // ---- list ---------------------------------------------------------------------------------
@@ -76,28 +81,36 @@ function newSegmentPanel() {
 }
 
 function segmentCard(s, fqs = "") {
-  const head = `<div class="seg-card-head"><span class="tile-icon">${s.category ? groupIcon(s.category, 28) : typeIcon("other", 28)}</span>
-    <span class="tile-title"><b>${esc(s.name)}</b><span class="hint">${km(s.distance_m)} · ${meters(s.ascent_m)} up · ${s.category ? esc(groupLabel(s.category)) : "any type"}${s.efforts ? ` · ${num(s.efforts)} effort${s.efforts === 1 ? "" : "s"}${CURRENT === "all" && s.people > 1 ? ` · ${num(s.people)} people` : ""}` : ""}</span></span>
+  const g = s.category;
+  const n = s.efforts ? ` · <b class="seg-n">${num(s.efforts)}</b> effort${s.efforts === 1 ? "" : "s"}${CURRENT === "all" && s.people > 1 ? ` · ${num(s.people)} people` : ""}` : "";
+  const head = `<div class="seg-card-head"><span class="tile-icon">${g ? groupIcon(g, 28) : typeIcon("other", 28)}</span>
+    <span class="tile-title"><b>${esc(s.name)}</b><span class="hint">${km(s.distance_m)} · ${meters(s.ascent_m)} up · ${g ? esc(groupLabel(g)) : "any type"}${n}</span></span>
     ${s.pending ? state("matching…", "warn") : ""}</div>`;
-  const block = (label, e) => (e ? `<div class="seg-effort"><span class="hint">${label}</span><b>${mmss(e.elapsed_s)}</b>
-      <span class="hint">${effortDay(e)}${personBit(e)}</span><span class="hint">${effortDetails(e, s.category)}</span></div>` : "");
+  // Best and Last: icon and label, the date on the right, the time big, then speed, heart
+  // rate and power with their icons.
+  const onFoot = ON_FOOT.has(g);
+  const meta = (ic, v, tip) => (v == null || v === "–" ? "" : `<span title="${tip}">${metricIcon(ic, 14)}${v}</span>`);
+  const block = (label, icon, e) => (e ? `<div class="seg-eb">
+      <div class="seg-eb-head">${icon}<span>${label}</span><span class="seg-eb-date">${effortDay(e)}</span></div>
+      <div class="seg-eb-time">${mmss(e.elapsed_s)}${e.reverse ? ` <span class="hint other-way" title="Ridden in the opposite direction">⇄</span>` : ""}</div>
+      <div class="seg-eb-meta">${meta(onFoot ? "avg_pace" : "avg_speed", segSpeed(e.avg_speed, g), onFoot ? "Average pace" : "Average speed")}
+        ${meta("avg_heart_rate", e.avg_hr != null ? bpm(e.avg_hr) : null, "Average heart rate")}${meta("avg_power", e.avg_power != null ? watts(e.avg_power) : null, "Average power")}</div>
+      ${CURRENT === "all" ? `<div class="seg-eb-who">${avatar(person(e.person_id), 16)} ${esc(personLabel(e.person_id))}</div>` : ""}</div>` : "");
   return `<a class="card seg-card" href="#/segment/${s.id}${fqs ? "?" + fqs : ""}">
-    ${staticMap(s.polyline)}${head}
-    ${s.efforts ? `<div class="seg-efforts">${block("Best", s.best)}${block("Last", s.last)}</div>` : hint(s.pending ? "Looking for efforts in all activities…" : "No efforts yet.")}</a>`;
+    <div class="seg-map-wrap">${staticMap(s.polyline, { dashed: true, twoWay: s.two_way })}${s.two_way ? `<span class="seg-two-way" title="${TWO_WAY_TIP}">${ICON_TWO_WAY}</span>` : ""}</div>${head}
+    ${s.efforts ? `<div class="seg-ebs">${block("Best", LAUREL_SVG, s.best)}${block("Last", metricIcon("date", 15), s.last)}</div>` : hint(s.pending ? "Looking for efforts in all activities…" : "No efforts yet.")}</a>`;
 }
 
 async function renderSegments(params) {
   const [data] = await Promise.all([api("segments?" + new URLSearchParams({ ...personParam(), ...filterQuery(params) })), (async () => { BASEMAPS ??= await api("basemaps"); })()]);
   const showEmpty = store.get("segments-empty") === "1";
   const shown = data.items.filter((s) => s.efforts || s.pending || showEmpty);
-  const hidden = data.items.length - shown.length;
   const who = CURRENT === "all" ? "anyone" : esc(personLabel(CURRENT));
   view.innerHTML = `
     ${pageHead("Segments", `
       ${timeBadge(params)}${typeBadge(params)}
       ${badgeHtml("new", "New segment", "", { panel: newSegmentPanel() })}
       ${badgeHtml("options", "Options", "", { panel: `<div class="opt-panel">${checkCtl("segments-empty", showEmpty, "Show segments without efforts")}</div>` })}`)}
-    ${hidden ? hint(`${num(hidden)} segment(s) without efforts by ${who} are hidden (Options).`) : ""}
     ${shown.length ? `<div class="seg-grid">${shown.map((s) => segmentCard(s, new URLSearchParams(filterQuery(params)).toString())).join("")}</div>`
       : `<div class="card">${hint(data.items.length ? `No segment has an effort by ${who} yet.` : "No segments yet. A segment is a piece of route — a climb, a sprint, a lap — and every activity that covers it gets a time. Create one with <b>New segment</b>.")}</div>`}`;
   bindBadges(view.querySelector(".page-head"));
@@ -125,17 +138,51 @@ function segmentTrend(root, series) {
   if (!root || series.length < 2) return;
   const x = series.map((e) => Date.parse(e.start_time_utc) / 1000 + (e.utc_offset_s || 0));
   const v = series.map((e) => e.elapsed_s);
-  const avg = v.reduce((p, q) => p + q, 0) / v.length;
+  const n = v.length, last = n - 1, avg = v.reduce((p, q) => p + q, 0) / n;
+  const best = v.indexOf(Math.min(...v));
+  const trend = n >= 4 ? robustTrend(x.map((t) => t / 86400), v) : null;
+  const accent = cssAccent(), grey = "#7c8594";
+  // Value pills on the right (docs/CHARTS.md), each at the height of its value.
+  const tag = (label, value, i, color, values, tip) => ({ label, value, i, values, color, text: mmss(value), tip, mark: i != null && i !== last });
   SEGMENT_CHART = chartGroup(root, {
     x: { date: x }, kind: "date",
     series: [{
       key: "time", label: "Time", title: "Trend", icon: "elapsed_time", unit: "m:ss", values: v, fmt: mmss, points: true, fill: false,
-      invert: true, color: cssAccent(), tip: "The time of every effort in the chosen period. Faster is higher.",
-      stats: [["Best", mmss(Math.min(...v)), "min", "Fastest time in the period"],
-        ["Avg", mmss(avg), avg, "Average time in the period"],
-        ["Last", mmss(v[v.length - 1]), { ranges: [[v.length - 1, v.length - 1]] }, "The latest effort"]],
+      invert: true, color: accent, tip: "Effort times in the period, faster higher. Dashed: robust LOESS trend over date.",
+      lines: trend ? [{ label: "Trend", values: trend, color: grey, dash: [6, 4] }] : [], legend: false,
+      tags: [tag("Last", v[last], last, accent, v, "Latest effort"),
+        ...(trend ? [tag("Trend", trend[last], last, grey, trend, "LOESS at the last effort: local linear fit, span 0,6, tricube weights in days, 2 bisquare robustness passes (outliers > 6·MAD → 0)")] : []),
+        tag("Best", v[best], best, accent, v, "Minimum in the period"),
+        tag("Avg", avg, null, accent, v, "Arithmetic mean in the period")],
     }],
   });
+}
+
+// Trend curve: robust local regression over time (LOESS, local linear, tricube weights, span
+// 60 % of the efforts, two robustness passes with bisquare weights). Fitness changes slowly,
+// so the curve follows weeks and seasons, not single days; a slow outlier (traffic, a group
+// ride, a bad day) gets little weight. Over time, not over the effort number: gaps in training
+// do not bend it. x in days.
+function robustTrend(x, y, span = 0.6) {
+  const n = x.length, r = Math.max(3, Math.ceil(span * n));
+  let rob = new Array(n).fill(1), fit = y.slice();
+  for (let pass = 0; pass < 3; pass++) {
+    fit = x.map((xi) => {
+      const d = x.map((xj) => Math.abs(xj - xi));
+      const h = Math.max([...d].sort((a, b) => a - b)[r - 1], 1e-6) * 1.0001;
+      let sw = 0, sx = 0, sy = 0, sxx = 0, sxy = 0;
+      for (let j = 0; j < n; j++) {
+        const u = d[j] / h, w = (u < 1 ? (1 - u ** 3) ** 3 : 0) * rob[j];
+        sw += w; sx += w * x[j]; sy += w * y[j]; sxx += w * x[j] * x[j]; sxy += w * x[j] * y[j];
+      }
+      if (!sw) return y[x.indexOf(xi)];
+      const mx = sx / sw, my = sy / sw, vx = sxx / sw - mx * mx;
+      return vx > 1e-9 ? my + ((sxy / sw - mx * my) / vx) * (xi - mx) : my;
+    });
+    const res = y.map((yi, i) => Math.abs(yi - fit[i])), med = [...res].sort((a, b) => a - b)[Math.floor(n / 2)] || 1;
+    rob = res.map((e) => { const u = e / (6 * med); return u < 1 ? (1 - u * u) ** 2 : 0; });
+  }
+  return fit;
 }
 
 // ---- weather of an effort: did it help? -------------------------------------------------
@@ -334,30 +381,36 @@ function effortRow(e, group, { power = SEG_HAS_POWER, thisId = null, wx = false,
     <td class="c-act">${mine ? `<span class="this-tag">This activity</span>` : `<a href="#/activity/${e.activity_id}">${typeName(e.activity_type, e.activity_name || typeLabel(e.activity_type))}</a>`}</td>${wxCell}</tr>`;
 }
 
-// Last / best effort: a card titled like the activity tiles, its values as small tiles.
+// Last / best effort: a card titled like the activity tiles, its values as small tiles in one
+// row. Both cards show the same set (a missing value is "–"), so their columns line up.
 function effortCard(title, icon, e, group) {
   const head = `<h3 class="tile-title">${icon}<span>${title}</span></h3>`;
   if (!e) return `<div class="card seg-eff">${head}${hint("–")}</div>`;
   const onFoot = ON_FOOT.has(group);
-  const tile = (ic, label, value) => (value == null || value === "–" ? ""
-    : `<div class="seg-eff-tile"><span class="tile-title">${metricIcon(ic, 18)}<span>${label}</span></span><b>${value}</b></div>`);
-  return `<div class="card seg-eff">${head}
-    <div class="hint seg-eff-sub">${localTime(e)}${personBit(e)} · <a href="#/activity/${e.activity_id}">${esc(e.activity_name || typeLabel(e.activity_type))}</a>${e.rank ? ` · rank ${e.rank}` : ""}</div>
-    <div class="seg-eff-tiles">${tile("elapsed_time", "Time", mmss(e.elapsed_s))}${tile("moving_time", "Moving time", mmss(e.moving_s))}
+  const tile = (ic, label, value) => `<div class="seg-eff-tile"><span class="tile-title">${metricIcon(ic, 18)}<span>${label}</span></span><b>${value ?? "–"}</b></div>`;
+  return `<div class="card seg-eff"><div class="seg-eff-head">${head}
+    <div class="hint seg-eff-sub">${localTime(e)}${personBit(e)} · <a href="#/activity/${e.activity_id}">${esc(e.activity_name || typeLabel(e.activity_type))}</a>${e.rank ? ` · rank ${e.rank}` : ""}${e.reverse ? " · other way ⇄" : ""}</div></div>
+    <div class="seg-eff-tiles">${tile("elapsed_time", "Time", mmss(e.elapsed_s))}
       ${tile(onFoot ? "avg_pace" : "avg_speed", onFoot ? "Avg pace" : "Avg speed", segSpeed(e.avg_speed, group))}
       ${tile(onFoot ? "best_pace" : "max_speed", onFoot ? "Best pace" : "Max speed", e.max_speed ? segSpeed(e.max_speed, group) : null)}
       ${tile("avg_heart_rate", "Avg HR", e.avg_hr != null ? bpm(e.avg_hr) : null)}${tile("max_heart_rate", "Max HR", e.max_hr != null ? bpm(e.max_hr) : null)}
-      ${tile("avg_power", "Avg power", e.avg_power != null ? watts(e.avg_power) : null)}${tile("avg_cadence", "Cadence", e.avg_cadence != null ? cadence(e.avg_cadence, group) : null)}</div></div>`;
+      ${SEG_HAS_POWER ? tile("avg_power", "Avg power", e.avg_power != null ? watts(e.avg_power) : null) : ""}${tile("avg_cadence", "Cadence", e.avg_cadence != null ? cadence(e.avg_cadence, group) : null)}</div></div>`;
 }
+
+// Route card of a segment: Data None | Altitude | Surface. Altitude and surface come from an
+// activity that rode it (its own direction), cut to the segment.
+const SEG_ROUTE_MODES = [["plain", "None"], ["altitude", "Altitude"], ["surface", "Surface"]];
 
 async function renderSegment(id, params) {
   const pq = new URLSearchParams({ ...personParam(), ...filterQuery(params) });
   const d = await api(`segments/${id}?${pq}`);
   const s = d.segment, g = s.category, sum = d.summary;
   SEG_HAS_POWER = (d.top || []).some((e) => e.avg_power != null);
-  const effortSort = params.sort === "date" ? "date" : "time";
+  const effortSort = params.sort === "time" ? "time" : "date"; // All efforts: newest first by default
   const allQ = { ...personParam(), ...filterQuery(params), sort: effortSort, limit: 50 };
   const first = await api(`segments/${id}/efforts?${new URLSearchParams(allQ)}`);
+  // an effort ridden in the segment's own direction: altitude and surface for the map come from it
+  const routeRef = [d.best, ...(d.top || [])].find((e) => e && !e.reverse) || null;
   const grade = s.ascent_m != null && s.distance_m ? `${num((s.ascent_m / s.distance_m) * 100, 1)} % avg climb` : "";
   const showSummary = UI.data["segment-summary"] ?? true; // remembered per person, on by default
   // Edit: name, which activities count, delete.
@@ -368,6 +421,8 @@ async function renderSegment(id, params) {
       ${row("Name", `<input name="seg-name" value="${esc(s.name)}" maxlength="120">`)}
       ${srcGroup ? row(optLabel("Counts", `${esc(groupLabel(srcGroup))} only: all its types (${esc(groupTypes.slice(0, 3).join(", "))}…)`),
         pickList("seg-types", [["group", `${groupLabel(srcGroup)} only`], ["any", "Any activity type"]], g ? "group" : "any")) : ""}
+      ${row(optLabel("Direction", `Automatic: both ways on flat segments (now ${s.two_way_auto ? "both ways" : "one way"})`),
+        pickList("seg-twoway", [["auto", "Automatic"], ["on", "Both ways"], ["off", "One way"]], s.two_way_mode || "auto"))}
       ${row("", `<button class="badge danger" data-del>Delete segment</button>`)}</div>`;
   const src = d.source ? `${localTime(d.source).slice(0, 10)}${d.source.location ? ` · ${esc(d.source.location)}` : ""}` : "";
   const fq = new URLSearchParams(filterQuery(params)).toString();
@@ -378,8 +433,6 @@ async function renderSegment(id, params) {
         ${badgeHtml("edit", "Edit", "", { panel: editPanel })}
         <button class="badge ${showSummary ? "on" : ""}" data-summary-toggle>Summary</button>
         ${s.pending ? state("matching…", "warn") : ""}</div><span class="spacer"></span></div>
-    <div class="card route-card"><div class="card-head"><h3 class="tile-title">${metricIcon("route", 18)}<span>Route</span></h3></div>
-      <div id="seg-map" class="map"></div></div>
     <div data-summary ${showSummary ? "" : "hidden"}>${statStrip([
       ["Distance", km(s.distance_m), ""],
       ["Elevation gain", meters(s.ascent_m), grade],
@@ -389,6 +442,10 @@ async function renderSegment(id, params) {
       ["Average", mmss(sum.avg_s), sum.median_s != null ? `median ${mmss(sum.median_s)}` : ""],
       ["Last", d.last ? mmss(d.last.elapsed_s) : "–", d.last ? effortDay(d.last) : ""],
     ])}</div>
+    <div class="card route-card"><div class="card-head"><h3 class="tile-title">${metricIcon("route", 18)}<span>Route</span></h3>
+        ${s.two_way ? `<span class="hint seg-two-way-note" title="${TWO_WAY_TIP}">${ICON_TWO_WAY} both ways</span>` : ""}<span class="spacer"></span>
+        ${routeRef ? `<div class="badges">${badgeHtml("route-color", "Data", routeModeLabel("plain"), { panel: `<div class="opt-panel">${pickList("route-color", SEG_ROUTE_MODES, "plain", () => "", routeModeIcon)}</div>`, right: true })}</div>` : ""}</div>
+      <div class="route-wrap"><div id="seg-map" class="map"></div><div class="route-overlays"><div class="route-legend" id="route-legend" hidden></div></div></div></div>
     ${sum.count ? `
     <div class="seg-eff-row">${effortCard("Last effort", metricIcon("date", 18), d.last, g)}${effortCard("Best effort", LAUREL_SVG, d.best, g)}</div>
     <div class="charts" data-trend></div>
@@ -404,14 +461,14 @@ async function renderSegment(id, params) {
     : `<div class="card">${hint(s.pending ? "Looking for efforts in all activities…" : CURRENT === "all" ? "No activity covers this segment in this period." : `${esc(personLabel(CURRENT))} has no effort on this segment in this period.`)}</div>`}`;
 
   const headEl = view.querySelector(".page-head");
-  bindBadges(headEl);
+  bindBadges(view); // the header badges and the Data badge of the route card
   bindFilterBadges(headEl, `#/segment/${id}`, params);
   segmentTrend(view.querySelector("[data-trend]"), d.series || []);
   fitEffortCols(view);
   fillWeather(view); // Top 10 first, then All efforts (one lookup per activity, cached)
   view.querySelectorAll("[data-esort]").forEach((a) => a.onclick = (e) => {
     e.preventDefault();
-    location.hash = `#/segment/${id}?${new URLSearchParams({ ...filterQuery(params), ...(a.dataset.esort === "date" ? { sort: "date" } : {}) })}`;
+    location.hash = `#/segment/${id}?${new URLSearchParams({ ...filterQuery(params), ...(a.dataset.esort === "time" ? { sort: "time" } : {}) })}`;
   });
   const all = view.querySelector("[data-all]");
   if (all) infinite(all, first.items.length, first.total,
@@ -437,6 +494,11 @@ async function renderSegment(id, params) {
     await api(`segments/${id}`, { method: "PATCH", body: JSON.stringify({ any_type: b.dataset.value === "any" }) }).catch((err) => alert(err.message));
     renderSegment(id, params);
   });
+  panel.querySelectorAll('[data-pick="seg-twoway"]').forEach((b) => b.onclick = async () => {
+    if (b.classList.contains("on")) return;
+    await api(`segments/${id}`, { method: "PATCH", body: JSON.stringify({ two_way_mode: b.dataset.value }) }).catch((err) => alert(err.message));
+    renderSegment(id, params);
+  });
   panel.querySelector("[data-del]").onclick = async () => {
     if (!confirm(`Delete the segment “${s.name}” and all its efforts?\n\nActivities are not touched.`)) return;
     await api(`segments/${id}`, { method: "DELETE" });
@@ -444,8 +506,32 @@ async function renderSegment(id, params) {
   };
   const mapEl = document.getElementById("seg-map"); // grip on the card's bottom edge: map height
   cardResize(mapEl.closest(".card"), () => mapEl.offsetHeight, (h) => { mapEl.style.height = `${h}px`; activeMap?.resize(); }, 220, 1000);
-  showRouteMap("seg-map", s.polyline).catch((e) => {
-    document.getElementById("seg-map").outerHTML = state("Map unavailable: " + esc(e.message), "bad") + staticMap(s.polyline);
+  // The segment line dashed (a segment, not an activity), both ends yellow when two-way.
+  let route = null;
+  const mapReady = showRouteMap("seg-map", s.polyline, { dashed: true, ends: s.two_way ? SEG_TWO_WAY_END : null }).catch((e) => {
+    document.getElementById("seg-map").outerHTML = state("Map unavailable: " + esc(e.message), "bad") + staticMap(s.polyline, { dashed: true, twoWay: s.two_way });
+  });
+  // Data: altitude or surface of the reference effort's activity, cut to the segment.
+  const loadRoute = async () => {
+    if (route) return route;
+    const r = await api(`activities/${routeRef.activity_id}/streams?channels=time,lat,lon,altitude,distance`);
+    const st = r.streams, keep = [];
+    (st.time || []).forEach((t, i) => { if (t != null && t >= routeRef.start_s && t <= routeRef.end_s) keep.push(i); });
+    const cut = Object.fromEntries(["lat", "lon", "altitude", "distance"].map((k) => [k, st[k] ? keep.map((i) => st[k][i]) : null]));
+    const surface = await api(`activities/${routeRef.activity_id}/surface`).catch(() => null);
+    route = { a: { category: g }, st: cut, mode: "plain", km: false, ready: true, surface: surface?.runs ? surface : null };
+    return route;
+  };
+  view.querySelectorAll('[data-pick="route-color"]').forEach((b) => b.onclick = async () => {
+    view.querySelectorAll('[data-pick="route-color"]').forEach((x) => { x.classList.toggle("on", x === b); x.setAttribute("aria-checked", x === b); });
+    view.querySelector('[data-badge-value="route-color"]').innerHTML = routeModeLabel(b.dataset.value);
+    document.onclick?.();
+    await mapReady;
+    const rt = await loadRoute().catch(() => null);
+    if (!rt || !activeMap) return;
+    rt.mode = b.dataset.value;
+    drawActivityRoute(rt);
+    // coloured: solid pieces; none: the dashed segment line again
   });
   if (s.pending) timer = setTimeout(() => renderSegment(id, params), 4000);
 }
@@ -469,13 +555,13 @@ async function renderSegmentFromActivity(params) {
   const data = await fetchPage(0);
   const row = (a) => `<tr><td><a href="#/segments/new/activity?id=${a.id}">${localTime(a)}</a></td><td>${typeName(a.activity_type)}</td>
     <td><a href="#/segments/new/activity?id=${a.id}">${esc(a.name || typeLabel(a.activity_type))}</a></td><td class="num">${km(a.distance_m)}</td>
-    <td class="num">${dur(a.moving_s)}</td>${CURRENT === "all" ? `<td>${avatar(person(a.person_id), 18)} ${esc(personLabel(a.person_id))}</td>` : ""}</tr>`;
+    <td class="num">${dur(a.time_s)}</td>${CURRENT === "all" ? `<td>${avatar(person(a.person_id), 18)} ${esc(personLabel(a.person_id))}</td>` : ""}</tr>`;
   view.innerHTML = `
     ${backLink(`#/segments`, "Segments")}
     ${pageHead("New segment from an activity")}
     <div class="card">${hint("Step 1 of 2 — choose an activity with GPS. Next you cut the part that becomes the segment.")}
       <form class="card-row" data-search><input name="q" placeholder="Search by name…" value="${esc(params.q || "")}" style="min-width:240px"><button class="primary">Search</button></form>
-      <div class="scroll"><table class="data"><thead><tr><th>Date</th><th>Type</th><th>Name</th><th class="num">Distance</th><th class="num">Moving time</th>${CURRENT === "all" ? "<th>Person</th>" : ""}</tr></thead>
+      <div class="scroll"><table class="data"><thead><tr><th>Date</th><th>Type</th><th>Name</th><th class="num">Distance</th><th class="num">Time</th>${CURRENT === "all" ? "<th>Person</th>" : ""}</tr></thead>
       <tbody data-rows>${data.items.map(row).join("") || `<tr><td colspan="6" class="hint">No activities with GPS.</td></tr>`}</tbody></table></div>
       ${data.items.length < data.total ? `<div class="sentinel" data-sentinel>${loaderHtml()}</div>` : ""}</div>`;
   view.querySelector("[data-search]").onsubmit = (e) => {

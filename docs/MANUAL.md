@@ -116,6 +116,34 @@ Points: 1 point ≈ 1 km/h of tailwind on a bike.
 - One weather set per activity (the start's hour), not per segment effort.
 - The points are a rule of thumb for ranking conditions, not a physical time correction.
 
+## Segments: both directions
+
+A segment counts in both directions (efforts ridden the other way share its leaderboard,
+marked ⇄) when Edit › Direction says so:
+
+| Direction | Counted |
+|---|---|
+| Automatic (default) | both ways when the end is at most 30 m and at most 3 % of the length above or below the start (end altitude − start altitude, the mean of the first and last five samples of the source activity); otherwise one way |
+| Both ways | always both ways |
+| One way | only the direction it was created in |
+
+Changing it matches the segment again against every activity.
+
+## Segments: trend line
+
+The dashed curve on the Trend chart is a robust local regression of the effort times over
+the date (LOESS):
+
+- **Local linear fit** around each effort, over the 60 % of efforts nearest in time,
+  weighted by distance in days with the tricube kernel `(1 − u³)³`.
+- **Robust**: two more passes weight each effort by its residual (bisquare
+  `(1 − (e / 6·median|e|)²)²`), so single slow efforts — traffic, a group ride, a bad day —
+  barely move it.
+- **Over time, not over the effort number**: weeks without riding do not bend it.
+
+Fitness changes over weeks, not from one ride to the next, so the curve shows the level you
+are at; the Trend pill is where it ends now. Drawn from 4 efforts on.
+
 ## Interval sections (lines on the activity charts)
 
 Shown only while the activity's training type is **Intervals** (detected or chosen in Edit).
@@ -158,15 +186,15 @@ Checked after Intervals, before Hills, Long, Tempo. All conditions must hold:
 
 | Condition | Formula | Value |
 |---|---|---|
-| Long enough | moving time | ≥ 10 min |
-| Few stops | elapsed ÷ moving time | ≤ 1,25 |
-| Heart rate at threshold (every sport) | share of moving time with HR ≥ 95 % of the sport's threshold HR | ≥ 60 % |
+| Long enough | time | ≥ 10 min |
+| Few pauses | elapsed ÷ time | ≤ 1,25 |
+| Heart rate at threshold (every sport) | share of the time with HR ≥ 95 % of the sport's threshold HR | ≥ 60 % |
 | Rides with power: race intensity | IF = NP ÷ FTP | ≥ 0,90 |
 | Close to your best | intensity ÷ your best intensity in activities of the family ±25 % as long, within 365 days | ≥ 95 % |
 | Above your typical | intensity ÷ your median of the family | ≥ 1,03 |
 
-- **Intensity** = the median moving power when the family's history has power, else the median
-  moving speed (per-activity medians in `workout_stats`).
+- **Intensity** = the median power while in motion when the family's history has power, else
+  the median speed while in motion (per-activity medians in `workout_stats`).
 - **Threshold HR of the sport** = threshold HR (watch, else 90 % of max HR) × the sport's share
   (cycling 0,95, running 1,0; Help › Training types › Sports).
 - Without heart rate an activity is never a Race. The heart rate condition keeps hard group
@@ -232,8 +260,7 @@ Rows of 1, 2, 5 or 10 km. They are built from 1 km laps:
 
 - **Device auto-laps** when every lap but the last is 1 km long (± 25 m): their own values.
 - **Otherwise cut from the streams** (the 1 500 points the page loads): a lap ends at the first
-  point at or past each whole kilometre. Time is the moving time (gaps over 10 s and standing
-  still left out); heart rate, power and cadence are averages weighted by time (gaps count at
+  point at or past each whole kilometre. Time is the timer time (a gap over 30 s is a pause); heart rate, power and cadence are averages weighted by time (gaps count at
   most 30 s; power zeros count, heart rate and cadence zeros do not); a last piece under 50 m
   is dropped.
 
@@ -299,6 +326,50 @@ From today on, days without these values show:
 Month summary: sums of the month's activities; steps and floors as totals with the average of
 the days that have them; stress as the average of the days' averages.
 
+## Time of an activity: timer and elapsed
+
+Trailbook uses no moving time. An activity has two times, both from the watch's file:
+
+- **Time** (timer time) — while the watch was running: pauses on the watch left out, standing
+  still with the watch running counted. Used everywhere: lists, calendar, weeks, totals,
+  targets, pace and speed, load. Files without a timer (GPX, TCX, Strava): the elapsed time.
+- **Elapsed time** — from start to finish, pauses included (the activity page, under Time).
+
+The activity charts can also run on the timer time: a gap over 30 s in the samples is a pause
+(the watch records nothing while paused) and counts 1 s.
+
+## Planned workouts: estimates and what goes to the watch
+
+Code: `planner.py` (`estimate`, `icu_text`, `RULES`), `icu.py`.
+
+- **Zones** are Garmin's zones of the person's latest activity of the sport: heart rate zones
+  1–5 (zone *z* = from its lower limit to the next zone's), power zones 1–7 (from 0 W; an open
+  last zone ends 10 % above its start).
+- **Usual speed**: the median average speed of the latest 10 activities of the sport longer than
+  10 min and 1 km (none: run 2,8 m/s, ride 7 m/s). A step's speed = usual speed × a share by
+  zone (heart rate 0,85 / 0,93 / 1,00 / 1,07 / 1,13; power 0,80 … 1,15); a zone range uses its
+  middle, a rest step stands still.
+- **Time and distance**: a time step's distance = time × speed; a distance step's time =
+  distance ÷ speed. Repeats count every time.
+- **Load** (TSS-like): per step hours × IF² × 100, IF by zone — heart rate 0,55 / 0,70 / 0,82 /
+  0,92 / 1,02; power 0,50 / 0,65 / 0,82 / 0,97 / 1,12 / 1,30 / 1,50.
+- **Kind**: Intervals — a repeat with an interval step in zone 4 or higher; Tempo — an interval
+  step of at least 10 min in zone 3 or higher; Long — at least 90 min; else Easy.
+- **Pace targets** (runs) have no Garmin zones: the step's speed (the middle of its range)
+  against the usual speed is read as a heart rate zone through the speed shares backwards
+  (between two shares in proportion), for the chart, the load and the kind; the step's time /
+  distance uses its own pace. Sent as % of intervals.icu's threshold pace (speed ÷ threshold
+  speed, rounded to 1 %). A new pace range for a zone: usual speed × the zone's share, ±2 %,
+  to 5 s.
+- **Steps on the watch**: each step and each repeat counts one (at most 50).
+- **Sent to intervals.icu** as text: warm-up and cool-down under their headings, a repeat as
+  `Main set Nx`, each step `- cue length target`. Heart rate targets as % of intervals.icu's
+  threshold heart rate (LTHR; without it % of its max HR), rounded to 1 %, so the watch gets
+  Garmin's limits whatever zones intervals.icu uses; power targets in watts. Digits are left
+  out of cues (they would be read as the length).
+- A placed workout is sent 1 minute after it was placed or moved; intervals.icu not reachable
+  or a server error: again 10 minutes later.
+
 ## Fitness: training load, fitness, fatigue, form
 
 Shown in Manual › Fitness; the constants come from `/api/types` (`fitness_rules`), the zones
@@ -306,7 +377,7 @@ from `FORM_ZONES` / `RAMP_ZONES` in `training.js`. Code: `analysis.py`.
 
 ### Load per activity (TSS, one hour at threshold = 100)
 
-Every sport. The first method the activity has data for; duration = moving time.
+Every sport. The first method the activity has data for; duration = the timer time.
 
 1. **Power** — TSS = h × IF² × 100, IF = NP ÷ FTP (NP: 4th-power mean of the 30 s rolling
    power, stops = 0 W). Needs a power stream and an FTP: the watch's per sport (cycling FTP
@@ -317,7 +388,7 @@ Every sport. The first method the activity has data for; duration = moving time.
 3. **Heart rate** — TRIMP per second: HRr = (HR − rest) ÷ (max − rest), weight =
    HRr × 0,64 × e^(1,92 × HRr), summed per minute and divided by 60 min × the weight at
    threshold HR, × 100. Needs ≥ 60 s of heart rate; without a stream: the average HR over the
-   moving time.
+   timer time.
 4. **None** — no power and no heart rate: in totals, not in fitness.
 
 ### Fitness model (daily)

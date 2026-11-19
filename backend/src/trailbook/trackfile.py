@@ -325,19 +325,19 @@ def _build(
     if totals.get("distance_m"):
         distance = totals["distance_m"]
     elapsed = times[-1]
-    moving = fitfile._moving_time(times, dists) or totals.get("timer_s") or elapsed
+    time = totals.get("timer_s") or elapsed  # the timer time; a track has no pauses: elapsed
     hr = [x for x in channels["hr"] if x is not None]
     power = [x for x in channels["power"] if x is not None]
     summary: dict = {
         "elapsed_s": elapsed,
         "timer_s": totals.get("timer_s") or elapsed,
-        "moving_s": moving,
+        "time_s": time,
         "distance_m": distance,
         "ascent_m": ascent,
         "descent_m": descent,
         "avg_hr": round(sum(hr) / len(hr)) if hr else None,
         "max_hr": round(max(hr)) if hr else None,
-        "avg_speed": distance / moving if distance and moving else None,
+        "avg_speed": distance / time if distance and time else None,
         "max_speed": max((s for s in speeds if s is not None), default=None),
         "avg_power": round(sum(power) / len(power)) if power else None,
         "max_power": round(max(power)) if power else None,

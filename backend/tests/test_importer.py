@@ -123,13 +123,10 @@ def test_zip_members_are_tracked(conn, tmp_path):
 
 
 # --------------------------------------------------------------------------------------
-# Real files — runs only when sample-data/ (not in git) is present locally.
+# Real files — only with --samples and when sample-data/ (not in git) is present locally.
 # --------------------------------------------------------------------------------------
 
-needs_samples = pytest.mark.skipif(
-    not SAMPLE_DATA.is_dir() or not any(SAMPLE_DATA.rglob("*.fit")),
-    reason="no local sample-data",
-)
+needs_samples = pytest.mark.samples
 
 
 @needs_samples

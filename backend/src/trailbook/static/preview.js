@@ -184,7 +184,7 @@ const OWN_ICONS = {
   // heart with a pulse line through it
   avg_heart_rate: `<path d="M12 20s-7.5-4.6-7.5-10.2A4.3 4.3 0 0 1 12 7.2a4.3 4.3 0 0 1 7.5 2.6C19.5 15.4 12 20 12 20Z" ${iconLine()}/><path d="M2.5 12.5h5l1.5-2.5 2.5 5 2-3.5 1 1h7" ${iconLine(1.8)}/>`,
   // stopwatch with motion lines
-  moving_time: `<circle cx="14" cy="13.5" r="7" ${iconLine()}/><path d="M12 3.5h4M14 3.5v3M14 13.5v-3.5M14 13.5l2.5 1.5" ${iconLine()}/><path d="M2.5 10h3M2 13.5h2.5M2.5 17h3" ${iconLine(1.8)}/>`,
+  timer_time: `<circle cx="14" cy="13.5" r="7" ${iconLine()}/><path d="M12 3.5h4M14 3.5v3M14 13.5v-3.5M14 13.5l2.5 1.5" ${iconLine()}/><path d="M2.5 10h3M2 13.5h2.5M2.5 17h3" ${iconLine(1.8)}/>`,
   // mountain profile with an arrow up / down
   total_ascent: `<path d="M2.5 20 9 9.5l3.5 5.5 2-2.5 5 7.5Z" ${iconLine()}/><path d="M18.5 9.5V3M16 5.5 18.5 3 21 5.5" ${iconLine()}/>`,
   total_descent: `<path d="M2.5 20 9 9.5l3.5 5.5 2-2.5 5 7.5Z" ${iconLine()}/><path d="M18.5 3v6.5M16 7l2.5 2.5L21 7" ${iconLine()}/>`,
@@ -689,7 +689,7 @@ function activitySummary(t) {
   return statStrip([
     ["Activities", num(t.count), `${num(t.active_days || 0)} active days`],
     ["Distance", km(t.distance_m), t.count ? `${km((t.distance_m || 0) / t.count)} avg` : ""],
-    ["Moving time", hours(t.moving_s), t.count ? `${hours((t.moving_s || 0) / weeks)} per week` : ""],
+    ["Time", hours(t.time_s), t.count ? `${hours((t.time_s || 0) / weeks)} per week` : ""],
     ["Elevation gain", meters(t.ascent_m), ""],
     ["Longest", km(t.longest_m), t.longest_s ? `${dur(t.longest_s)} max time` : ""],
     ["Calories", kcal(t.calories), ""],
@@ -726,7 +726,7 @@ async function renderActivities(params) {
       render: (a) => (workoutOf(a) ? esc(workoutLabel(workoutOf(a))) : `<span class="hint">–</span>`) },
     { key: "name", label: "Name", icon: "name", sort: true, render: (a) => `<a href="#/activity/${a.id}">${esc(a.name || typeLabel(a.activity_type))}</a>` + (a.segment_count ? ` ${segBadge(a)}` : "") },
     { key: "distance", label: "Distance", icon: "distance_total", sort: true, num: true, render: (a) => km(a.distance_m) },
-    { key: "moving", label: "Moving time", icon: "moving_time", sort: true, num: true, render: (a) => dur(a.moving_s) },
+    { key: "time", label: "Time", icon: "timer_time", sort: true, num: true, render: (a) => dur(a.time_s) },
     { key: "pace", label: "Pace", icon: "avg_pace", sort: true, num: true, render: (a) => (a.distance_m ? pace(a.avg_speed) : "–") },
     { key: "hr", label: "Avg HR", icon: "avg_heart_rate", sort: true, num: true, render: (a) => bpm(a.avg_hr) },
     { key: "ascent", label: "Ascent", icon: "total_ascent", sort: true, num: true, render: (a) => meters(a.ascent_m) },
@@ -756,7 +756,7 @@ async function renderActivities(params) {
         <span class="tile-icon">${typeIcon(a.activity_type)}</span>
         <span class="tile-title"><b>${esc(a.name || typeLabel(a.activity_type))}</b>
         <span class="hint">${a.name ? `${esc(typeLabel(a.activity_type))} · ` : ""}${localTime(a)}${kind(a) && !small ? ` · ${kind(a)}` : ""}${isAll ? ` · ${esc(personLabel(a.person_id))}` : ""}</span></span>
-        ${small ? `<span class="tile-dist">${a.distance_m ? `<b>${km(a.distance_m)}</b>` : ""}<b>${dur(a.moving_s)}</b></span>` : ""}
+        ${small ? `<span class="tile-dist">${a.distance_m ? `<b>${km(a.distance_m)}</b>` : ""}<b>${dur(a.time_s)}</b></span>` : ""}
       </div>`;
   const tile = (a) => (mode === "small" ? `
     <a class="tile small" href="#/activity/${a.id}">
@@ -767,7 +767,7 @@ async function renderActivities(params) {
       <div class="tile-map">${a.segment_count ? segBadge(a, "tile-seg") : ""}${a.polyline ? staticMap(a.polyline, { W: 400, H: 160, cls: "tile-track", tiles: "faded-tiles" }) : `<span class="hint">${a.indoor ? "indoor" : "no route"}</span>`}</div>
       ${head(a, false)}
       <div class="tile-stats">${[ // only the values the activity has (a treadmill run: no ascent)
-        a.distance_m && ["Distance", km(a.distance_m)], a.moving_s && ["Time", dur(a.moving_s)],
+        a.distance_m && ["Distance", km(a.distance_m)], a.time_s && ["Time", dur(a.time_s)],
         a.distance_m && a.avg_speed && ["Pace", pace(a.avg_speed)], a.avg_hr && ["Avg HR", bpm(a.avg_hr)],
         a.ascent_m && ["Ascent", meters(a.ascent_m)],
       ].filter(Boolean).map(([l, v]) => `<span><span class="hint">${l}</span>${v}</span>`).join("")}</div>
@@ -1136,7 +1136,7 @@ async function renderActivity(id) {
     ["TEMPO", "tempo", "steady and moderately hard"], ["LACTATE_THRESHOLD", "threshold", "hard, near the lactate threshold"],
     ["VO2MAX", "VO2 max", "intervals at maximum oxygen uptake"], ["ANAEROBIC_CAPACITY", "anaerobic", "short, very hard efforts"],
     ["SPEED", "sprint", "sprints of a few seconds"], ["SPRINT", "sprint", "sprints of a few seconds"]];
-  // Small cards: column 1 distance, moving and elapsed time; column 2 effect, Body Battery and
+  // Small cards: column 1 distance, time (timer) and elapsed time; column 2 effect, Body Battery and
   // calories (only the ones with data; the others in the column grow to fill it).
   const tilesHtml = () => {
     const on = new Set(chartX ? available.map((x) => x.key) : []);
@@ -1153,9 +1153,9 @@ async function renderActivity(id) {
       `<span class="tip-note">Garmin's training effect, 0–5 scale (Manual › Training effect).</span>`].join("\n\n");
     // Small "label value" lines (time, calories, effect scores, load): the label small, the value bold.
     const kv = (label, value, tip = "") => (value == null || value === "" ? "" : `<span${tip ? ` data-tip="${tip}"` : ""}><small>${label}</small> <b>${value}</b></span>`);
-    // Time: moving time first (what pace and speed are based on), the elapsed time under it.
-    const timeCard = stat("Time", a.moving_s || a.elapsed_s, `<span class="kv-lines">${a.moving_s ? kv("moving", durMin(a.moving_s), "Moving time: only while moving - pauses and standing still left out") : ""}
-        ${a.elapsed_s ? kv("elapsed", durMin(a.elapsed_s), "Elapsed time: from start to finish, pauses and stops included") : ""}</span>`, "moving_time");
+    // Time: the timer time first (what pace and speed are based on), the elapsed time under it.
+    const timeCard = stat("Time", a.time_s || a.elapsed_s, `<span class="kv-lines">${a.time_s ? kv("timer", durMin(a.time_s), "Timer time: while the watch was running - pauses left out") : ""}
+        ${a.elapsed_s ? kv("elapsed", durMin(a.elapsed_s), "Elapsed time: from start to finish, pauses and stops included") : ""}</span>`, "timer_time");
     // Calories: active and total, one small line each
     const calories = stat("Calories", a.calories, `<span class="kv-lines">${active != null ? kv("active", kcal(active), "Active calories: burned by the activity, without the resting ones") : ""}
         ${kv("total", kcal(a.calories), "Total calories: active plus resting")}</span>`, "calories");
@@ -1215,7 +1215,7 @@ async function renderActivity(id) {
   const laps = lapSource(a, chartX, st); // 1 km laps: the device auto-laps, else from the streams
   // grouped by 1 km (runs) or 5 km (rides, long activities); device laps without a distance
   const lapsN = laps.options.includes(routeKmStep(a)) ? routeKmStep(a) : laps.options[0];
-  const X_KINDS = [chartX?.distance && ["distance", "Distance"], ["time", "Elapsed time"], chartX?.moving && ["moving", "Moving time"], ["percent", "Percent"]].filter(Boolean);
+  const X_KINDS = [chartX?.distance && ["distance", "Distance"], ["time", "Elapsed time"], chartX?.timer && ["timer", "Timer time"], ["percent", "Percent"]].filter(Boolean);
   const xKind = X_KINDS[0][0];
   // Averaging of the power and cadence lines (one choice for both): remembered per person, default 10 s.
   const POWER_AVG = [[0, "None"], [5, "5 s"], [10, "10 s"], [15, "15 s"], [30, "30 s"], [60, "1 min"], [300, "5 min"], [1200, "20 min"]];
@@ -1526,18 +1526,15 @@ function activityChartX(st) {
     lastD = Math.max(lastD, st.distance?.[i] != null ? st.distance[i] / 1000 : lastD); dist.push(lastD);
   }
   const base = lastD > 0.05 ? dist : time, total = base[base.length - 1] || 1;
-  // Moving time: time that passes only while moving (gaps over 10 s and standing still left out).
-  const moving = [];
-  let mv = 0;
+  // Timer time: the watch records nothing while paused, so a gap over 30 s is a pause and
+  // counts 1 s; everything else counts in full (standing still included).
+  const timer = [];
+  let tm = 0;
   for (let i = 0; i < n; i++) {
-    if (i) {
-      const dt = time[i] - time[i - 1], sp = st.speed?.[i];
-      const dd = (dist[i] - dist[i - 1]) * 1000;
-      if (dt > 0 && dt <= 10 && (sp != null ? sp > 0.5 : dd / dt > 0.5)) mv += dt;
-    }
-    moving.push(mv);
+    if (i) { const dt = time[i] - time[i - 1]; tm += dt > 30 ? 1 : Math.max(0, dt); }
+    timer.push(tm);
   }
-  return { time, moving: mv > 0 && lastD > 0.05 ? moving : null, distance: lastD > 0.05 ? dist : null, percent: base.map((v) => (v / total) * 100) };
+  return { time, timer: tm > 0 && tm < time[n - 1] - 30 ? timer : null, distance: lastD > 0.05 ? dist : null, percent: base.map((v) => (v / total) * 100) };
 }
 
 // Trailing average over `secs` seconds of time t (samples without a value are skipped).
@@ -1864,7 +1861,7 @@ function lapSource(a, chartX, st) {
   return { km1, device, options };
 }
 function streamKmLaps(chartX, st) {
-  const d = chartX?.distance, t = chartX?.time, mv = chartX?.moving;
+  const d = chartX?.distance, t = chartX?.time, mv = chartX?.timer;
   if (!d || d[d.length - 1] < 1) return [];
   const out = [];
   let i0 = 0;
@@ -1923,7 +1920,7 @@ function lapsTable(a, src, n) {
   const cols = [
     ["", device ? "#" : "km", false, (r) => r.label],
     ["distance_total", "Distance", true, (r) => km(r.distance_m)],
-    ["moving_time", "Time", true, (r) => dur(r.timer_s)],
+    ["timer_time", "Time", true, (r) => dur(r.timer_s)],
     has("distance_m") && (ride ? ["speed", "Speed", true, (r) => (r.distance_m && r.avg_speed ? `${num(r.avg_speed * 3.6, 1)} km/h` : "–")]
       : ["avg_pace", "Pace", true, (r) => (r.distance_m ? pace(r.avg_speed) : "–")]),
     has("avg_hr") && ["avg_heart_rate", "Avg HR", true, (r) => bpm(r.avg_hr)],
@@ -2130,7 +2127,10 @@ const DARK_TONES = new Set(["soft-dark", "slate", "dusk", "dark"]);
 const TONE_PROPS = ["raster-saturation", "raster-brightness-min", "raster-brightness-max", "raster-contrast", "raster-hue-rotate"];
 const TONE_DEFAULTS = { "raster-saturation": 0, "raster-brightness-min": 0, "raster-brightness-max": 1, "raster-contrast": 0, "raster-hue-rotate": 0 };
 const toneOf = (key) => (BASE_TONES.find(([k]) => k === key) || BASE_TONES[0])[2];
-const routeTone = (tone) => (document.documentElement.dataset.theme === "dark" && !DARK_TONES.has(tone) ? "soft-dark" : tone);
+// Route maps (activity, segment, segment creator) have fixed colours per theme: Faded light in
+// light, Soft dark in dark. The colours chosen in Map › Options belong to the Map tab only.
+const ROUTE_TONE = { light: "faded", dark: "soft-dark" };
+const routeTone = () => ROUTE_TONE[document.documentElement.dataset.theme === "dark" ? "dark" : "light"];
 
 function baseStyle(mapSettings) {
   const src = (BASEMAPS || []).find((b) => b.key === mapSettings.source);
@@ -2164,9 +2164,9 @@ async function createMap(container, mapSettings, opts = {}) {
   const start = opts.bounds ? { bounds: opts.bounds, fitBoundsOptions: opts.fitBoundsOptions || { padding: 40, maxZoom: 15 } } : { center: [10, 50], zoom: 3 };
   const zoomOffset = opts.zoomOffset || 0, focus = opts.focus, withReset = opts.reset, keepTone = opts.keepTone;
   delete opts.bounds; delete opts.fitBoundsOptions; delete opts.zoomOffset; delete opts.focus; delete opts.reset; delete opts.keepTone;
-  // Route maps (activity, segment, segment creator) follow the page theme: in dark a light base
-  // tone becomes Soft dark. The Map tab (keepTone) shows exactly the tone of its options.
-  const tone = () => (keepTone ? mapSettings.tone : routeTone(mapSettings.tone));
+  // Route maps (activity, segment, segment creator): the fixed tone of the theme (routeTone).
+  // The Map tab (keepTone) shows exactly the tone of its options.
+  const tone = () => (keepTone ? mapSettings.tone : routeTone());
   const map = activeMap = new ml.Map({ container, style: baseStyle({ ...mapSettings, tone: tone() }), attributionControl: false,
                                        fadeDuration: 0, ...start, ...opts });
   // Light / dark switched while the map is open: the base tone and the outlines follow.
@@ -2698,7 +2698,7 @@ function renderHeatKpis() {
   const items = [
     ["Activities", num(t.length), `${num(days)} active days`],
     ["Distance", km(sum("distance_m")), ""],
-    ["Moving time", hours(sum("moving_s")), ""],
+    ["Time", hours(sum("time_s")), ""],
   ];
   if (heat.settings.layer === "tiles") {
     const { tiles, square, cluster } = heatTiles();
@@ -2771,16 +2771,17 @@ function drawHeatLayers() {
   renderHeatKpis();
 }
 
-async function showRouteMap(container, polyline, { offset = false } = {}) {
+// `dashed`: a segment line (dashed from the first frame); `ends`: one colour for both ends.
+async function showRouteMap(container, polyline, { offset = false, dashed = false, ends = null } = {}) {
   const coords = lonLat(polyline);
   const map = await createMap(container, loadMapSettings().map, { bounds: boundsOf([coords]), reset: true });
   const accent = getComputedStyle(document.documentElement).getPropertyValue("--accent").trim();
   map.addSource("route", { type: "geojson", data: { type: "Feature", properties: {}, geometry: { type: "LineString", coordinates: coords } } });
-  map.addLayer({ id: "route", type: "line", source: "route", layout: { "line-join": "round", "line-cap": "round" },
-                 paint: { "line-color": accent, "line-width": 3.5, "line-offset": (ROUTE_OFFSET_PX = offset ? 2.2 : 0) } });
+  map.addLayer({ id: "route", type: "line", source: "route", layout: { "line-join": "round", "line-cap": dashed ? "butt" : "round" },
+                 paint: { "line-color": accent, "line-width": 3.5, "line-offset": (ROUTE_OFFSET_PX = offset ? 2.2 : 0), ...(dashed ? { "line-dasharray": [1.4, 0.55] } : {}) } });
   map.addSource("ends", { type: "geojson", data: { type: "FeatureCollection", features: [
-    { type: "Feature", properties: { c: "#3ecf8e" }, geometry: { type: "Point", coordinates: coords[0] } },
-    { type: "Feature", properties: { c: "#ff6b6b" }, geometry: { type: "Point", coordinates: coords[coords.length - 1] } }] } });
+    { type: "Feature", properties: { c: ends || "#3ecf8e" }, geometry: { type: "Point", coordinates: coords[0] } },
+    { type: "Feature", properties: { c: ends || "#ff6b6b" }, geometry: { type: "Point", coordinates: coords[coords.length - 1] } }] } });
   map.addLayer({ id: "ends", type: "circle", source: "ends", paint: { "circle-radius": 5, "circle-color": ["get", "c"], "circle-stroke-width": 2, "circle-stroke-color": mapHalo() } });
 }
 
@@ -2814,7 +2815,7 @@ async function renderCompare(params) {
     ${pageHead("Compare", timeBadge(params) + typeBadge(params))}
     ${hint("Everyone side by side, in the order set in Settings › People.")}<br>
     <div class="cards">
-      ${[["Activities", "activities", (v) => num(v || 0)], ["Distance", "distance_m", km], ["Moving time", "moving_s", hours], ["Ascent", "ascent_m", meters]]
+      ${[["Activities", "activities", (v) => num(v || 0)], ["Distance", "distance_m", km], ["Time", "time_s", hours], ["Ascent", "ascent_m", meters]]
         .map(([label, k, fmt]) => `<div class="card"><h3>${label}</h3>${people.map((p, i) => bar(p, k, i, fmt)).join("")}</div>`).join("")}
     </div>
     <div class="cards">${people.map((p, i) => `<div class="card">
@@ -2822,7 +2823,7 @@ async function renderCompare(params) {
       ${hint(p.last_activity ? `Last activity ${browserTime(p.last_activity)}` : "No activities")}
       <table class="data"><thead><tr><th>Group</th><th class="num">Activities</th><th class="num">Distance</th><th class="num">Time</th></tr></thead>
       <tbody>${p.groups.map((g) => `<tr><td>${esc(groupLabel(g.category))}</td><td class="num">${num(g.activities)}</td>
-        <td class="num">${g.distance_m ? km(g.distance_m) : "–"}</td><td class="num">${hours(g.moving_s)}</td></tr>`).join("")
+        <td class="num">${g.distance_m ? km(g.distance_m) : "–"}</td><td class="num">${hours(g.time_s)}</td></tr>`).join("")
         || `<tr><td colspan="4" class="hint">No activities</td></tr>`}</tbody></table></div>`).join("")}</div>`;
   bindBadges(view.querySelector(".page-head"));
   bindFilterBadges(view.querySelector(".page-head"), "#/compare", params);
@@ -2834,6 +2835,7 @@ const SETTINGS_TABS = [
   ["general", "General", svg(`<path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/>`)],
   ["data", "Data", svg(`<ellipse cx="12" cy="5.5" rx="7.5" ry="2.5"/><path d="M4.5 5.5v13c0 1.4 3.4 2.5 7.5 2.5s7.5-1.1 7.5-2.5v-13"/><path d="M4.5 12c0 1.4 3.4 2.5 7.5 2.5s7.5-1.1 7.5-2.5"/>`)],
   ["people", "People", svg(`<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.8-3.6 3.4-5.5 6.5-5.5s5.7 1.9 6.5 5.5"/><path d="M16 4.5a3.5 3.5 0 0 1 0 7M18 14.8c2 .7 3.2 2.5 3.6 5.2"/>`)],
+  ["workouts", "Workouts", svg(`<rect x="3" y="12" width="4" height="8" rx="1"/><rect x="10" y="5" width="4" height="15" rx="1"/><rect x="17" y="9" width="4" height="11" rx="1"/>`)],
   ["import", "Imported", svg(`<path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 17v3h16v-3"/>`)],
   ["backup", "Backup", svg(`<path d="M4 7h16v13H4z"/><path d="M2 4h20v3H2z"/><path d="M10 11h4"/>`)],
 ];
@@ -2846,6 +2848,7 @@ async function renderSettings(tab, params) {
   if (tab === "people") await settingsPeople(el);
   else if (tab === "import") await settingsImport(el, params);
   else if (tab === "backup") await settingsBackup(el);
+  else if (tab === "workouts") await settingsWorkouts(el);
   else await settingsGeneral(el, tab);
 }
 
@@ -3261,7 +3264,39 @@ const FILE_PAGE = 100;
 const STATUSES = ["new", "imported", "skipped", "duplicate", "error", "missing", "removed"];
 const STATUS_KIND = { error: "bad", missing: "warn", imported: "ok", skipped: "muted", duplicate: "muted", removed: "muted" };
 
+// A Garmin Connect daily summary (one row per day): what it holds, as icons in the metric colours;
+// hover shows the value. Keys from garmin.DAY_CONTENTS.
+const dayIc = (body, color) => `<svg class="tb-metric-icon" viewBox="0 0 24 24" width="16" height="16" style="--tb-metric-size:16px;color:var(${color})" aria-hidden="true">${body}</svg>`;
+const DAY_CONTENT = {
+  steps: ["Steps", "", () => metricIcon("steps", 16)],
+  floors: ["Floors climbed", "", () => dayIc(`<path d="M2.5 21h7v-6h6V9h6" ${iconLine(2.4)}/><path d="M3 12.5 10.5 5M7 5h3.5v3.5" ${iconLine(1.9)}/>`, "--m-elev")],
+  resting_hr: ["Resting heart rate", "bpm", () => metricIcon("heart_rate", 16)],
+  stress: ["Average stress", "", () => dayIc(`<circle cx="12" cy="12" r="9" ${iconLine()}/><path d="M6.5 13.5 9 9.5l2.5 5 2.5-6 3.5 4.5" ${iconLine(1.9)}/>`, "--m-stress")],
+  body_battery: ["Body Battery, highest", "", () => dayIc(`<rect x="3" y="7" width="16" height="10" rx="2" ${iconLine()}/><path d="M21.5 10.5v3" ${iconLine()}/><path d="m11.5 8.5-2.5 4h3l-2 3" ${iconLine(1.7)}/>`, "--m-breath")],
+  respiration: ["Respiration, average", "brpm", () => metricIcon("respiration_rate", 16)],
+  spo2: ["Pulse Ox, average", "%", () => metricIcon("muscle_oxygen", 16)],
+  intensity: ["Intensity minutes", "min", () => dayIc(`<path d="M13.5 2.5 5 13.5h6l-1 8 8.5-11h-6Z" ${iconLine()}/>`, "--m-temp")],
+  calories: ["Calories", "kcal", () => metricIcon("calories", 16)],
+  hydration: ["Hydration", "ml", () => dayIc(`<path d="M12 3s-6.5 7.2-6.5 11.5a6.5 6.5 0 0 0 13 0C18.5 10.2 12 3 12 3Z" ${iconLine()}/>`, "--m-breath")],
+};
+function dayContent(f) {
+  const icons = (f.day_contents || []).filter(([k]) => DAY_CONTENT[k]).map(([k, v]) => {
+    const [label, u, icon] = DAY_CONTENT[k];
+    return `<span class="day-part" title="${esc(label)}: ${num(v)}${u ? " " + u : ""}">${icon()}</span>`;
+  }).join("");
+  return `<span class="tb-metric-name">${metricIcon("date", 16)}<span>Daily summary</span></span><span class="day-parts">${icons}</span>`;
+}
+
+// File column: only the file name; the full path (and the ZIP member) on hover.
+function fileShort(f) {
+  if (f.kind === "day") return `<span class="file-short">Garmin Connect</span>`;
+  const full = f.rel_path + (f.zip_member ? " › " + f.zip_member : "");
+  const name = f.zip_member || f.rel_path.split("/").pop();
+  return `<span class="file-short" title="${esc(full)}">${name !== full ? "…" : ""}${esc(name)}</span>`;
+}
+
 function fileContent(f) {
+  if (f.kind === "day") return dayContent(f);
   if (f.activity_id && f.status !== "duplicate") {
     return `<a class="tb-activity-name" href="#/activity/${f.activity_id}">${typeIcon(f.activity_type)}<span>${esc(f.name || typeLabel(f.activity_type))}</span></a>${f.name ? `
       <span class="hint">${esc(typeLabel(f.activity_type))}</span>` : ""}`;
@@ -3275,6 +3310,7 @@ function fileContent(f) {
 }
 
 function fileActions(f) {
+  if (f.kind === "day") return "";
   const owner = f.status === "imported" || f.prev_status === "imported";
   return [
     f.status === "error" ? `<button class="small" data-retry="${f.id}">Retry</button>` : "",
@@ -3328,15 +3364,14 @@ async function settingsImport(el, params) {
       filter: { type: "select", options: STATUSES.map((x) => [x, `${x} (${num(st.files[x] ?? 0)})`]) },
       render: (f) => state(f.status, STATUS_KIND[f.status] || "") +
         (f.status === "missing" && f.prev_status ? ` <span class="hint">was ${f.prev_status}</span>` : "") },
-    { key: "file", label: "File", sort: true, wrap: true, filter: { type: "text" },
-      render: (f) => esc(f.rel_path) + (f.zip_member ? " › " + esc(f.zip_member) : "") },
+    { key: "file", label: "File", sort: true, filter: { type: "text" }, render: fileShort },
     { key: "person", label: "Person", sort: true, filter: { type: "select", options: personOptions() },
       render: (f) => f.person_id ? `${avatar(person(f.person_id), 18)} ${esc(personLabel(f.person_id))}` : "" },
-    { key: "content", label: "Activity / content", sort: true, wrap: true, filter: { type: "text", placeholder: "walk, sleep…" },
+    { key: "content", label: "Activity / content", sort: true, cls: "content-cell", filter: { type: "text", placeholder: "walk, sleep…" },
       render: (f) => fileContent(f) + (f.status === "missing"
         ? ` <span class="hint">missing since ${browserTime(f.missing_since)}${f.dismissed ? ", reviewed" : ""}</span>` : "") },
     { key: "recorded", label: "Recorded", sort: true, filter: { type: "text", placeholder: "2026-02" },
-      render: (f) => (f.start_time_utc ? localTime(f) : browserTime(f.fit_created)) || "–" },
+      render: (f) => (f.day || (f.start_time_utc ? localTime(f) : browserTime(f.fit_created))) || "–" },
     { key: "fit", label: "FIT id", sort: true, filter: { type: "text" },
       render: (f) => `<code>${esc(f.fit_uid || "–")}</code>` },
     { key: "processed", label: "Processed", sort: true, filter: { type: "text", placeholder: "2026-11" },

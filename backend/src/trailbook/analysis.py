@@ -344,7 +344,7 @@ def _local_day(row: sqlite3.Row) -> str:
 
 def analyse(activity: sqlite3.Row, ch: dict[str, list], th: Thresholds) -> Analysis:
     time = ch.get("time") or []
-    duration = activity["moving_s"] or activity["timer_s"] or 0
+    duration = activity["time_s"] or activity["timer_s"] or 0
     group = activity["category"]
     efforts: list[tuple] = []
 

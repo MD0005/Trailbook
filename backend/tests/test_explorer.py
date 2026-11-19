@@ -84,7 +84,7 @@ def test_basemap_endpoint_validates_and_reports_errors(tmp_path, monkeypatch):
     assert client.get("/api/basemap/osm/3/1/1.png").status_code == 502
 
 
-@pytest.mark.skipif(not SAMPLE_DATA.is_dir(), reason="no local sample-data")
+@pytest.mark.samples
 def test_heatmap_endpoints_on_sample_data(tmp_path):
     root = tmp_path / "root"
     shutil.copytree(SAMPLE_DATA, root)

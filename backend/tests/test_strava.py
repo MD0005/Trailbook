@@ -145,7 +145,7 @@ def test_strava_export_zip(conn, tmp_path):
     assert set(acts) == {"Park loop", "Bike to work", "Gym"}
     assert acts["Park loop"]["description"] == "Easy one\nwith friends"
     assert acts["Park loop"]["calories"] == 250  # from the CSV, the GPX has none
-    assert acts["Gym"]["activity_type"] == "strength" and acts["Gym"]["moving_s"] == 3600
+    assert acts["Gym"]["activity_type"] == "strength" and acts["Gym"]["time_s"] == 3600
     assert acts["Gym"]["has_gps"] == 0
     # Warsaw in June: UTC+2 from the longitude and EU summer time
     assert acts["Park loop"]["utc_offset_s"] == 7200

@@ -33,7 +33,7 @@ const ICON_RECORDS = svg(`<path d="M8 21h8M12 17v4M7 4h10v5a5 5 0 0 1-10 0z"/><p
 
 // Weeks run down the page, the newest on top (Mon–Sun and the week's totals); older weeks
 // load while scrolling down and, after Go to, newer ones while scrolling up. The top week is
-// the current one, or the next one once fewer than 4 days of this week are left.
+// always a whole week ahead (one after the last planned workout).
 // Each day: its number with the day's steps, floors (else ascent) and average stress (the
 // watch's monitoring files, the whole day); days without them from today on: the day length
 // and the forecast at the start of the latest activity. Activities: a header (type, distance,
@@ -61,21 +61,19 @@ function dayLength(lat, iso) {
   if (cosH >= 1) return 0;
   return ((2 * Math.acos(cosH)) / rad / 15) * 3600;
 }
-// The day's forecast on one line, in the style of the map's weather: sky, lowest–highest
-// temperature, rain, wind arrow and speed; rain and the unit go first when the day is narrow.
+// The day's forecast as part of the day's line, in the style of the map's weather: sky,
+// lowest–highest temperature, rain, wind arrow and speed. A narrow day drops the rain, then
+// the wind unit, then the wind (CSS container queries); the tooltip has everything.
 function calWeather(w) {
   const sky = WMO.find(([max]) => (w.code ?? 0) <= max) || WMO[WMO.length - 1];
   const deg = (t) => Math.round(t) || 0; // whole degrees, no "-0"
   const from = w.wind_dir != null ? COMPASS[Math.round(w.wind_dir / 45) % 8] : "";
   const rain = w.precip >= 0.1 ? `${num(w.precip, 1)} mm` : "";
   const tip = `Forecast: ${sky[1].toLowerCase()}, ${deg(w.temp_min)} to ${deg(w.temp_max)} °C${rain ? `, ${rain} of rain` : ""}${w.wind_speed != null ? `, wind up to ${num(w.wind_speed)} km/h from the ${from}` : ""}. Open-Meteo, for the start of the latest activity.`;
-  return `<div class="cal-wx wx" data-tip="${esc(tip)}">
-    <svg class="wx-sky" viewBox="0 0 24 24" fill="none" aria-label="${sky[1]}">${SKY_SVG[sky[2]]}</svg>
-    <span>${deg(w.temp_min)}–${deg(w.temp_max)}°</span>${rain ? `<span class="cal-rain">${rain}</span>` : ""}
-    ${w.wind_speed != null ? `<span class="wx-wind"><svg viewBox="0 0 24 24" style="transform:rotate(${(w.wind_dir ?? 0) + 180}deg)"><path d="M12 3v16M12 3l-4.5 5M12 3l4.5 5" stroke="currentColor" stroke-width="2.4" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>${num(w.wind_speed)}<span class="cal-unit">&nbsp;km/h</span></span>` : ""}
-  </div>`;
+  return `<span class="cal-wx" data-tip="${esc(tip)}"><svg class="wx-sky" viewBox="0 0 24 24" fill="none" aria-label="${sky[1]}">${SKY_SVG[sky[2]]}</svg><span>${deg(w.temp_min)}–${deg(w.temp_max)}°</span>${rain ? `<span class="cal-rain">${rain}</span>` : ""}${w.wind_speed != null ? `<span class="cal-wind"><svg viewBox="0 0 24 24" style="transform:rotate(${(w.wind_dir ?? 0) + 180}deg)"><path d="M12 3v16M12 3l-4.5 5M12 3l4.5 5" stroke="currentColor" stroke-width="2.4" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>${num(w.wind_speed)}<span class="cal-unit">&nbsp;km/h</span></span>` : ""}</span>`;
 }
 const hm = (s) => { const m = Math.round(s / 60); return `${Math.floor(m / 60)} h ${String(m % 60).padStart(2, "0")} min`; };
+const hmShort = (s) => { const m = Math.round(s / 60); return `${Math.floor(m / 60)}:${String(m % 60).padStart(2, "0")}`; };
 
 let CAL_FORECAST = null; // {key, at, data}: forecast of the person, kept for 30 minutes
 async function calForecast() {
@@ -85,14 +83,73 @@ async function calForecast() {
   CAL_FORECAST = { key, at: Date.now(), data };
   return data;
 }
+// Sports whose headline is the distance (also indoors: treadmill, trainer, pool); the others
+// (games, gym, yoga, climbing…) show their time, whatever distance the watch wrote.
+const DISTANCE_GROUPS = new Set(["run", "ride", "swim", "walk", "hike", "winter", "water", "multisport"]);
 const CAL_MONTHS = new Map(); // "<person> <yyyy-mm>" -> month data (activities, days)
+
+// Weekly targets of the person (Calendar › Targets; ui_settings `week-targets`): activities a
+// week, time a week per sport group (s), steps and floors a day. Empty = no target.
+const weekTargets = () => UI.data["week-targets"] || {};
+const TARGET_SPORTS = ["run", "ride", "swim", "walk", "hike", "fitness", "winter", "water"];
+// Targets are set with − / + steps, no typing: time by 30 min, steps by 500,
+// floors by 5; an empty field = no target (− at the first step clears it).
+const TARGET_STEPS = { time: [1800, 40 * 3600], steps: [500, 40000], floors: [5, 200] };
+const targetText = (kind, v) => {
+  if (!v) return ""; // no target: an empty field
+  if (kind !== "time") return num(v);
+  const h = Math.floor(v / 3600), m = Math.round((v % 3600) / 60);
+  return h ? (m ? `${h}h ${String(m).padStart(2, "0")}min` : `${h}h`) : `${m}min`; // as dur()
+};
+function targetsPanel() {
+  const T = weekTargets();
+  // the person's sports first (by their activities), then the rest of the usual ones
+  const counts = {};
+  for (const [k, n] of Object.entries(TYPE_COUNTS || {})) {
+    const g = TYPES.types.find((t) => t.key === k)?.group;
+    if (g) counts[g] = (counts[g] || 0) + n;
+  }
+  const groups = [...new Set([...Object.keys(counts).sort((a, b) => counts[b] - counts[a]), ...TARGET_SPORTS])]
+    .filter((g) => !["other", "multisport"].includes(g)).slice(0, 8);
+  const stepper = (key, kind, v) => `<span class="stepper ${v ? "set" : ""}" data-tkey="${key}" data-tkind="${kind}">
+      <button type="button" data-tstep="-1" aria-label="Less">−</button><input type="text" class="stepper-val" data-tval value="${targetText(kind, v)}" spellcheck="false" aria-label="Target"><button type="button" data-tstep="1" aria-label="More">+</button></span>`;
+  const line = (label, control) => `<div class="target-row"><span class="opt-label">${label}</span>${control}</div>`;
+  return `<div class="panel-title">Weekly targets</div>
+    ${groups.map((g) => line(`${groupIcon(g, 14)}${esc(groupLabel(g))}`, stepper(`sport:${g}`, "time", T.sports?.[g]))).join("")}
+    <div class="panel-title targets-daily">Daily targets</div>
+    ${line("Steps", stepper("steps", "steps", T.steps))}
+    ${line("Floors", stepper("floors", "floors", T.floors))}`;
+}
+// a typed target: time as "2:30", "2h 30min", "2h" or minutes ("150"); counts as numbers
+function parseTarget(kind, text) {
+  const t = String(text).trim().toLowerCase().replace(/\s+/g, " ");
+  if (!t) return 0;
+  if (kind !== "time") { const v = Math.round(+t.replace(/\s|\u202f/g, "").replace(",", ".")); return Number.isFinite(v) && v > 0 ? v : null; }
+  let m = t.match(/^(\d+):(\d{1,2})$/);
+  if (m) return (+m[1] * 60 + +m[2]) * 60;
+  m = t.match(/^(?:(\d+(?:[.,]\d+)?) ?h)? ?(?:(\d+) ?m(?:in)?)?$/);
+  if (m && (m[1] || m[2])) return Math.round((parseFloat((m[1] || "0").replace(",", ".")) * 60 + +(m[2] || 0)) * 60);
+  m = t.match(/^(\d+)$/);
+  return m ? +m[1] * 60 : null;
+}
+// one step of a target (or a typed value); returns the new targets
+function stepTarget(key, kind, dir, typed = null) {
+  const T = structuredClone(weekTargets());
+  T.sports ||= {};
+  const [step, max] = TARGET_STEPS[kind];
+  const cur = key.startsWith("sport:") ? T.sports[key.slice(6)] || 0 : T[key] || 0;
+  const v = typed != null ? Math.max(0, Math.min(max, typed)) : Math.max(0, Math.min(max, (Math.round(cur / step) + dir) * step));
+  if (key.startsWith("sport:")) { if (v) T.sports[key.slice(6)] = v; else delete T.sports[key.slice(6)]; }
+  else if (v) T[key] = v; else delete T[key];
+  return T;
+}
 
 async function renderCalendar(params) {
   const mode = params.view === "year" ? "year" : "month";
   if (mode === "year") return renderCalendarYear(params);
   const today = todayIso();
-  const left = 6 - ((parseDay(today).getUTCDay() + 6) % 7); // days of this week after today
-  const newest = addDays(mondayOf(today), left < 4 ? 7 : 0);
+  // always one whole week ahead, and one after the last planned workout
+  let newest = addDays(mondayOf(today), 7);
   const first = TIME_RANGE.first && TIME_RANGE.first < today ? TIME_RANGE.first : today;
   const oldest = mondayOf(first);
   const target = /^\d{4}-\d{2}-\d{2}$/.test(params.date || "") ? params.date : null;
@@ -102,63 +159,179 @@ async function renderCalendar(params) {
   const isAll = CURRENT === "all";
   CAL_MONTHS.clear(); // data may have changed since the last visit
 
-  const fetchWeeks = (a, b) => api("calendar?" + new URLSearchParams({ from: a, to: addDays(b, 6), chart: "1", ...personParam() }));
+  const fetchWeeks = (a, b) => api("calendar?" + new URLSearchParams({ from: a, to: addDays(b, 6), chart: "1", planned: "1", ...personParam() }));
   const [data, fc] = await Promise.all([fetchWeeks(bottom, top), calForecast()]);
+  if (data.last_planned && addDays(mondayOf(data.last_planned), 7) > newest) {
+    const later = addDays(mondayOf(data.last_planned), 7);
+    if (!anchor) {
+      const more = await fetchWeeks(addDays(top, 7), later);
+      data.activities.push(...more.activities);
+      data.planned.push(...more.planned);
+      Object.assign(data.days, more.days || {});
+      top = later;
+    }
+    newest = later;
+  }
   const wx = Object.fromEntries((fc.days || []).map((d) => [d.date, d]));
 
-  const card = (a) => {
+  const card = (a, plan) => {
     const kind = workoutOf(a) ? workoutLabel(workoutOf(a)) : "";
     const chart = a.tile_chart ? tileChart(a.tile_chart) : "";
     return `<a class="cal-act" href="#/activity/${a.id}" title="${esc(a.name || typeLabel(a.activity_type))} · ${esc(typeLabel(a.activity_type))}${isAll ? " · " + esc(personLabel(a.person_id)) : ""}">
       <span class="cal-act-head">${isAll ? `<span class="cal-dot" style="background:${personColor(person(a.person_id))}"></span>` : ""}${typeIcon(a.activity_type, 16)}
-        <span class="cal-act-text">${esc(shortDist(a.distance_m) || shortDur(a.moving_s))}</span>${kind ? `<span class="cal-kind">${esc(kind)}</span>` : ""}</span>
-      <span class="cal-act-chart">${chart.startsWith("<svg") ? chart : `<span class="tile-sport">${typeIcon(a.activity_type, 26)}</span>`}</span></a>`;
+        <span class="cal-act-text">${esc((DISTANCE_GROUPS.has(a.category) && shortDist(a.distance_m)) || shortDur(a.time_s))}</span>${plan ? plannedFlag(plan) : ""}${kind ? `<span class="cal-kind">${esc(kind)}</span>` : ""}</span>
+      <span class="cal-act-chart" title="${esc(actFacts(a))}">${chart.startsWith("<svg") ? chart : `<span class="tile-sport">${typeIcon(a.activity_type, 26)}</span>`}</span></a>`;
+  };
+  // Hovering the chart: distance, time, pace (on foot) or power / speed (rides), load.
+  const actFacts = (a) => {
+    const foot = ["run", "walk", "hike"].includes(a.category);
+    const speed = a.distance_m && a.time_s ? a.distance_m / a.time_s : a.avg_speed;
+    return [a.distance_m >= 50 ? km(a.distance_m) : "", dur(a.time_s),
+      foot && speed ? pace(speed) : "", !foot && a.avg_power ? watts(a.avg_power) : !foot && speed && a.distance_m ? unit(speed * 3.6, "km/h", 1) : "",
+      a.load ? `${num(a.load)} TSS` : ""].filter(Boolean).join(" · ");
   };
   // One line each: in a narrow day the long forms give way to short ones (CSS container
   // queries: `full` / `short`), the full values stay in the tooltip.
   const both = (full, short) => `<span class="cal-full">${full}</span><span class="cal-short">${short}</span>`;
+  // The day's line: its number, then its values (steps, floors, stress); days from today on
+  // without values: day length and the forecast on the same line.
   const dayHead = (d, v) => {
     const parts = [];
+    let weather = "";
     const k = (n) => (n < 10000 ? `${num(n / 1000, 1)}k` : `${num(n / 1000, 0)}k`);
     if (v?.steps != null) parts.push(`<span class="cal-m cal-steps" title="${num(v.steps)} steps">${CAL_ICONS.steps()}${both(num(v.steps), k(v.steps))}</span>`);
     if (v?.floors != null) parts.push(`<span class="cal-m cal-floors" title="${num(v.floors)} floors climbed">${CAL_ICONS.floors()}${num(v.floors)}</span>`);
     else if (v?.ascent_m != null) parts.push(`<span class="cal-m cal-floors" title="${meters(v.ascent_m)} ascent">${CAL_ICONS.ascent()}${both(meters(v.ascent_m), num(v.ascent_m, 0))}</span>`);
     if (v?.stress != null) parts.push(`<span class="cal-m cal-stress" title="Average stress ${num(v.stress)}">${CAL_ICONS.stress()}${num(v.stress)}</span>`);
-    if (!parts.length && d >= today && fc.lat != null) {
-      const s = dayLength(fc.lat, d), m = Math.round(s / 60);
-      parts.push(`<span class="cal-m cal-daylight" title="Day length ${hm(s)}">${CAL_ICONS.daylight()}${both(hm(s), `${Math.floor(m / 60)}:${String(m % 60).padStart(2, "0")}`)}</span>`);
-    }
+    if (!parts.length && d >= today) {
+      if (fc.lat != null) {
+        const s = dayLength(fc.lat, d);
+        parts.push(`<span class="cal-m cal-daylight" title="Day length ${hm(s)}">${CAL_ICONS.daylight()}${hmShort(s)}</span>`);
+      }
+      if (wx[d]) parts.push(calWeather(wx[d]));
+    } else if (d >= today && wx[d]) weather = `<div class="cal-dh">${calWeather(wx[d])}</div>`; // today with values
     const label = d.slice(8) === "01" ? both(`1 ${MONTHS[+d.slice(5, 7) - 1].slice(0, 3)}`, "1") : +d.slice(8);
-    return `<div class="cal-dh"><span class="cal-num">${label}</span>${parts.join("")}</div>`;
+    return `<div class="cal-dh"><span class="cal-num">${label}</span>${parts.join("")}</div>${weather}`;
   };
-  const weekHtml = (w, byDay, days) => {
+  // A planned workout of a day up to today goes with an activity of its sport that day (the
+  // activity shows that it was planned); one without an activity is hidden once the day is over.
+  // header: the sync icon right after the time; on hover edit (this entry only) and remove
+  const planCard = (p) => (PLAN_ITEMS.set(p.id, p), planCardHtml(p, {
+    attrs: `draggable="${p.day >= today}" data-plan="${p.id}"`, badge: planSyncIcon(p),
+    extra: `<span class="wo-tools">${p.day >= today ? `<button class="icon" data-plan-edit="${p.id}" title="Edit this planned workout" aria-label="Edit this planned workout">${ICON.pencil}</button>` : ""}
+      <button class="icon delete" data-plan-del="${p.id}" title="Remove from the plan" aria-label="Remove from the plan">${ICON.trash}</button></span>` }));
+  const weekHtml = (w, byDay, days, plans = {}) => {
     const wdays = [...Array(7)].map((_, i) => addDays(w, i));
     const wacts = wdays.flatMap((d) => byDay[d] || []);
+    const shown = {}, matched = new Map();
+    for (const d of wdays) {
+      const free = [...(byDay[d] || [])];
+      for (const p of plans[d] || []) {
+        const i = d <= today ? free.findIndex((a) => a.category === p.sport) : -1;
+        if (i >= 0) matched.set(free.splice(i, 1)[0].id, p);
+        else if (d >= today) (shown[d] ||= []).push(p);
+      }
+    }
+    const wplans = wdays.flatMap((d) => plans[d] || []);
+    const wopen = wdays.flatMap((d) => shown[d] || []);
     const ws = (k) => wacts.reduce((s, a) => s + (a[k] || 0), 0);
     // ISO week: the week of its Thursday's year; shown in the left margin on wide screens
     const thu = addDays(w, 3), wk = Math.floor((parseDay(thu) - parseDay(thu.slice(0, 4) + "-01-01")) / (7 * DAY_MS)) + 1;
-    return `<div class="cal-row" data-week="${w}"><div class="cal-wk" aria-hidden="true"><b>W${wk}</b><span>${thu.slice(0, 4)}</span></div>${wdays.map((d) => {
+    return `<div class="cal-row" data-week="${w}"><div class="cal-wk" aria-hidden="true"><b>W${wk}</b><span>${thu.slice(0, 4)}</span></div>${wdays.map((d, i) => {
       const m = +d.slice(5, 7);
-      const weather = d >= today && wx[d] ? calWeather(wx[d]) : "";
-      return `<div class="cal-day ${m % 2 ? "odd" : ""} ${d === today ? "today" : ""} ${d > today ? "future" : ""} ${d === target ? "target" : ""}" data-day="${d}">
-          ${dayHead(d, days[d])}${weather}${(byDay[d] || []).map(card).join("")}</div>`;
-    }).join("")}<div class="cal-week">${wacts.length ? `<b>${hours(ws("moving_s"))}</b><span>${km(ws("distance_m"))}</span><span>${loadUnit(ws("load"))}</span><span class="hint">${num(wacts.length)} activit${wacts.length === 1 ? "y" : "ies"}</span>` : `<span class="hint">–</span>`}</div></div>`;
+      return `<div class="cal-day ${m % 2 ? "odd" : ""} ${i >= 5 ? "weekend" : ""} ${d === today ? "today" : ""} ${d > today ? "future" : ""} ${d === target ? "target" : ""}" data-day="${d}">
+          ${dayHead(d, days[d])}${(byDay[d] || []).map((a) => card(a, matched.get(a.id))).join("")}${(shown[d] || []).map(planCard).join("")}</div>`;
+    }).join("")}${weekSummary(wdays, wacts, days, ws, wplans, wopen)}</div>`;
+  };
+  // The week on the right, as plain text beside the days (no rule, not another day): distance, time
+  // and load; the activities with a dot per day (filled = active); time per sport with a bar
+  // of its share; the watch's steps, floors and average stress of the week.
+  // The week on the right. Targets (Calendar › Targets, per person): time a
+  // week per sport, steps and floors a day — a target is a bar of how much is done (accent)
+  // and, with planned workouts, how much the plan adds (plan colour); without a target only
+  // the value. Planned weeks show the same, their planned sums in the plan colour.
+  const weekSummary = (wdays, wacts, days, ws, wplans = [], wopen = []) => {
+    const T = weekTargets();
+    const life = wdays.map((d) => days[d]).filter(Boolean);
+    if (!wacts.length && !life.length && !wplans.length) return `<div class="cal-week empty"></div>`;
+    const lines = [];
+    const psum = (list, k) => list.reduce((x, p) => x + (p.estimate[k] || 0), 0);
+    // a target bar: done (accent), then what the plan adds (plan colour); past the target red
+    const bar = (done, plan, goal) => {
+      const d = Math.min(100, (done / goal) * 100), q = Math.min(100 - d, (plan / goal) * 100);
+      return `<span class="cw-bar"><i class="${done > goal ? "over" : ""}" style="width:${d}%"></i>${q > 0 ? `<b class="${done + plan > goal ? "over" : ""}" style="width:${q}%"></b>` : ""}</span>`;
+    };
+    // its tooltip: done, planned, target and how much of it is done (with the plan)
+    const goalTip = (label, done, plan, goal, fmt) => `${label}: ${fmt(done)} done${plan ? `, ${fmt(plan)} planned` : ""}, target ${fmt(goal)} · ${num((done / goal) * 100)} %${plan ? ` (${num(((done + plan) / goal) * 100)} % with the plan)` : ""}`;
+    const ahead = !wacts.length && wplans.length && wdays[6] >= today;
+    if (ahead) { // the same lines as a week done, from the plan's estimates
+      const pd = psum(wopen, "distance_m"), pt = psum(wopen, "duration_s");
+      lines.push(`<div class="cw-big cw-planned" title="Planned (estimate)"><b>${pd >= 50 ? `≈ ${km(pd)}` : shortDur(pt)}</b></div>`);
+      lines.push(`<div class="cw-line cw-planned">${[pd >= 50 ? shortDur(pt) : "", `≈ ${num(psum(wopen, "load"))} TSS`].filter(Boolean).join(" · ")}</div>`);
+    } else if (wacts.length) {
+      const dist = ws("distance_m"), time = ws("time_s"), load = ws("load");
+      lines.push(`<div class="cw-big">${dist >= 50 ? `<b>${km(dist)}</b>` : `<b>${shortDur(time)}</b>`}</div>`);
+      lines.push(`<div class="cw-line">${[dist >= 50 ? shortDur(time) : "", load ? `${num(load)} TSS` : ""].filter(Boolean).join(" · ")}</div>`);
+    }
+    // activities: done and planned, a dot per day (planned days in the plan colour)
+    const active = new Set(wacts.map((a) => a.day)), plannedDays = new Set(wopen.map((p) => p.day));
+    const count = wacts.length + wopen.length;
+    if (count) {
+      lines.push(`<div class="cw-line" title="${num(wacts.length)} done${wopen.length ? `, ${num(wopen.length)} planned` : ""}"><span class="cw-n ${wacts.length ? "" : "cw-planned"}">${num(count)}<span class="cw-word"> ${count === 1 ? "activity" : "activities"}</span></span>
+        <span class="cw-dots">${wdays.map((d) => `<i class="${active.has(d) ? "on" : plannedDays.has(d) ? "plan" : ""}"></i>`).join("")}</span></div>`);
+    }
+    // time per sport: with a target a bar; the others only their time, side by side
+    const done = {}, planned = {};
+    for (const a of wacts) done[a.category] = (done[a.category] || 0) + (a.time_s || 0);
+    for (const p of wopen) planned[p.sport] = (planned[p.sport] || 0) + p.estimate.duration_s;
+    const goals = Object.keys(T.sports || {}).filter((g) => T.sports[g] > 0);
+    const rows = goals.map((g) => `<div class="cw-sport" title="${esc(goalTip(groupLabel(g), done[g] || 0, planned[g] || 0, T.sports[g], durMin))}">${groupIcon(g, 13)}
+        ${bar(done[g] || 0, planned[g] || 0, T.sports[g])}<span class="cw-val">${done[g] ? shortDur(done[g]) : planned[g] ? `<span class="cw-planned">${shortDur(planned[g])}</span>` : ""}</span></div>`);
+    const free = [...new Set([...Object.keys(done), ...Object.keys(planned)])].filter((g) => !goals.includes(g))
+      .sort((a, b) => (done[b] || 0) + (planned[b] || 0) - (done[a] || 0) - (planned[a] || 0));
+    if (rows.length) lines.push(`<div class="cw-sports">${rows.join("")}</div>`);
+    if (free.length) lines.push(`<div class="cw-free">${free.map((g) => `<span class="cw-f" title="${esc(groupLabel(g))}: ${dur(done[g] || 0)}${planned[g] ? ` + ${dur(planned[g])} planned` : ""}">${groupIcon(g, 13)}${done[g] ? shortDur(done[g]) : ""}${planned[g] ? `<span class="cw-planned">${done[g] ? "+" : ""}${shortDur(planned[g])}</span>` : ""}</span>`).join("")}</div>`);
+    if (!wacts.length && !wplans.length) lines.push(`<div class="cw-line hint">No activities</div>`);
+    // steps and floors (a day on average): with a target a bar, else a compact value
+    const sum = (k) => life.reduce((x, v) => x + (v[k] || 0), 0);
+    const daysWith = (k) => life.filter((v) => v[k] != null).length;
+    const avg = (k) => (daysWith(k) ? sum(k) / daysWith(k) : null);
+    const parts = [], goalRows = [];
+    const steps = avg("steps"), floors = avg("floors");
+    if (steps != null) {
+      if (T.steps) goalRows.push(`<div class="cw-sport" title="${esc(goalTip("Steps a day", Math.round(steps), 0, T.steps, num))}">${CAL_ICONS.steps()}${bar(steps, 0, T.steps)}<span class="cw-val">${num(steps / 1000, 1)}k</span></div>`);
+      else parts.push(`<span class="cal-m cal-steps" title="${num(sum("steps"))} steps, ${num(steps, 0)} a day">${CAL_ICONS.steps()}${num(sum("steps") / 1000, 0)}k</span>`);
+    }
+    if (floors != null) {
+      if (T.floors) goalRows.push(`<div class="cw-sport" title="${esc(goalTip("Floors a day", Math.round(floors), 0, T.floors, num))}">${CAL_ICONS.floors()}${bar(floors, 0, T.floors)}<span class="cw-val">${num(floors, 0)}</span></div>`);
+      else parts.push(`<span class="cal-m cal-floors" title="${num(sum("floors"))} floors climbed">${CAL_ICONS.floors()}${num(sum("floors"))}</span>`);
+    }
+    if (life.some((v) => v.stress != null)) {
+      const st = life.filter((v) => v.stress != null);
+      parts.push(`<span class="cal-m cal-stress" title="Average stress of the days">${CAL_ICONS.stress()}${num(st.reduce((x, v) => x + v.stress, 0) / st.length, 0)}</span>`);
+    }
+    if (goalRows.length || parts.length) lines.push(`<div class="cw-life">${goalRows.length ? `<div class="cw-sports">${goalRows.join("")}</div>` : ""}${parts.length ? `<div class="cw-free">${parts.join("")}</div>` : ""}</div>`);
+    return `<div class="cal-week ${ahead ? "planned" : ""}">${lines.join("")}</div>`;
   };
   // weeks a..b (Mondays) of one load, the newest first
   const rowsHtml = (a, b, d) => {
-    const byDay = {};
+    const byDay = {}, plans = {};
     for (const x of d.activities) (byDay[x.day] ||= []).push(x);
+    for (const p of d.planned || []) (plans[p.day] ||= []).push(p);
     const out = [];
-    for (let w = b; w >= a; w = addDays(w, -7)) out.push(weekHtml(w, byDay, d.days || {}));
+    for (let w = b; w >= a; w = addDays(w, -7)) out.push(weekHtml(w, byDay, d.days || {}, plans));
     return out.join("");
   };
 
   const showSummary = TAB.kpis ?? false;
+  const single = !isAll && CURRENT;
+  const showTray = single && (TAB.workouts ?? false);
   const sw = switchHtml("calview", [["month", `${ICON_CAL_MONTH}<span>Month</span>`], ["year", `${ICON_CAL_YEAR}<span>Year</span>`]], mode);
-  view.innerHTML = `${pageHead("Calendar", `${gotoBadge(target)}<button class="badge ${showSummary ? "on" : ""}" data-ckpis>Summary</button>`, sw)}
+  view.innerHTML = `${pageHead("Calendar", `${gotoBadge(target)}${single ? `${badgeHtml("ctargets", "Targets", "", { panel: `<div class="opt-panel targets-panel" data-targets></div>` })}<button class="badge ${showTray ? "on" : ""}" data-cworkouts>Workouts</button>` : ""}<button class="badge ${showSummary ? "on" : ""}" data-ckpis>Summary</button>`, sw)}
     <div class="cal-sticky" data-csticky>
       <div data-csummary ${showSummary ? "" : "hidden"}></div>
-      <div class="cal-heads">${WEEKDAYS.map((w) => `<div class="cal-head">${w}</div>`).join("")}<div class="cal-head">Week</div></div>
+      <div data-ctray ${showTray ? "" : "hidden"}></div>
+      <div class="cal-heads">${WEEKDAYS.map((w) => `<div class="cal-head">${w}</div>`).join("")}<div class="cal-head"></div></div>
     </div>
     <div class="card cal-card">
       ${top < newest ? `<div class="sentinel" data-csentinel="up">${loaderHtml()}</div>` : ""}
@@ -216,6 +389,68 @@ async function renderCalendar(params) {
     view.querySelector("[data-csummary]").hidden = !on;
     month = null;
     paintSummary();
+  };
+
+  // Workouts: the tray of templates; dropping one on a day plans it (the week is redrawn, and
+  // a week is added on top when the newest one gets a plan).
+  const trayBox = view.querySelector("[data-ctray]");
+  const redrawWeeks = async (changedDays) => {
+    for (const w of [...new Set(changedDays.map(mondayOf))]) {
+      const row = weeks.querySelector(`[data-week="${w}"]`);
+      if (!row) continue;
+      row.outerHTML = rowsHtml(w, w, await fetchWeeks(w, w));
+      if (w === top && w === newest) {
+        const nw = addDays(w, 7);
+        weeks.insertAdjacentHTML("afterbegin", rowsHtml(nw, nw, await fetchWeeks(nw, nw)));
+        top = newest = nw;
+      }
+    }
+    paintWeekNumbers();
+  };
+  if (single) bindPlanDrops(weeks, redrawWeeks);
+  // Targets: typed in the badge's panel, saved per person; the weeks are redrawn
+  const tbox = view.querySelector("[data-targets]");
+  if (tbox) {
+    tbox.innerHTML = targetsPanel();
+    let timer = null;
+    const apply = (st, dir, typed = null) => {
+      const T = stepTarget(st.dataset.tkey, st.dataset.tkind, dir, typed);
+      saveUi("week-targets", T);
+      const key = st.dataset.tkey, v = key.startsWith("sport:") ? T.sports[key.slice(6)] : T[key];
+      st.querySelector("[data-tval]").value = targetText(st.dataset.tkind, v);
+      st.classList.toggle("set", !!v);
+      clearTimeout(timer);
+      timer = setTimeout(async () => {
+        const fresh = await fetchWeeks(bottom, top);
+        weeks.innerHTML = rowsHtml(bottom, top, fresh);
+        paintWeekNumbers();
+      }, 500);
+    };
+    tbox.onclick = (e) => {
+      const btn = e.target.closest("[data-tstep]");
+      if (btn) apply(btn.closest("[data-tkey]"), +btn.dataset.tstep);
+    };
+    tbox.onchange = (e) => { // typed: Enter or leaving the field
+      const inp = e.target.closest("[data-tval]");
+      if (!inp) return;
+      const st = inp.closest("[data-tkey]"), v = parseTarget(st.dataset.tkind, inp.value);
+      if (v == null) { // not understood: back to what it was
+        const T = weekTargets(), key = st.dataset.tkey;
+        inp.value = targetText(st.dataset.tkind, key.startsWith("sport:") ? T.sports?.[key.slice(6)] : T[key]);
+        return;
+      }
+      apply(st, 0, v);
+    };
+    tbox.onkeydown = (e) => { if (e.key === "Enter" && e.target.matches("[data-tval]")) e.target.blur(); };
+  }
+  if (showTray) renderWorkoutTray(trayBox, redrawWeeks);
+  const trayBtn = view.querySelector("[data-cworkouts]");
+  if (trayBtn) trayBtn.onclick = () => {
+    const on = !trayBtn.classList.contains("on");
+    TAB.workouts = on;
+    trayBtn.classList.toggle("on", on);
+    trayBox.hidden = !on;
+    if (on && !trayBox.innerHTML) renderWorkoutTray(trayBox, redrawWeeks);
   };
 
   // more weeks: older below, newer above (the page keeps its place)
@@ -279,7 +514,7 @@ async function calMonthSummary(m) {
   const items = [
     ["Activities", num(acts.length), `${num(active)} active days`],
     ["Distance", km(sum("distance_m")), longest?.distance_m ? `longest ${km(longest.distance_m)}` : ""],
-    ["Moving time", hours(sum("moving_s")), acts.length ? `${dur(sum("moving_s") / acts.length)} on average` : ""],
+    ["Time", hours(sum("time_s")), acts.length ? `${dur(sum("time_s") / acts.length)} on average` : ""],
     ["Elevation gain", meters(sum("ascent_m"))],
     ["Training load", loadUnit(sum("load"))],
   ];
@@ -291,7 +526,7 @@ async function calMonthSummary(m) {
   return statStrip(items).replace('<div class="stat-strip ">', `<div class="stat-strip ">${name}`);
 }
 
-// Year: one small grid per month, each day coloured by moving time; Go to picks the year.
+// Year: one small grid per month, each day coloured by its time; Go to picks the year.
 async function renderCalendarYear(params) {
   const today = todayIso();
   const year = /^\d{4}$/.test(params.year || "") ? params.year : today.slice(0, 4);
@@ -302,12 +537,12 @@ async function renderCalendarYear(params) {
   const strip = statStrip([
     ["Activities", num(acts.length), `${num(days.size)} active days`],
     ["Distance", km(rsum("distance_m"))],
-    ["Moving time", hours(rsum("moving_s"))],
+    ["Time", hours(rsum("time_s"))],
     ["Elevation gain", meters(rsum("ascent_m"))],
     ["Training load", loadUnit(rsum("load"))],
   ]);
   const dayTime = {};
-  for (const a of acts) dayTime[a.day] = (dayTime[a.day] || 0) + (a.moving_s || 0);
+  for (const a of acts) dayTime[a.day] = (dayTime[a.day] || 0) + (a.time_s || 0);
   const level = (s) => (!s ? 0 : s < 1800 ? 1 : s < 3600 ? 2 : s < 7200 ? 3 : 4);
   const body = `<div class="cal-year">${MONTHS.map((name, mi) => {
     const m = `${year}-${String(mi + 1).padStart(2, "0")}`;
@@ -317,13 +552,13 @@ async function renderCalendarYear(params) {
     const ms = (k) => macts.reduce((s, a) => s + (a[k] || 0), 0);
     const to = `${m}-${String(lastDay).padStart(2, "0")}`;
     return `<a class="cal-mini" href="#/calendar?${new URLSearchParams({ date: to > today ? today : to })}">
-      <div class="cal-mini-head"><b>${name}</b><span class="hint">${macts.length ? `${hours(ms("moving_s"))} · ${km(ms("distance_m"))}` : "–"}</span></div>
+      <div class="cal-mini-head"><b>${name}</b><span class="hint">${macts.length ? `${hours(ms("time_s"))} · ${km(ms("distance_m"))}` : "–"}</span></div>
       <div class="cal-mini-grid">${"<span></span>".repeat(lead)}${[...Array(lastDay)].map((_, i) => {
         const d = `${m}-${String(i + 1).padStart(2, "0")}`;
         return `<span class="lv${level(dayTime[d])} ${d === today ? "today" : ""}" title="${d}${dayTime[d] ? " · " + dur(dayTime[d]) : ""}"></span>`;
       }).join("")}</div></a>`;
   }).join("")}</div>
-  <div class="cal-legend hint">Moving time per day: <span class="lv1"></span> &lt; 30 min <span class="lv2"></span> &lt; 1 h <span class="lv3"></span> &lt; 2 h <span class="lv4"></span> 2 h +</div>`;
+  <div class="cal-legend hint">Time per day: <span class="lv1"></span> &lt; 30 min <span class="lv2"></span> &lt; 1 h <span class="lv3"></span> &lt; 2 h <span class="lv4"></span> 2 h +</div>`;
   const showSummary = TAB.kpis ?? false;
   const sw = switchHtml("calview", [["month", `${ICON_CAL_MONTH}<span>Month</span>`], ["year", `${ICON_CAL_YEAR}<span>Year</span>`]], "year");
   view.innerHTML = `${pageHead(`Calendar <span class="hint">${year}</span>`, `${gotoBadge(year === today.slice(0, 4) ? today : `${year}-12-31`)}<button class="badge ${showSummary ? "on" : ""}" data-ckpis>Summary</button>`, sw)}
@@ -420,7 +655,7 @@ async function renderFitness(params) {
   const acts = (await api("calendar?" + new URLSearchParams({ from: s[0].date, to: s[s.length - 1].date, ...personParam() })).catch(() => null))?.activities || [];
   const marks = acts.map((a) => ({
     x: Date.parse(a.day + "T00:00:00Z") / 1000, icon: typeIcon(a.activity_type, 16), href: `#/activity/${a.id}`,
-    tip: [a.name || typeLabel(a.activity_type), `${typeLabel(a.activity_type)} · ${a.day}`, [shortDur(a.moving_s), a.distance_m >= 50 ? km(a.distance_m) : ""].filter(Boolean).join(" · ")].join("\n"),
+    tip: [a.name || typeLabel(a.activity_type), `${typeLabel(a.activity_type)} · ${a.day}`, [shortDur(a.time_s), a.distance_m >= 50 ? km(a.distance_m) : ""].filter(Boolean).join(" · ")].join("\n"),
   })).sort((p, q) => p.x - q.x);
   const all = fitnessSeries(s, { marks, opt });
   const order = UI.data["fitness-chart-order"] || [];
@@ -538,8 +773,8 @@ const parsePace = (txt) => {
 
 // ---- Statistics -------------------------------------------------------------------------
 
-const STAT_METRICS = [["moving_s", "Moving time"], ["distance_m", "Distance"], ["ascent_m", "Elevation gain"], ["load", "Training load"], ["count", "Activities"]];
-const fmtMetric = (k, v) => (k === "moving_s" ? hours(v) : k === "distance_m" ? km(v) : k === "ascent_m" ? meters(v) : k === "load" ? loadUnit(v) : num(v || 0));
+const STAT_METRICS = [["time_s", "Time"], ["distance_m", "Distance"], ["ascent_m", "Elevation gain"], ["load", "Training load"], ["count", "Activities"]];
+const fmtMetric = (k, v) => (k === "time_s" ? hours(v) : k === "distance_m" ? km(v) : k === "ascent_m" ? meters(v) : k === "load" ? loadUnit(v) : num(v || 0));
 const RECORD_LABELS = {
   pace: { 400: "400 m", 1000: "1 km", 1609.344: "1 mile", 5000: "5 km", 10000: "10 km", 21097.5: "Half marathon", 42195: "Marathon" },
   power: { 5: "5 s", 15: "15 s", 30: "30 s", 60: "1 min", 300: "5 min", 600: "10 min", 1200: "20 min", 3600: "60 min" },
@@ -558,7 +793,7 @@ async function renderTotals(params, sw) {
   const oneYear = (params.from && params.to && params.from.slice(0, 4) === params.to.slice(0, 4)) || yearList(params).length === 1
     || ["1m", "3m", "6m", "ytd"].includes(params.last);
   const by = ["year", "month", "week"].includes(params.by) ? params.by : (oneYear ? "month" : "year");
-  const metric = STAT_METRICS.some(([k]) => k === params.metric) ? params.metric : "moving_s";
+  const metric = STAT_METRICS.some(([k]) => k === params.metric) ? params.metric : "time_s";
   const q = { person: CURRENT, by, ...filterQuery(params) };
   const data = await api("stats/totals?" + new URLSearchParams(q));
   const route = "#/stats";
@@ -572,7 +807,7 @@ async function renderTotals(params, sw) {
   const strip = statStrip([
     ["Activities", num(t("count")), `${num(t("active_days"))} active days`],
     ["Distance", km(t("distance_m"))],
-    ["Moving time", hours(t("moving_s"))],
+    ["Time", hours(t("time_s"))],
     ["Elevation gain", meters(t("ascent_m"))],
     ["Training load", loadUnit(t("load"))],
     ["Calories", kcal(t("calories"))],
@@ -583,16 +818,16 @@ async function renderTotals(params, sw) {
       <span class="bar-v-val">${fmtMetric(metric, r[metric])}</span>
       <span class="bar-v-fill" style="height:${((r[metric] || 0) / max) * 100}%"></span>
       <span class="bar-v-label">${esc(periodLabel(r.period))}</span></div>`).join("")}</div>` : hint("No activities match the filters.");
-  const gmax = Math.max(1, ...data.groups.map((g) => g.moving_s || 0));
+  const gmax = Math.max(1, ...data.groups.map((g) => g.time_s || 0));
   view.innerHTML = `${pageHead("Statistics", badges, sw)}${strip}
     <div class="card"><h3>${STAT_METRICS.find(([k]) => k === metric)[1]} per ${by}</h3>${chart}</div>
     <div class="two-col wide-first">
       <div class="card"><h3>Totals per ${by}</h3><div class="scroll"><table class="data">
-        <thead><tr><th>${by[0].toUpperCase() + by.slice(1)}</th><th class="num">Activities</th><th class="num">Active days</th><th class="num">Distance</th><th class="num">Moving time</th><th class="num">Elevation gain</th><th class="num">Load</th></tr></thead>
+        <thead><tr><th>${by[0].toUpperCase() + by.slice(1)}</th><th class="num">Activities</th><th class="num">Active days</th><th class="num">Distance</th><th class="num">Time</th><th class="num">Elevation gain</th><th class="num">Load</th></tr></thead>
         <tbody>${[...rows].reverse().map((r) => `<tr><td>${by === "year" ? `<a href="#/stats?${new URLSearchParams({ ...filterQuery(params), from: "", to: "", last: "", years: r.period, by: "month", metric })}">${r.period}</a>` : esc(periodLabel(r.period))}</td>
-          <td class="num">${num(r.count)}</td><td class="num">${num(r.active_days)}</td><td class="num">${km(r.distance_m)}</td><td class="num">${hours(r.moving_s)}</td><td class="num">${meters(r.ascent_m)}</td><td class="num">${loadUnit(r.load)}</td></tr>`).join("")}</tbody></table></div></div>
-      <div class="card"><h3>By activity group</h3>${hint("Moving time")}
-        ${data.groups.map((g) => `<div class="bar-row"><span class="bar-label tb-activity-name">${groupIcon(g.category)}<span>${esc(groupLabel(g.category))}</span></span><span class="bar"><span style="width:${((g.moving_s || 0) / gmax) * 100}%;background:var(--accent)"></span></span><span class="bar-value">${hours(g.moving_s)}</span></div>`).join("") || hint("–")}
+          <td class="num">${num(r.count)}</td><td class="num">${num(r.active_days)}</td><td class="num">${km(r.distance_m)}</td><td class="num">${hours(r.time_s)}</td><td class="num">${meters(r.ascent_m)}</td><td class="num">${loadUnit(r.load)}</td></tr>`).join("")}</tbody></table></div></div>
+      <div class="card"><h3>By activity group</h3>${hint("Time")}
+        ${data.groups.map((g) => `<div class="bar-row"><span class="bar-label tb-activity-name">${groupIcon(g.category)}<span>${esc(groupLabel(g.category))}</span></span><span class="bar"><span style="width:${((g.time_s || 0) / gmax) * 100}%;background:var(--accent)"></span></span><span class="bar-value">${hours(g.time_s)}</span></div>`).join("") || hint("–")}
       </div>
     </div>`;
   bindBadges(view.querySelector(".page-head"));
