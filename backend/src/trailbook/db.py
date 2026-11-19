@@ -423,6 +423,78 @@ MIGRATIONS: list[str] = [
     """
     ALTER TABLE activities ADD COLUMN description TEXT;
     """,
+    # v24 — where the name comes from: 'file' (the activity file or Strava's activities.csv)
+    # or 'garmin' (Garmin Connect title, used only when no file gave one); NULL = no name or
+    # the user's own (name_overridden). Garmin Connect links to GPX/TCX copies and Strava's
+    # manual activities are dropped and the history is read again, so the FIT is downloaded
+    # and replaces the copy (see importer.COPY_UID_SQL).
+    """
+    ALTER TABLE activities ADD COLUMN name_source TEXT;
+    UPDATE activities SET name_source = CASE WHEN EXISTS (
+            SELECT 1 FROM files f
+            JOIN garmin_activities g ON g.person_id = f.person_id AND g.file_rel = f.rel_path
+            WHERE f.activity_id = activities.id AND g.name = activities.name
+        ) OR EXISTS (
+            SELECT 1 FROM garmin_activities g
+            WHERE g.trailbook_id = activities.id AND g.name = activities.name
+        ) THEN 'garmin' ELSE 'file' END
+    WHERE name IS NOT NULL AND name_overridden = 0;
+    UPDATE garmin_accounts SET backfill_done = 0, backfill_offset = 0
+    WHERE person_id IN (
+        SELECT g.person_id FROM garmin_activities g JOIN activities a ON a.id = g.trailbook_id
+        WHERE g.status = 'matched'
+          AND (a.fit_uid LIKE 'gpx:%' OR a.fit_uid LIKE 'tcx:%' OR a.fit_uid LIKE 'strava:%'));
+    DELETE FROM garmin_activities
+    WHERE status = 'matched' AND trailbook_id IN (
+        SELECT id FROM activities
+        WHERE fit_uid LIKE 'gpx:%' OR fit_uid LIKE 'tcx:%' OR fit_uid LIKE 'strava:%');
+    """,
+    # v25 — a refused Garmin key: since when (first refusal, kept while it lasts) and when it
+    # was last tried again (every few hours). Accounts refused before this start now.
+    """
+    ALTER TABLE garmin_accounts ADD COLUMN auth_error_since TEXT;
+    ALTER TABLE garmin_accounts ADD COLUMN auth_checked_at TEXT;
+    UPDATE garmin_accounts SET auth_error_since = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
+        auth_checked_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+    WHERE status = 'auth_error';
+    """,
+    # v26 — daily values from the watch's monitoring files (steps, ascent, stress; see
+    # fitfile.parse_monitoring), one row per file, day and metric: running totals keep the
+    # file's largest value, stress the sum of the readings and their count. The person is the
+    # file's (it follows the file). The monitoring files skipped so far are read again.
+    """
+    CREATE TABLE daily_parts (
+        file_id     INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+        day         TEXT NOT NULL,
+        metric      TEXT NOT NULL,
+        value       REAL NOT NULL,
+        n           INTEGER NOT NULL DEFAULT 1,
+        PRIMARY KEY (file_id, day, metric)
+    );
+    CREATE INDEX daily_parts_day ON daily_parts(day);
+    UPDATE files SET status = 'new'
+    WHERE status = 'skipped' AND fit_type IN ('monitoring_a', 'monitoring_b');
+    """,
+    # v27 — Garmin Connect daily summary of each day (JSON as Garmin sends it: steps, floors,
+    # stress, resting HR, Body Battery…; see garmin.fetch_days). It wins over the values read
+    # from monitoring files. `days_from` = oldest day asked for so far, `days_done` = the
+    # history of days is complete.
+    """
+    CREATE TABLE garmin_days (
+        person_id   TEXT NOT NULL REFERENCES persons(id) ON DELETE CASCADE,
+        day         TEXT NOT NULL,
+        summary     TEXT NOT NULL,
+        fetched_at  TEXT NOT NULL,
+        PRIMARY KEY (person_id, day)
+    );
+    ALTER TABLE garmin_accounts ADD COLUMN days_from TEXT;
+    ALTER TABLE garmin_accounts ADD COLUMN days_done INTEGER NOT NULL DEFAULT 0;
+    """,
+    # v28 — newest day asked for (`days_to`): the next run also asks for every day since, so
+    # days missed while the server was off are filled.
+    """
+    ALTER TABLE garmin_accounts ADD COLUMN days_to TEXT;
+    """,
 ]
 
 SCHEMA_VERSION = len(MIGRATIONS)

@@ -135,6 +135,82 @@ def test_wrong_key_marks_account_and_is_skipped(conn, tmp_path):
     assert len(fake.calls) == calls
 
 
+def _hours_ago(h: float) -> str:
+    return garmin._iso(garmin.datetime.now(garmin.UTC) - garmin.timedelta(hours=h))
+
+
+def test_refused_key_is_retried_every_few_hours_and_recovers(conn, tmp_path):
+    fake = FakeGarmin(2)
+    uploads = _setup(conn, fake, tmp_path)
+    good = fake.key
+    fake.key = "z" * 32  # Garmin stops accepting the stored key
+    garmin.sync_all(conn, uploads, transport=fake, gap_s=0)
+    row = conn.execute("SELECT * FROM garmin_accounts").fetchone()
+    assert row["status"] == "auth_error" and row["auth_error_since"] == row["auth_checked_at"]
+
+    # a later refusal keeps the time of the first one
+    first = _hours_ago(5)
+    conn.execute(
+        "UPDATE garmin_accounts SET auth_error_since = ?, auth_checked_at = ?",
+        (first, _hours_ago(garmin.AUTH_RETRY_H + 0.1)),
+    )
+    calls = len(fake.calls)
+    garmin.sync_all(conn, uploads, transport=fake, gap_s=0)
+    assert fake.calls[calls:] == ["POST " + garmin.TOKEN_PATH]  # one token request only
+    row = conn.execute("SELECT * FROM garmin_accounts").fetchone()
+    assert row["status"] == "auth_error" and row["auth_error_since"] == first
+
+    # accepted again (e.g. Garmin had a hiccup): downloads resume, the error is gone
+    fake.key = good
+    conn.execute("UPDATE garmin_accounts SET auth_checked_at = ?", (_hours_ago(4),))
+    r = garmin.sync_all(conn, uploads, transport=fake, gap_s=0)
+    assert r.downloaded == 2
+    row = conn.execute("SELECT * FROM garmin_accounts").fetchone()
+    assert row["status"] == "ok" and row["auth_error_since"] is None
+
+
+def test_banner_after_12_hours(conn, tmp_path):
+    fake = FakeGarmin(1)
+    _setup(conn, fake, tmp_path)
+    garmin._set_status(conn, "anna", "auth_error", "refused")
+    assert garmin.key_alerts(conn) == []
+    conn.execute("UPDATE garmin_accounts SET auth_error_since = ?", (_hours_ago(13),))
+    assert [a["label"] for a in garmin.key_alerts(conn)] == ["Anna"]
+    garmin.set_account(conn, "anna", "n" * 32, None)  # a new key clears it
+    assert garmin.key_alerts(conn) == []
+
+
+def test_home_assistant_notification_after_24_hours(conn, tmp_path, monkeypatch):
+    sent: list[tuple[str, str]] = []
+    monkeypatch.setattr(garmin.homeassistant, "available", lambda: True)
+    monkeypatch.setattr(
+        garmin.homeassistant, "notify", lambda nid, t, m: sent.append(("notify", nid)) or True
+    )
+    monkeypatch.setattr(
+        garmin.homeassistant, "dismiss", lambda nid: sent.append(("dismiss", nid)) or True
+    )
+    fake = FakeGarmin(1)
+    _setup(conn, fake, tmp_path)
+    garmin._set_status(conn, "anna", "auth_error", "refused")
+    conn.execute("UPDATE garmin_accounts SET auth_error_since = ?", (_hours_ago(13),))
+    garmin.update_ha_notifications(conn)
+    assert sent == []
+    due = garmin.next_ha_notification_at(conn)
+    assert due is not None and abs((due - garmin.datetime.now(garmin.UTC)).total_seconds()
+                                   - 11 * 3600) < 60  # fmt: skip
+
+    conn.execute("UPDATE garmin_accounts SET auth_error_since = ?", (_hours_ago(25),))
+    garmin.update_ha_notifications(conn)
+    garmin.update_ha_notifications(conn)  # only once
+    assert sent == [("notify", "trailbook_garmin_key_anna")]
+    assert garmin.next_ha_notification_at(conn) is None
+
+    garmin._set_status(conn, "anna", "ok", None)  # fixed: the notification goes away
+    garmin.update_ha_notifications(conn)
+    assert sent[-1] == ("dismiss", "trailbook_garmin_key_anna")
+    assert garmin._notified(conn) == []
+
+
 def test_rate_limit_stops_the_whole_run(conn, tmp_path):
     fake = FakeGarmin(10)
     uploads = _setup(conn, fake, tmp_path)
@@ -275,3 +351,35 @@ def test_activities_already_here_are_matched_not_downloaded(conn, tmp_path):
         conn.execute("SELECT name FROM activities WHERE id = ?", (local,)).fetchone()[0] == "Run 1"
     )
     assert not any("/download-service/files/activity/1001" in c for c in fake.calls)
+
+
+def test_strava_copy_does_not_block_the_garmin_download(conn, tmp_path, monkeypatch):
+    fake = FakeGarmin(1)
+    fake.activities[0]["startTimeGMT"] = "2026-01-01 07:00:00"
+    uploads = _setup(conn, fake, tmp_path)
+    # a Strava GPX copy of the same run, imported first, with the Strava title
+    conn.execute(
+        """INSERT INTO activities (person_id, fit_uid, start_time_utc, category, activity_type,
+                                   name, name_source, importer_version)
+           VALUES ('anna', 'gpx:1767250810:60', '2026-01-01T07:00:10Z', 'run', 'run',
+                   'Strava title', 'file', 1)"""
+    )
+    copy = conn.execute("SELECT id FROM activities").fetchone()[0]
+    r = garmin.sync_all(conn, uploads, transport=fake, gap_s=0)
+    assert r.downloaded == 1 and r.matched == 0
+
+    parsed = importer.trackfile.parse_gpx(
+        b'<gpx><trk><trkseg><trkpt lat="52" lon="21"><time>2026-01-01T07:00:00Z</time></trkpt>'
+        b'<trkpt lat="52.001" lon="21"><time>2026-01-01T07:00:30Z</time></trkpt>'
+        b"</trkseg></trk></gpx>"
+    )
+    parsed.fit_uid, parsed.title = "sn42:1", None
+    monkeypatch.setattr(importer.fitfile, "parse_activity", lambda _data: parsed)
+    importer.run_queue(conn, None, uploads_dir=uploads)
+    rows = conn.execute("SELECT id, fit_uid, name, name_source FROM activities").fetchall()
+    assert [tuple(r) for r in rows] == [(copy, "sn42:1", "Strava title", "file")]
+
+    # the user clears the name: back to the Garmin Connect title
+    conn.execute("UPDATE activities SET name = NULL, name_source = NULL")
+    importer.apply_connect_title(conn, copy)
+    assert conn.execute("SELECT name FROM activities").fetchone()[0] == "Run 0"

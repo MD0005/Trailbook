@@ -176,3 +176,33 @@ def test_activity_list_workout_filter_and_neighbours(setup):
     assert (a["prev_id"], a["next_id"]) == (2, None)
     a = client.get("/api/activities/2?from=2026-01-02").json()
     assert (a["prev_id"], a["next_id"]) == (None, 3)
+
+
+def test_time_filter_last_and_years(setup):
+    from datetime import date
+
+    from trailbook.api import last_since
+
+    today = date(2026, 3, 31)
+    assert last_since("1m", today) == "2026-02-28"  # day clamped to the shorter month
+    assert last_since("3m", today) == "2025-12-31"
+    assert last_since("ytd", today) == "2026-01-01"
+    assert last_since("1y", today) == "2025-03-31"
+    assert last_since("bogus", today) is None
+
+    client, _, db_path = setup
+    conn = db.connect(db_path)
+    for aid, start in ((1, "2023-05-01T08:00:00Z"), (2, "2024-05-01T08:00:00Z"),
+                       (3, "2025-05-01T08:00:00Z")):  # fmt: skip
+        conn.execute(
+            """INSERT INTO activities (id, person_id, fit_uid, start_time_utc, category,
+                                       activity_type, importer_version)
+               VALUES (?, 'alice', ?, ?, 'run', 'run', 1)""",
+            (aid, f"uid{aid}", start),
+        )
+    conn.commit()
+    conn.close()
+    ids = lambda q: sorted(a["id"] for a in client.get("/api/activities?" + q).json()["items"])  # noqa: E731
+    assert ids("years=2023,2025") == [1, 3]  # years with a gap
+    assert ids("years=2024") == [2]
+    assert client.get("/api/activities?years=24").status_code == 400

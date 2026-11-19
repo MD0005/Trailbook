@@ -23,6 +23,7 @@ take a few milliseconds, and nothing can get stale.
 
 from __future__ import annotations
 
+import json
 import math
 import sqlite3
 from collections.abc import Callable
@@ -560,6 +561,18 @@ def daily_loads(conn: sqlite3.Connection, person_id: str) -> dict[str, float]:
     }
 
 
+def fatigue_on(conn: sqlite3.Connection, activity: sqlite3.Row) -> dict | None:
+    """Fatigue (ATL) at the end of the activity's local day, and how much that day's load
+    raised it (from the day before). None when the person has no load."""
+    day = _local_day(activity)
+    series = fitness_series(daily_loads(conn, activity["person_id"]), date.fromisoformat(day))
+    k = next((i for i, d in enumerate(series) if d["date"] == day), None)
+    if k is None:
+        return None
+    before = series[k - 1]["atl"] if k else 0.0
+    return {"atl": series[k]["atl"], "change": round(series[k]["atl"] - before, 1)}
+
+
 def fitness_series(loads: dict[str, float], until: date | None = None) -> list[dict]:
     """CTL / ATL as exponentially weighted averages of the daily load; TSB = form, from
     yesterday's CTL − ATL (how fresh you are going into the day)."""
@@ -583,3 +596,67 @@ def fitness_series(loads: dict[str, float], until: date | None = None) -> list[d
         )  # fmt: skip
         day += timedelta(days=1)
     return out
+
+
+# ---- daily values from the watch (Calendar) ------------------------------------------------
+
+FLOOR_M = 3.048  # one floor climbed = 10 ft of ascent, as the watch counts them
+
+
+def daily_values(conn: sqlite3.Connection, person_id: str, start: str, end: str) -> dict:
+    """Steps, floors, ascent and average stress per local day (monitoring files, see
+    fitfile.parse_monitoring): {day: {"steps", "floors", "ascent_m", "stress"}}, a value is
+    None when the day has none. Running totals take the largest value of the day's files."""
+    rows = conn.execute(
+        """WITH m AS (
+               SELECT p.day, p.metric, MAX(p.value) v, SUM(p.value) s, SUM(p.n) n
+               FROM daily_parts p JOIN files f ON f.id = p.file_id
+               WHERE f.person_id = ? AND p.day BETWEEN ? AND ?
+               GROUP BY p.day, p.metric)
+           SELECT day,
+                  SUM(CASE WHEN metric LIKE 'steps:%' THEN v END) steps,
+                  MAX(CASE WHEN metric = 'ascent_mm' THEN v END) ascent_mm,
+                  SUM(CASE WHEN metric = 'stress' THEN s END) stress_sum,
+                  SUM(CASE WHEN metric = 'stress' THEN n END) stress_n
+           FROM m GROUP BY day""",
+        (person_id, start, end),
+    ).fetchall()
+    out = {}
+    for r in rows:
+        asc = r["ascent_mm"]
+        out[r["day"]] = {
+            "steps": int(r["steps"]) if r["steps"] is not None else None,
+            "floors": int(asc / 1000 / FLOOR_M) if asc is not None else None,
+            "ascent_m": round(asc / 1000, 1) if asc is not None else None,
+            "stress": round(r["stress_sum"] / r["stress_n"]) if r["stress_n"] else None,
+        }
+    # Garmin Connect's daily summary (garmin.fetch_days) wins: Garmin's own result
+    for day, text in conn.execute(
+        "SELECT day, summary FROM garmin_days WHERE person_id = ? AND day BETWEEN ? AND ?",
+        (person_id, start, end),
+    ):
+        api = garmin_day_values(json.loads(text))
+        merged = out.get(day, dict.fromkeys(("steps", "floors", "ascent_m", "stress")))
+        out[day] = {k: (api[k] if api[k] is not None else merged[k]) for k in merged}
+    return out
+
+
+def garmin_day_values(s: dict) -> dict:
+    """Steps, floors, ascent and average stress from a Garmin Connect daily summary; None
+    where Garmin has no value (a negative stress level = not measured)."""
+
+    def pick(*path):
+        v = s
+        for k in path:
+            v = v.get(k) if isinstance(v, dict) else None
+        return v if isinstance(v, (int, float)) else None
+
+    stress = pick("stress", "avgLevel")
+    asc = pick("movement", "floorsAscended", "distanceInMeters")
+    floors = pick("movement", "floorsAscended", "value")
+    return {
+        "steps": int(v) if (v := pick("movement", "steps", "value")) is not None else None,
+        "floors": int(floors) if floors is not None else None,
+        "ascent_m": round(asc, 1) if asc is not None else None,
+        "stress": round(stress) if stress is not None and stress >= 0 else None,
+    }

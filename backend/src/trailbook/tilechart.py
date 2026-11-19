@@ -65,7 +65,7 @@ def _avg(time: list, v: list, t0: float, t1: float) -> float | None:
         if t is None:
             continue
         if prev is not None and t0 < t <= t1 and x is not None:
-            dt = min(30.0, t - prev)
+            dt = min(float(MAX_GAP_S), t - prev)
             s += x * dt
             w += dt
         prev = t
@@ -99,11 +99,25 @@ def _hr_max(zones: dict | None, a: sqlite3.Row, hr: list) -> float | None:
 # Phases of a session on the tiles: share of the activity's time a block must last at least
 # (at least a minute), per training type; the rest (team sports, no type) as Easy.
 BLOCK_SHARE = {"easy": 1 / 12, "tempo": 1 / 12, "race": 1 / 12, "long": 1 / 20}
+DEFAULT_SHARE = 1 / 12  # team and racket sports, sports without a type
 HYSTERESIS_BPM = 3  # a new zone counts once the heart rate is this far past its limit
+HYSTERESIS_POWER = 0.03  # the same from power: share of the top of the power zones
+STEP_S = 15  # heart rate averaged over steps of this length before the zones are read
+MIN_BLOCK_S = 60  # no block shorter than this
+OPEN_ZONE = 1.1  # an open last power zone ends this much above its start
+MAX_GAP_S = 30  # a recording gap counts at most this long in an average
+TRACK_POINTS = 160  # route points on a Commute tile
+
+# Manual › Activity charts is written from these (/api/types: tile_chart_rules).
+RULES = {
+    "block_share": BLOCK_SHARE, "default_share": DEFAULT_SHARE, "hysteresis_bpm": HYSTERESIS_BPM,
+    "hysteresis_power": HYSTERESIS_POWER, "step_s": STEP_S, "min_block_s": MIN_BLOCK_S,
+    "open_zone": OPEN_ZONE, "max_gap_s": MAX_GAP_S, "points": POINTS, "track_points": TRACK_POINTS,
+}  # fmt: skip
 
 
 def _zone_blocks(
-    time: list, hr: list, zones: dict | None, step: int = 15, min_s: int = 60,
+    time: list, hr: list, zones: dict | None, step: int = STEP_S, min_s: int = MIN_BLOCK_S,
     hyst: float = HYSTERESIS_BPM,
 ) -> list:  # fmt: skip
     """Stretches of one heart rate zone: 15 s means; the zone changes only when the mean is
@@ -162,12 +176,15 @@ def _power_as_hr(zones: dict | None) -> tuple[dict, float] | None:
         return None
     lims = list(b) if b[0] == 0 else [0, *b]
     if lims[-1] >= 2000:
-        lims = [*lims[:-1], round(lims[-2] * 1.1)]
+        lims = [*lims[:-1], round(lims[-2] * OPEN_ZONE)]
     return ({"hr": {"bounds": lims}}, float(lims[-1])) if len(lims) > 2 else None
 
 
 def hr_blocks(
-    conn: sqlite3.Connection, a: sqlite3.Row, splits: list | None = None, share: float = 1 / 12
+    conn: sqlite3.Connection,
+    a: sqlite3.Row,
+    splits: list | None = None,
+    share: float = DEFAULT_SHARE,
 ) -> dict | None:
     """Blocks over time: width = time, height = average heart rate on a scale
     from the resting to the maximum HR, colour = its heart rate zone. The sections between the
@@ -191,7 +208,7 @@ def hr_blocks(
         if as_hr is None:
             return None
         (zones, top), vals, rest = as_hr, pw, 0.0
-        hyst = 0.03 * top
+        hyst = HYSTERESIS_POWER * top
     if not top or rest >= top:
         return None
     scale = lambda v: round(min(1.0, max(0.0, (v - rest) / (top - rest))), 3)  # noqa: E731
@@ -202,7 +219,7 @@ def hr_blocks(
         edges = [t_start, *[t_start + s for s in splits], t_end]
         spans = [(x, y) for x, y in zip(edges, edges[1:], strict=False) if y > x]
     else:
-        min_s = max(60, int((t_end - t_start) * share))
+        min_s = max(MIN_BLOCK_S, int((t_end - t_start) * share))
         spans = _zone_blocks(time, hr, zones, min_s=min_s, hyst=hyst)
     span = (t_end - t_start) or 1
     bars = []
@@ -229,7 +246,7 @@ def interval_blocks(conn: sqlite3.Connection, a: sqlite3.Row) -> dict | None:
     return hr_blocks(conn, a, splits) if splits else None
 
 
-def track(conn: sqlite3.Connection, a: sqlite3.Row, points: int = 160) -> dict | None:
+def track(conn: sqlite3.Connection, a: sqlite3.Row, points: int = TRACK_POINTS) -> dict | None:
     """The route alone, drawn as a thick line on a plain background: [x, y, zone] with x, y in
     0..1 of the longer side (equirectangular, north up), zone = the heart rate zone there."""
     ch = _channels(conn, a["id"], ("lat", "lon", "hr"))
@@ -287,5 +304,5 @@ def tile_chart(conn: sqlite3.Connection, activity_id: int) -> dict | None:
         # without a route the heart rate, else the speed, else nothing (the page shows the icon)
         chart = track(conn, a) or hr_blocks(conn, a)
     else:  # Easy, Long, Tempo, Race, team and racket sports: the phases of the session
-        chart = hr_blocks(conn, a, share=BLOCK_SHARE.get(a["kind"], 1 / 12))
+        chart = hr_blocks(conn, a, share=BLOCK_SHARE.get(a["kind"], DEFAULT_SHARE))
     return chart or speed_profile(conn, a)

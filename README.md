@@ -103,7 +103,7 @@ Or by hand:
 ## First steps
 
 1. **Settings › People** — add the people whose training you keep.
-2. **Settings › General** — choose **Garmin Connect** (recommended) and paste each person's
+2. **Settings › Data** — choose **Garmin Connect** (recommended) and paste each person's
    personal API key. Old history from Strava goes in under *Other sources*.
 3. Wait for the first import; progress is shown in **Settings › Imported**.
 4. **Settings › People** — check the heart rate and power thresholds; training load and

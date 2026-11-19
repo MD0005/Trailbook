@@ -4,6 +4,8 @@ import gzip
 import zipfile
 from datetime import UTC, datetime
 
+from conftest import make_fit
+
 from trailbook import importer, strava, trackfile
 
 START = datetime(2019, 6, 1, 6, 0, 0, tzinfo=UTC)
@@ -68,6 +70,7 @@ CSV = (
 
 
 def strava_zip(path):
+    path.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(path, "w") as zf:
         zf.writestr("activities.csv", CSV)
         zf.writestr("activities/1.gpx.gz", gzip.compress(gpx()))
@@ -160,6 +163,78 @@ def test_copy_of_existing_activity_is_duplicate(conn, tmp_path):
     # Another recording of the same run (e.g. a Strava copy), a few seconds later.
     _, second = import_upload(conn, tmp_path, "b.gpx", gpx(n=50, start="2019-06-01T06:00:20Z"))
     assert first.imported == 1 and second.duplicates == 1
+
+
+def watch_fit(monkeypatch, start="2019-06-01T06:00:05Z") -> bytes:
+    """A watch recording of the Strava export's "Park loop" (FIT decoding is faked: the
+    test FIT holds only a file_id; the activity comes from a GPX without a title)."""
+
+    def parse(_data):
+        p = trackfile.parse_gpx(gpx(n=80, start=start))
+        p.fit_uid, p.title, p.utc_offset_s, p.device = "sn42:1", None, 7200, "watch"
+        return p
+
+    monkeypatch.setattr(importer.fitfile, "parse_activity", parse)
+    return make_fit(4, serial=42, created=1_000_000_000)
+
+
+def park_loop(conn):
+    return conn.execute(
+        """SELECT * FROM activities WHERE person_id = 'alice'
+           AND start_time_utc BETWEEN '2019-06-01T05:58:00Z' AND '2019-06-01T06:02:00Z'"""
+    ).fetchall()
+
+
+def test_watch_fit_replaces_strava_copy(conn, tmp_path, monkeypatch):
+    add_person(conn)
+    strava_zip(tmp_path / "uploads" / "alice" / "export.zip")
+    import_upload(conn, tmp_path, "export.zip", None)
+    (gpx_copy,) = park_loop(conn)
+
+    _, r = import_upload(conn, tmp_path, "watch.fit", watch_fit(monkeypatch))
+    assert r.imported == 1 and r.duplicates == 0
+    (act,) = park_loop(conn)
+    assert act["id"] == gpx_copy["id"] and act["fit_uid"] == "sn42:1"
+    assert act["device"] == "watch" and act["utc_offset_s"] == 7200
+    # the Strava title and description stay
+    assert act["name"] == "Park loop" and act["description"] == "Easy one\nwith friends"
+    files = dict(conn.execute("SELECT zip_member, status FROM files WHERE activity_id = ?",
+                              (act["id"],)).fetchall())  # fmt: skip
+    assert files == {"activities/1.gpx.gz": "duplicate", "": "imported"}
+
+    # a reimport keeps all of it
+    importer.requeue_outdated(conn, everything=True)
+    importer.run_queue(conn, None, uploads_dir=tmp_path / "uploads")
+    (again,) = park_loop(conn)
+    assert again["fit_uid"] == "sn42:1" and again["name"] == "Park loop"
+    assert again["description"] == "Easy one\nwith friends"
+
+
+def test_strava_copy_after_watch_fit_brings_title(conn, tmp_path, monkeypatch):
+    add_person(conn)
+    import_upload(conn, tmp_path, "watch.fit", watch_fit(monkeypatch))
+    (act,) = park_loop(conn)
+    assert act["name"] is None
+
+    strava_zip(tmp_path / "uploads" / "alice" / "export.zip")
+    _, r = import_upload(conn, tmp_path, "export.zip", None)
+    assert r.duplicates == 1 and r.imported == 2  # the ride and the gym are new
+    (act,) = park_loop(conn)
+    assert act["fit_uid"] == "sn42:1"
+    assert act["name"] == "Park loop" and act["description"] == "Easy one\nwith friends"
+
+
+def test_manual_strava_activity_is_replaced_by_watch_fit(conn, tmp_path, monkeypatch):
+    add_person(conn)
+    strava_zip(tmp_path / "uploads" / "alice" / "export.zip")
+    import_upload(conn, tmp_path, "export.zip", None)
+    gym = conn.execute("SELECT * FROM activities WHERE name = 'Gym'").fetchone()
+    assert gym["fit_uid"].startswith("strava:")
+    _, r = import_upload(conn, tmp_path, "gym.fit", watch_fit(monkeypatch, "2019-06-02T17:31:00Z"))
+    assert r.imported == 1
+    after = conn.execute("SELECT * FROM activities WHERE id = ?", (gym["id"],)).fetchone()
+    assert after["fit_uid"] == "sn42:1" and after["name"] == "Gym"
+    assert conn.execute("SELECT COUNT(*) FROM activities").fetchone()[0] == 3
 
 
 def test_damaged_files_are_skipped(conn, tmp_path):

@@ -32,10 +32,10 @@ import urllib.request
 import zipfile
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
-from . import __version__, importer, streams
+from . import __version__, analysis, db, homeassistant, importer, streams
 
 BASE_URL = "https://personal.connectapi.garmin.com"
 TOKEN_PATH = "/personalapitoken-service/personal-api/personal-api-key/token"
@@ -43,6 +43,11 @@ SEARCH_PATH = "/activitylist-service/activities/search/activities"
 DETAILS_PATH = "/activity-service/activity/{id}/details"
 DOWNLOAD_PATH = "/download-service/files/activity/{id}"
 PROFILE_PATH = "/userprofile-service/userprofile/settings"
+DAYS_PATH = "/usersummary-service/v2/dailysummaries"
+DAYS_RECENT = 3  # today and the 2 days before are asked for again on every run
+DAYS_CHUNK = 31  # days per request when filling the history
+DAYS_CHUNKS_PER_RUN = 4  # history requests per run (~4 months)
+DAYS_DEFAULT_BACK = 365  # history start without activities or a Download from date
 USER_AGENT = f"Trailbook/{__version__} (self-hosted training log)"
 
 PAGE_SIZE = 50
@@ -219,6 +224,7 @@ def set_account(
            ON CONFLICT(person_id) DO UPDATE SET api_key = excluded.api_key,
                key_hint = excluded.key_hint, history_from = excluded.history_from,
                token = NULL, token_expires = NULL, status = 'new', last_error = NULL,
+               auth_error_since = NULL, auth_checked_at = NULL,
                backfill_offset = 0, backfill_done = 0""",
         (person_id, api_key.strip(), key_hint(api_key), history_from, importer.now_iso()),
     )
@@ -268,10 +274,27 @@ def test_account(conn: sqlite3.Connection, person_id: str, **kwargs) -> dict:
 
 
 def _set_status(conn: sqlite3.Connection, person_id: str, status: str, error: str | None) -> None:
-    conn.execute(
-        "UPDATE garmin_accounts SET status = ?, last_error = ? WHERE person_id = ?",
-        (status, error, person_id),
-    )
+    """A refusal keeps the time of the first one (`auth_error_since`) and notes this try;
+    any other outcome clears both. `error` (e.g. a server error) does not touch them."""
+    if status == "auth_error":
+        now = importer.now_iso()
+        conn.execute(
+            """UPDATE garmin_accounts SET status = ?, last_error = ?,
+                   auth_error_since = COALESCE(auth_error_since, ?), auth_checked_at = ?
+               WHERE person_id = ?""",
+            (status, error, now, now, person_id),
+        )
+    elif status == "ok":
+        conn.execute(
+            """UPDATE garmin_accounts SET status = ?, last_error = ?, auth_error_since = NULL,
+                   auth_checked_at = NULL WHERE person_id = ?""",
+            (status, error, person_id),
+        )
+    else:
+        conn.execute(
+            "UPDATE garmin_accounts SET status = ?, last_error = ? WHERE person_id = ?",
+            (status, error, person_id),
+        )
 
 
 # ---- sync --------------------------------------------------------------------------------
@@ -297,7 +320,8 @@ SUMMARY_FIELDS = (
 # Activity detail metrics → stream channels stored in `connect_streams`.
 DETAIL_CHANNELS = {"directBodyBattery": "body_battery", "directGradeAdjustedSpeed": "gap_speed",
                    "directElevation": "altitude_connect"}  # fmt: skip
-MATCH_S = 90  # a local activity starting this close to a Connect one is the same activity
+# A local activity starting this close to a Connect one is the same activity.
+MATCH_S = importer.SAME_START_S
 
 
 def _summary(item: dict) -> str:
@@ -305,12 +329,16 @@ def _summary(item: dict) -> str:
 
 
 def _match_local(conn: sqlite3.Connection, person_id: str, item: dict) -> int | None:
-    """The local activity with the same start (± MATCH_S), e.g. imported from a folder."""
+    """The local activity with the same start (± MATCH_S), e.g. imported from a folder.
+
+    Only activities recorded in a FIT file match: a GPX/TCX or manual copy (e.g. from a
+    Strava export) is not, so the FIT is downloaded and replaces it on import.
+    """
     start = item.get("startTimeGMT")
     if not start:
         return None
     row = conn.execute(
-        """SELECT id FROM activities WHERE person_id = ?
+        f"""SELECT id FROM activities WHERE person_id = ? AND NOT {importer.COPY_UID_SQL}
                AND ABS(CAST(strftime('%s', start_time_utc) AS INTEGER)
                        - CAST(strftime('%s', ?) AS INTEGER)) <= ?
            ORDER BY ABS(CAST(strftime('%s', start_time_utc) AS INTEGER)
@@ -333,11 +361,7 @@ def _store_matched(conn: sqlite3.Connection, person_id: str, item: dict, local_i
             local_id,
         ),
     )  # fmt: skip
-    if item.get("activityName"):
-        conn.execute(
-            "UPDATE activities SET name = ? WHERE id = ? AND name_overridden = 0",
-            (item["activityName"], local_id),
-        )
+    importer.apply_connect_title(conn, local_id)
 
 
 def store_details(conn: sqlite3.Connection, local_id: int, details: dict) -> list[str]:
@@ -455,6 +479,23 @@ def sync_person(
     pid = row["person_id"]
     client = client_for(row, **client_kwargs)
     done = 0
+    if row["status"] == "auth_error":
+        # A refused key is tried again with one token request; it stays refused until that works.
+        try:
+            client.fetch_token()
+        except AuthError as exc:
+            _set_status(conn, pid, "auth_error", str(exc))
+            result.errors += 1
+            return 0
+        except GarminError as exc:
+            conn.execute(
+                "UPDATE garmin_accounts SET auth_checked_at = ? WHERE person_id = ?",
+                (importer.now_iso(), pid),
+            )
+            if exc.stop_run:
+                result.stopped = str(exc)
+            result.errors += 1
+            return 0
 
     def fetch(items: list[dict]) -> bool:
         """Download unknown items; False once the budget is used up."""
@@ -534,6 +575,7 @@ def sync_person(
         return done
     try:
         done += _fetch_details(conn, client, pid, budget - done)
+        fetch_days(conn, client, pid)
     except GarminError as exc:
         _save_token(conn, pid, client)
         _set_status(conn, pid, "error", str(exc))
@@ -541,7 +583,8 @@ def sync_person(
         return done
     _save_token(conn, pid, client)
     conn.execute(
-        """UPDATE garmin_accounts SET status = 'ok', last_error = NULL, last_sync_at = ?
+        """UPDATE garmin_accounts SET status = 'ok', last_error = NULL, last_sync_at = ?,
+               auth_error_since = NULL, auth_checked_at = NULL
            WHERE person_id = ?""",
         (importer.now_iso(), pid),
     )
@@ -582,6 +625,105 @@ def _fetch_details(conn: sqlite3.Connection, client: Client, pid: str, budget: i
     return n
 
 
+# ---- daily summaries (steps, floors, stress… of each day) ------------------------------------
+
+
+def _store_days(conn: sqlite3.Connection, pid: str, body: bytes) -> int:
+    """Store the days of a daily summaries answer that have wellness data; returns how many."""
+    data = json.loads(body or b"{}")
+    items = data.get("data") if isinstance(data, dict) else data
+    now = importer.now_iso()
+    n = 0
+    for item in items if isinstance(items, list) else []:
+        day = item.get("calendarDate") if isinstance(item, dict) else None
+        if not day or not item.get("includesWellnessData"):
+            continue
+        conn.execute(
+            """INSERT INTO garmin_days (person_id, day, summary, fetched_at) VALUES (?, ?, ?, ?)
+               ON CONFLICT(person_id, day) DO UPDATE SET
+                   summary = excluded.summary, fetched_at = excluded.fetched_at""",
+            (pid, day, json.dumps(item, separators=(",", ":")), now),
+        )
+        n += 1
+    return n
+
+
+def fetch_days(
+    conn: sqlite3.Connection, client: Client, pid: str, today: date | None = None
+) -> None:
+    """Garmin's daily summary of each day (one request covers many days): every run asks for
+    the last DAYS_RECENT days again (today is still counting) and for any days since the
+    previous run (`days_to`), then fills the history backwards (`days_from`), DAYS_CHUNK days
+    a request and DAYS_CHUNKS_PER_RUN requests a run, down to the *Download from* date or the
+    person's first activity (else a year back). A stored day is replaced when asked again. An
+    answer the key is not allowed to get is skipped quietly; refusals and server errors stop
+    the run."""
+    today = today or date.today()
+    row = conn.execute(
+        "SELECT history_from, days_from, days_to FROM garmin_accounts WHERE person_id = ?",
+        (pid,),
+    ).fetchone()
+    first = conn.execute(
+        f"SELECT MIN({analysis.LOCAL_DAY_SQL}) FROM activities WHERE person_id = ?", (pid,)
+    ).fetchone()[0]
+    floor = row["history_from"] or first or (today - timedelta(days=DAYS_DEFAULT_BACK)).isoformat()
+
+    def ask(start: date, end: date) -> int | None:
+        try:
+            body = client.get(
+                DAYS_PATH, {"startDate": start.isoformat(), "endDate": end.isoformat()}
+            )
+        except AuthError:
+            raise
+        except GarminError as exc:
+            if exc.stop_run:
+                raise
+            return None  # e.g. not available with this key
+        return _store_days(conn, pid, body)
+
+    # 1) forward to today: the recent days, and also every day since the last run's newest
+    #    day (the server was off, no gap stays); a long gap in chunks, finished by later runs
+    recent = today - timedelta(days=DAYS_RECENT - 1)
+    start = recent
+    if row["days_to"]:
+        start = min(recent, date.fromisoformat(row["days_to"]) - timedelta(days=1))
+    first_start = start
+    for _ in range(DAYS_CHUNKS_PER_RUN + 1):
+        if start > today:
+            break
+        end = min(today, start + timedelta(days=DAYS_CHUNK - 1))
+        if ask(start, end) is None:
+            return
+        conn.execute(
+            "UPDATE garmin_accounts SET days_to = ? WHERE person_id = ?", (end.isoformat(), pid)
+        )
+        start = end + timedelta(days=1)
+    if start <= today:
+        return  # the gap is not closed yet: the next run goes on
+
+    # 2) the history backwards, down to the floor (which may move back later: a new
+    #    Download from date, older activities imported)
+    stop = date.fromisoformat(floor)
+    end = (
+        date.fromisoformat(row["days_from"]) - timedelta(days=1)
+        if row["days_from"]
+        else first_start - timedelta(days=1)
+    )
+    for _ in range(DAYS_CHUNKS_PER_RUN):
+        if end < stop:
+            break
+        start = max(stop, end - timedelta(days=DAYS_CHUNK - 1))
+        if ask(start, end) is None:
+            return
+        conn.execute(
+            "UPDATE garmin_accounts SET days_from = ? WHERE person_id = ?", (start.isoformat(), pid)
+        )
+        end = start - timedelta(days=1)
+    conn.execute(
+        "UPDATE garmin_accounts SET days_done = ? WHERE person_id = ?", (int(end < stop), pid)
+    )
+
+
 def sync_all(
     conn: sqlite3.Connection,
     uploads_dir: Path,
@@ -589,11 +731,18 @@ def sync_all(
     max_downloads: int = MAX_DOWNLOADS_PER_RUN,
     **client_kwargs,
 ) -> SyncResult:
-    """One run over every connected person; stops early on refusals or server errors."""
+    """One run over every connected person; stops early on refusals or server errors.
+
+    A refused key is tried again at most every AUTH_RETRY_H hours (a key without a value,
+    e.g. after restoring an export without keys, never)."""
     result = SyncResult()
+    retry_before = _iso(datetime.now(UTC) - timedelta(hours=AUTH_RETRY_H))
     rows = conn.execute(
         """SELECT g.* FROM garmin_accounts g JOIN persons p ON p.id = g.person_id
-           WHERE g.status != 'auth_error' ORDER BY p.sort_order, p.id"""
+           WHERE g.status != 'auth_error'
+              OR (g.api_key != '' AND COALESCE(g.auth_checked_at, '') <= ?)
+           ORDER BY p.sort_order, p.id""",
+        (retry_before,),
     ).fetchall()
     for row in rows:
         budget = max_downloads - result.downloaded
@@ -601,7 +750,95 @@ def sync_all(
             break
         result.persons.append(row["person_id"])
         sync_person(conn, row, uploads_dir, result, budget, progress, **client_kwargs)
+    update_ha_notifications(conn)
     return result
+
+
+# ---- refused keys: banner and Home Assistant notification --------------------------------
+
+AUTH_RETRY_H = 3  # a refused key is tried again this often (one token request)
+BANNER_AFTER_H = 12  # the app shows a banner once a key has been refused this long
+HA_NOTIFY_AFTER_H = 24  # … and Home Assistant gets a notification
+HA_NOTIFIED_SETTING = "garmin_ha_notified"  # person ids with an open HA notification
+
+
+def _iso(t: datetime) -> str:
+    return t.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _refused(conn: sqlite3.Connection, hours: float, now: datetime | None = None) -> list:
+    """Accounts refused for at least `hours` (person id, label, since)."""
+    before = _iso((now or datetime.now(UTC)) - timedelta(hours=hours))
+    return conn.execute(
+        """SELECT g.person_id, p.label, g.auth_error_since FROM garmin_accounts g
+           JOIN persons p ON p.id = g.person_id
+           WHERE g.status = 'auth_error' AND COALESCE(g.auth_error_since, '') <= ?
+           ORDER BY p.sort_order, p.id""",
+        (before,),
+    ).fetchall()
+
+
+def key_alerts(conn: sqlite3.Connection) -> list[dict]:
+    """People whose key has been refused for BANNER_AFTER_H hours or more (for the banner)."""
+    return [
+        {"person_id": r["person_id"], "label": r["label"], "since": r["auth_error_since"]}
+        for r in _refused(conn, BANNER_AFTER_H)
+    ]
+
+
+def next_ha_notification_at(conn: sqlite3.Connection) -> datetime | None:
+    """When a refused key reaches HA_NOTIFY_AFTER_H hours and still has no notification."""
+    if not homeassistant.available():
+        return None
+    notified = set(_notified(conn))
+    first = None
+    for r in conn.execute(
+        """SELECT person_id, auth_error_since FROM garmin_accounts
+           WHERE status = 'auth_error' AND auth_error_since IS NOT NULL"""
+    ):
+        if r["person_id"] in notified:
+            continue
+        since = datetime.strptime(r["auth_error_since"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
+        due = since + timedelta(hours=HA_NOTIFY_AFTER_H)
+        first = due if first is None or due < first else first
+    return first
+
+
+def _notified(conn: sqlite3.Connection) -> list[str]:
+    try:
+        return list(json.loads(db.get_setting(conn, HA_NOTIFIED_SETTING) or "[]"))
+    except ValueError:
+        return []
+
+
+def update_ha_notifications(conn: sqlite3.Connection) -> None:
+    """Create a Home Assistant notification for every key refused for HA_NOTIFY_AFTER_H hours,
+    dismiss the ones that are fixed (or whose account is gone). Nothing outside the add-on."""
+    if not homeassistant.available():
+        return
+    due = {r["person_id"]: r["label"] for r in _refused(conn, HA_NOTIFY_AFTER_H)}
+    notified = _notified(conn)
+    kept = []
+    for pid in notified:
+        if pid in due or not homeassistant.dismiss(_ha_id(pid)):
+            kept.append(pid)
+    for pid, label in due.items():
+        if pid in kept:
+            continue
+        if homeassistant.notify(
+            _ha_id(pid),
+            "Trailbook: Garmin key stopped working",
+            f"Garmin has refused the personal API key of {label} for over "
+            f"{HA_NOTIFY_AFTER_H} hours, so new activities are not downloaded. Create a new "
+            "key in Garmin Connect and paste it in Trailbook › Settings.",
+        ):
+            kept.append(pid)
+    if sorted(kept) != sorted(notified):
+        db.set_setting(conn, HA_NOTIFIED_SETTING, json.dumps(sorted(kept)) if kept else None)
+
+
+def _ha_id(person_id: str) -> str:
+    return "trailbook_garmin_key_" + re.sub(r"[^a-z0-9_]", "_", person_id.lower())
 
 
 # History estimate: without real data assume 5 years with an activity every 3 days.

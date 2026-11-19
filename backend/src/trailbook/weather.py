@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -125,3 +126,50 @@ def compute(conn: sqlite3.Connection, activity_id: int) -> dict | None:
     )
     conn.commit()
     return result if result["points"] else None
+
+
+# ---- forecast (Calendar) -------------------------------------------------------------------
+
+FORECAST_DAILY = (
+    "weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,"
+    "wind_speed_10m_max,wind_direction_10m_dominant"
+)
+FORECAST_TTL_S = 3 * 3600
+_forecasts: dict[tuple[str, str], tuple[float, list]] = {}
+
+
+def forecast(lat: float, lon: float, now: float | None = None) -> list[dict]:
+    """Daily forecast for the next 16 days at a place (rounded to 0.01°), local days:
+    [{"date", "code", "temp_min", "temp_max", "precip", "wind_speed", "wind_dir"}] in the
+    shape of the activity weather. Kept in memory for FORECAST_TTL_S.
+
+    Raises OSError when Open-Meteo cannot be reached."""
+    now = time.time() if now is None else now
+    key = (f"{lat:.2f}", f"{lon:.2f}")
+    hit = _forecasts.get(key)
+    if hit and now - hit[0] < FORECAST_TTL_S:
+        return hit[1]
+    q = urllib.parse.urlencode({
+        "latitude": key[0], "longitude": key[1], "daily": FORECAST_DAILY,
+        "timezone": "auto", "wind_speed_unit": "kmh", "forecast_days": 16,
+    })  # fmt: skip
+    req = urllib.request.Request(f"{FORECAST_URL}?{q}", headers={"User-Agent": USER_AGENT})
+    try:
+        with urllib.request.urlopen(req, timeout=TIMEOUT_S) as resp:  # noqa: S310 (fixed host)
+            data = json.loads(resp.read())
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+        raise OSError(f"weather server: {exc}") from exc
+    d = data.get("daily") or {}
+    names = {
+        "code": "weather_code", "temp_min": "temperature_2m_min",
+        "temp_max": "temperature_2m_max", "precip": "precipitation_sum",
+        "wind_speed": "wind_speed_10m_max", "wind_dir": "wind_direction_10m_dominant",
+    }  # fmt: skip
+    cols = {k: d.get(v) or [] for k, v in names.items()}
+    days = []
+    for i, date in enumerate(d.get("time") or []):
+        day = {k: (c[i] if i < len(c) else None) for k, c in cols.items()}
+        if day["temp_max"] is not None:
+            days.append({"date": date, **day})
+    _forecasts[key] = (now, days)
+    return days

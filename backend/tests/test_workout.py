@@ -367,3 +367,23 @@ def test_section_lines_are_kept_until_the_training_type_changes(tmp_path):
     client.patch(url, json={"section_lines": lines})
     client.patch(url, json={"section_lines": None})  # Edit › Reset lines
     assert client.get(url).json()["section_lines"] is None
+
+
+def test_longest_distance_is_a_best_effort(tmp_path):
+    """Runs and rides get a "longest" best effort (their distance) with records like the others."""
+    from starlette.testclient import TestClient
+
+    from trailbook.api import create_app
+
+    c = db.connect(tmp_path / "s.db")
+    c.execute("INSERT INTO persons (id, label) VALUES ('anna', 'Anna')")
+    short = _store(c, "anna", "2026-02-10", "run", "run", *_session([(1200, 3.0)], power=False))
+    long = _store(c, "anna", "2026-02-11", "run", "run", *_session([(2400, 3.0)], power=False))
+    c.close()
+    client = TestClient(create_app(tmp_path / "s.db"))
+    eff = [b for b in client.get(f"/api/activities/{short}").json()["best_efforts"]
+           if b["kind"] == "longest"]  # fmt: skip
+    assert len(eff) == 1 and eff[0]["record_activity"] == long
+    assert eff[0]["record"] > eff[0]["value"] > 3000
+    recs = client.get(f"/api/activities/{short}/records?range=year").json()["records"]
+    assert any(r["kind"] == "longest" and r["activity_id"] == long for r in recs)

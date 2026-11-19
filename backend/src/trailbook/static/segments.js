@@ -61,10 +61,10 @@ function staticMap(polyline, { W = 560, H = 230, cls = "seg-map", tiles: tileCls
   const [sx, sy] = px[0], [ex, ey] = px[px.length - 1];
   return `<svg class="${cls}" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
     <g class="${tileCls}">${tiles}</g>
-    <path d="${d}" fill="none" stroke="#fff" stroke-width="7" stroke-linejoin="round" stroke-linecap="round" opacity=".8"/>
+    <path d="${d}" fill="none" style="stroke:var(--map-halo)" stroke-width="7" stroke-linejoin="round" stroke-linecap="round" opacity=".8"/>
     <path d="${d}" fill="none" stroke="var(--accent)" stroke-width="4" stroke-linejoin="round" stroke-linecap="round"/>
-    <circle cx="${sx - x0}" cy="${sy - y0}" r="5" fill="#3ecf8e" stroke="#fff" stroke-width="2"/>
-    <circle cx="${ex - x0}" cy="${ey - y0}" r="5" fill="#ff6b6b" stroke="#fff" stroke-width="2"/></svg>`;
+    <circle cx="${sx - x0}" cy="${sy - y0}" r="5" fill="#3ecf8e" style="stroke:var(--map-halo)" stroke-width="2"/>
+    <circle cx="${ex - x0}" cy="${ey - y0}" r="5" fill="#ff6b6b" style="stroke:var(--map-halo)" stroke-width="2"/></svg>`;
 }
 
 // ---- list ---------------------------------------------------------------------------------
@@ -592,7 +592,7 @@ async function segmentSlicer(id, params = {}) {
     map.addSource("slice", { type: "geojson", data: lineFeature(coords.slice(lo, hi + 1)) });
     map.addLayer({ id: "slice", type: "line", source: "slice", layout: { "line-join": "round", "line-cap": "round" }, paint: { "line-color": cssAccent(), "line-width": 5 } });
     map.addSource("ends", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
-    map.addLayer({ id: "ends", type: "circle", source: "ends", paint: { "circle-radius": 6, "circle-color": ["get", "c"], "circle-stroke-width": 2, "circle-stroke-color": "#fff" } });
+    map.addLayer({ id: "ends", type: "circle", source: "ends", paint: { "circle-radius": 6, "circle-color": ["get", "c"], "circle-stroke-width": 2, "circle-stroke-color": mapHalo() } });
     update();
     map.on("click", (ev) => {
       let best = 0, bd = Infinity;

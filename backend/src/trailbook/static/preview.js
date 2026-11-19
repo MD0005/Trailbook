@@ -109,6 +109,8 @@ const dur = (s) => {
   const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
   return h ? `${h}h ${String(m).padStart(2, "0")}min` : `${m}min ${String(sec).padStart(2, "0")}s`;
 };
+// Hours and minutes, no seconds (rounded to the minute): "37min", "10h 35min".
+const durMin = (s) => (s == null ? "–" : dur(Math.round(s / 60) * 60).replace(/ 00s$/, ""));
 const hours = (s) => (s == null ? "–" : `${num(s / 3600, s < 36000 ? 1 : 0)} h`);
 const pace = (mps) => {
   if (!mps) return "–";
@@ -615,6 +617,9 @@ const VIEWS = [["large", "Tiles", ICON.tilesLarge], ["small", "Charts", ICON.til
 // heart rate blocks (Intervals: the sections; Easy, Long, Tempo, Race, games: stretches of one
 // zone), Hills - the altitude profile in green with the climbs darker, Commute - the route alone
 // in the heart rate zone colours; without the data - speed over time.
+// A climb on a Hills tile: a rise of at least min_m metres and this share of the profile's
+// height (Manual › Activity charts reads the same values).
+const TILE_CLIMB = { min_m: 5, share: 0.12 };
 function tileChart(tc) {
   const W = 400, H = 160, svg = (body) => `<svg class="tile-chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">${body}</svg>`;
   if (!tc) return `<span class="hint">no chart data</span>`;
@@ -669,7 +674,7 @@ function tileChart(tc) {
   const area = (a, b) => `${path(a, b)}L${X(b).toFixed(1)},${H}L${X(a).toFixed(1)},${H}Z`;
   if (tc.alt) {
     // climbs: rises between the turning points of the profile (as Hills on the altitude chart)
-    const piv = chartPivots(vals, Math.max(5, (hi - lo) * 0.12)), ups = [];
+    const piv = chartPivots(vals, Math.max(TILE_CLIMB.min_m, (hi - lo) * TILE_CLIMB.share)), ups = [];
     for (let k = 1; k < piv.length; k++) if (vals[piv[k]] > vals[piv[k - 1]]) ups.push([piv[k - 1], piv[k]]);
     return svg(`<path d="${area(0, vals.length - 1)}" fill="#93cf99" opacity=".45"/>
       ${ups.map(([a, b]) => `<path d="${area(a, b)}" fill="#4f9d56" opacity=".55"/>`).join("")}
@@ -694,7 +699,7 @@ function activitySummary(t) {
 async function renderActivities(params) {
   // Filters and sort stay for this tab: "#/activities" with no parameters (the back button, the
   // tab link from an activity) brings them back; leaving the tab or reloading forgets them.
-  const KEEP = ["from", "to", "types", "workouts", "person", "sort", "dir"];
+  const KEEP = ["from", "to", "last", "years", "types", "workouts", "person", "sort", "dir"];
   if (!Object.keys(params).length && TAB.filter && Object.keys(TAB.filter).length) {
     location.replace("#/activities?" + new URLSearchParams(TAB.filter));
     return;
@@ -761,13 +766,11 @@ async function renderActivities(params) {
     <a class="tile ${mode}" href="#/activity/${a.id}">
       <div class="tile-map">${a.segment_count ? segBadge(a, "tile-seg") : ""}${a.polyline ? staticMap(a.polyline, { W: 400, H: 160, cls: "tile-track", tiles: "faded-tiles" }) : `<span class="hint">${a.indoor ? "indoor" : "no route"}</span>`}</div>
       ${head(a, false)}
-      <div class="tile-stats">
-        ${a.distance_m ? `<span><span class="hint">Distance</span>${km(a.distance_m)}</span>` : ""}
-        <span><span class="hint">Time</span>${dur(a.moving_s)}</span>
-        ${a.distance_m ? `<span><span class="hint">Pace</span>${pace(a.avg_speed)}</span>` : ""}
-        <span><span class="hint">Avg HR</span>${bpm(a.avg_hr)}</span>
-        <span><span class="hint">Ascent</span>${meters(a.ascent_m)}</span>
-      </div>
+      <div class="tile-stats">${[ // only the values the activity has (a treadmill run: no ascent)
+        a.distance_m && ["Distance", km(a.distance_m)], a.moving_s && ["Time", dur(a.moving_s)],
+        a.distance_m && a.avg_speed && ["Pace", pace(a.avg_speed)], a.avg_hr && ["Avg HR", bpm(a.avg_hr)],
+        a.ascent_m && ["Ascent", meters(a.ascent_m)],
+      ].filter(Boolean).map(([l, v]) => `<span><span class="hint">${l}</span>${v}</span>`).join("")}</div>
     </a>`);
 
   const filterCols = columns.filter((c) => c.filter);
@@ -1142,31 +1145,40 @@ async function renderActivity(id) {
     const label = known ? known[1] : c.trainingEffectLabel ? String(c.trainingEffectLabel).replace(/_/g, " ").toLowerCase() : "";
     // Garmin's wording of the 0–5 scale, the same for aerobic and anaerobic.
     const teWord = (v) => TE_SCALE.find(([lo]) => v >= lo)?.[1] ?? "no benefit";
-    const teLine = (name, v) => `<span>${name} <b>${v != null ? num(v, 1) : "–"}</b>${v ? ` <span class="effect-word">${teWord(v)}</span>` : ""}</span>`;
     // tooltip (HTML, like the weather help): the primary benefit in bold, then each score with
     // its name in bold, a blank line between them, the source as a light note
     const effectTip = [known ? `<b>${esc(known[1][0].toUpperCase() + known[1].slice(1))}</b> ${esc(known[2])}` : "<b>Training effect</b>",
       `<b>Aerobic</b> ${te != null ? num(te, 1) : "–"} · ${teWord(te ?? 0)}`,
       `<b>Anaerobic</b> ${an != null ? num(an, 1) : "–"} · ${teWord(an ?? 0)}`,
       `<span class="tip-note">Garmin's training effect, 0–5 scale (Manual › Training effect).</span>`].join("\n\n");
+    // Small "label value" lines (time, calories, effect scores, load): the label small, the value bold.
+    const kv = (label, value, tip = "") => (value == null || value === "" ? "" : `<span${tip ? ` data-tip="${tip}"` : ""}><small>${label}</small> <b>${value}</b></span>`);
     // Time: moving time first (what pace and speed are based on), the elapsed time under it.
-    const paused = a.elapsed_s && a.moving_s ? a.elapsed_s - a.moving_s : 0;
-    const timeCard = stat("Time", a.moving_s || a.elapsed_s, `<span class="time-lines"><span data-tip="Moving time: only while moving - pauses and standing still left out">${dur(a.moving_s || a.elapsed_s)}</span>
-        ${a.elapsed_s && paused >= 60 ? `<small data-tip="Elapsed time: from start to finish, pauses and stops included">${dur(a.elapsed_s)} elapsed</small>` : ""}</span>`, "moving_time");
-    // Calories: active (burned by the activity) in front, the total small under it - like Time
-    const calories = stat("Calories", a.calories, active != null ? `<span class="time-lines"><span data-tip="Active calories: burned by the activity, without the resting ones">${kcal(active)}</span>
-        <small data-tip="Total calories: active plus resting">${num(a.calories)} total</small></span>` : kcal(a.calories), "calories");
+    const timeCard = stat("Time", a.moving_s || a.elapsed_s, `<span class="kv-lines">${a.moving_s ? kv("moving", durMin(a.moving_s), "Moving time: only while moving - pauses and standing still left out") : ""}
+        ${a.elapsed_s ? kv("elapsed", durMin(a.elapsed_s), "Elapsed time: from start to finish, pauses and stops included") : ""}</span>`, "moving_time");
+    // Calories: active and total, one small line each
+    const calories = stat("Calories", a.calories, `<span class="kv-lines">${active != null ? kv("active", kcal(active), "Active calories: burned by the activity, without the resting ones") : ""}
+        ${kv("total", kcal(a.calories), "Total calories: active plus resting")}</span>`, "calories");
     const colA = [stat("Distance", a.distance_m, km(a.distance_m), "distance_total"), timeCard, calories];
     const kind = workoutOf(a);
-    // Effect: Garmin's primary benefit (from Garmin Connect) and the two scores in one short line
+    // Effect: Garmin's primary benefit (from Garmin Connect), then both scores, always visible
     const effect = te != null || an != null ? stat("Effect", "x", `<span class="effect-lines" data-tip-html="${esc(effectTip)}">
         <b>${label ? esc(label[0].toUpperCase() + label.slice(1)) : teWord(Math.max(te ?? 0, an ?? 0))}</b>
-        ${bb == null ? `<span class="effect-full">${teLine("Aerobic", te)}${teLine("Anaerobic", an)}</span>` : ""}</span>`, "aerobic_effect") : "";
-    // (without a Body Battery card the Effect card is taller: the two scores fit under the benefit)
+        <span class="kv-lines">${kv("aerobic", te != null ? num(te, 1) : "–")}${kv("anaerobic", an != null ? num(an, 1) : "–")}</span></span>`, "aerobic_effect") : "";
+    // Load: Garmin's training load of the activity, our fatigue (ATL) after the day and how much
+    // the day added to it, and the Body Battery change
+    const sign = (v) => `${v > 0 ? "+" : ""}${num(v)}`;
+    const gl = c.activityTrainingLoad, fat = a.fatigue;
+    const loadLines = [
+      kv("Garmin", gl != null ? num(gl) : null, "Training load of the activity (Garmin)"),
+      fat ? kv("Fatigue", `${num(fat.atl)}${fat.change ? ` <small>${sign(fat.change)}</small>` : ""}`,
+        `Fatigue (ATL) after this day, from this app's load${a.load != null ? ` (this activity ${num(a.load)})` : ""}; 7-day average (Manual › Fitness)`) : "",
+      kv("Body Battery", bb != null ? sign(bb) : null, "Change of Body Battery during the activity (Garmin)"),
+    ].join("");
     const colB = [
       kind ? stat("Training type", kind, `<span data-tip="${a.workout_override ? "Chosen in Edit" : "Detected from the activity; Edit changes it"} (Help › Training types)">${esc(workoutLabel(kind))}</span>`, "interval_time") : "",
       effect,
-      bb != null ? stat("Body Battery", "x", `<span data-tip="Change of Body Battery during the activity (Garmin)">${bb > 0 ? "+" : ""}${num(bb)}</span>`, "battery") : "",
+      loadLines ? stat("Load", "x", `<span class="kv-lines">${loadLines}</span>`, "training_load") : "",
       on.has("speed") ? "" : stat("Average pace", a.distance_m && a.avg_speed, pace(a.avg_speed), "avg_pace"),
       on.has("hr") ? "" : stat("Average heart rate", a.avg_hr, bpm(a.avg_hr), "avg_heart_rate") + stat("Maximum heart rate", a.max_hr, bpm(a.max_hr), "max_heart_rate"),
       on.has("power") ? "" : stat("Average power", a.avg_power, watts(a.avg_power), "avg_power") + stat("Normalized power", a.np_power, watts(a.np_power), "normalized_power"),
@@ -1241,7 +1253,7 @@ async function renderActivity(id) {
     ${laps.options.length ? `<div class="card"><div class="card-head"><h3>Laps</h3><span class="spacer"></span>
         <div class="badges">${badgeHtml("laps-n", "Group", lapsLabel(lapsN), { panel: `<div class="opt-panel">${pickList("laps-n", laps.options.map((n) => [n, lapsLabel(n)]), lapsN)}</div>`, right: true })}</div></div>
       <div data-laps>${lapsTable(a, laps, lapsN)}</div></div>` : ""}
-    <div class="card"><h3>Source files</h3>${a.device ? `<div class="hint">Device: ${esc(a.device)}</div>` : ""}
+    <div class="card"><h3>Source files</h3>
       ${a.files.map((f) => `<div>${esc(f.rel_path)}${f.zip_member ? " › " + esc(f.zip_member) : ""} ${state(f.status)}${f.imported_at ? ` <span class="hint">imported ${browserTime(f.imported_at)}</span>` : ""}</div>`).join("") || hint("None")}</div>`;
   bindBadges(view);
   if (a.segments?.length) { fitEffortCols(view); fillWeather(view); } // weather of the efforts in the segment cards
@@ -1666,35 +1678,41 @@ function bindSlides(root) {
 const LAUREL_SVG = `<svg class="laurel" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="#c99a2e" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21c-4.5-1-7.5-5-7.5-10.5 0-2 .4-3.8 1-5.5"/><path d="M12 21c4.5-1 7.5-5 7.5-10.5 0-2-.4-3.8-1-5.5"/><path d="M5.2 8.5c-1.6-.4-2.6-1.6-2.8-3 1.5-.2 2.7.6 3.2 1.9M4.6 12.4c-1.6.1-2.9-.8-3.4-2.2 1.4-.5 2.8 0 3.6 1.2M5.6 16.1c-1.5.5-3 0-3.8-1.3 1.3-.8 2.8-.6 3.8.4M8 19c-1.3.9-2.9.8-3.9-.2 1-1.1 2.6-1.3 3.9-.6"/><path d="M18.8 8.5c1.6-.4 2.6-1.6 2.8-3-1.5-.2-2.7.6-3.2 1.9M19.4 12.4c1.6.1 2.9-.8 3.4-2.2-1.4-.5-2.8 0-3.6 1.2M18.4 16.1c1.5.5 3 0 3.8-1.3-1.3-.8-2.8-.6-3.8.4M16 19c1.3.9 2.9.8 3.9-.2-1-1.1-2.6-1.3-3.9-.6"/></svg>`;
 const EFFORT_NAMES = { 400: "400 m", 1000: "1 km", 1609.344: "1 mile", 5000: "5 km", 10000: "10 km", 20000: "20 km", 30000: "30 km",
   21097.5: "Half marathon", 40000: "40 km", 42195: "Marathon", 50000: "50 km", 100000: "100 km" };
-const COMPARE_SHORT = { all: ["ATH", "All-time best"], year: ["Year", "Best this year"], "365d": ["12 mo", "Best in the last 12 months"],
+const COMPARE_SHORT = { all: ["ATH", "All-time best"], year: ["YTD", "Best this year (from 1 January)"], "365d": ["12 mo", "Best in the last 12 months"],
   "90d": ["3 mo", "Best in the last 3 months"], "30d": ["30 d", "Best in the last 30 days"] };
 // Tooltip of a record laurel: by how much the previous best ({value, date, days}) is beaten and
 // how long it stood. Times in seconds (lower is better), or watts with `isPower`.
+// isPower: higher is better, in W; "km": higher is better, a distance (the longest)
 function recordTip(tip, value, p, isPower) {
   if (!p) return `${tip}: this activity, the first result`;
   const d = p.value - value;
-  const gain = isPower ? `${watts(-d)} more` : `${d < 60 ? `${num(d, d < 10 ? 1 : 0)} s` : clock(d)} faster`;
-  return `${tip}: this activity. ${gain} than ${isPower ? watts(p.value) : clock(p.value)} from ${p.date} (${num(p.days)} ${p.days === 1 ? "day" : "days"} earlier)`;
+  const fmt = (v) => (isPower === "km" ? km(v) : isPower ? watts(v) : clock(v));
+  const gain = isPower === "km" ? `${km(-d)} farther` : isPower ? `${watts(-d)} more` : `${d < 60 ? `${num(d, d < 10 ? 1 : 0)} s` : clock(d)} faster`;
+  return `${tip}: this activity. ${gain} than ${fmt(p.value)} from ${p.date} (${num(p.days)} ${p.days === 1 ? "day" : "days"} earlier)`;
 }
 function effortsCard(efforts, compareKey, category, segs = []) {
   const ride = category === "ride";
-  // Distances (fastest time); on rides also the best 20 min and 1 h power.
+  // Distances (fastest time), then the longest distance ("Max"); on rides also the best 20 min
+  // and 1 h power.
+  const order = (e) => (e.kind === "power" ? 2 : e.kind === "longest" ? 1 : 0);
   const list = efforts.map((e, k) => ({ ...e, k }))
-    .filter((e) => e.kind === "pace" || e.kind === "ride" || (ride && e.kind === "power" && (e.key === 1200 || e.key === 3600)))
-    .sort((p, q) => (p.kind === "power") - (q.kind === "power") || p.key - q.key);
+    .filter((e) => e.kind === "pace" || e.kind === "ride" || e.kind === "longest" || (ride && e.kind === "power" && (e.key === 1200 || e.key === 3600)))
+    .sort((p, q) => order(p) - order(q) || p.key - q.key);
   if (!list.length && !segs.length) return "";
   const [short, long] = COMPARE_SHORT[compareKey] || COMPARE_SHORT.all;
-  const power = (e) => e.kind === "power";
+  const longest = (e) => e.kind === "longest";
+  const power = (e) => e.kind === "power" || longest(e); // one wide value, higher is better
   const better = (e, v, than) => than != null && (power(e) ? v >= than - 0.05 : v <= than + 0.05);
-  const val = (e, v) => (power(e) ? watts(v) : clock(v));
+  const val = (e, v) => (longest(e) ? km(v) : power(e) ? watts(v) : clock(v));
   const speed = (e, t) => (power(e) ? "" : ride ? `${num((e.key / t) * 3.6, 1)} km/h` : `${clock(t / (e.key / 1000))} /km`);
-  const name = (e) => (power(e) ? (e.key === 1200 ? "Power20" : "Power1h") : EFFORT_NAMES[e.key] || km(e.key));
+  const name = (e) => (longest(e) ? `<span data-tip="Longest distance in one activity">Max</span>`
+    : power(e) ? (e.key === 1200 ? "Power20" : "Power1h") : EFFORT_NAMES[e.key] || km(e.key));
   // a past best: time and speed, or a laurel when this activity is that best
   // a past best links to its activity; the tooltip says when it was set
   const recLink = (txt, date, id, tip, cls = "") => (id ? `<a class="effort-rec plain-link ${cls}" href="#/activity/${id}" data-tip="${tip}${date ? `: ${date}` : ""}">${txt}</a>`
     : `<span class="effort-rec ${cls}" data-tip="${tip}${date ? `: ${date}` : ""}">${txt}</span>`);
   // a new record: how long the previous one stood and by how much it is beaten
-  const pbTip = (e, tip, p) => recordTip(tip, e.value, p, power(e));
+  const pbTip = (e, tip, p) => recordTip(tip, e.value, p, longest(e) ? "km" : power(e));
   const cell = (e, rec, tip, date = "", id = null, prev = null) => (better(e, e.value, rec) ? `<span class="effort-rec effort-pb span2" data-tip="${pbTip(e, tip, prev)}">${LAUREL_SVG}</span>`
     : rec != null ? (power(e) ? recLink(val(e, rec), date, id, tip, "span2") : `${recLink(val(e, rec), date, id, tip)}<span class="effort-speed">${speed(e, rec)}</span>`)
     : `<span class="effort-rec${power(e) ? " span2" : ""}">–</span>${power(e) ? "" : "<span></span>"}`);
@@ -1707,7 +1725,7 @@ function effortsCard(efforts, compareKey, category, segs = []) {
   const segRows = segs.map((s, k) => `<div class="effort effort-seg" data-seg-effort="${k}"><span class="effort-name" title="Segment: ${esc(s.segment.name || "Segment")}">${esc(s.segment.name || "Segment")}</span>
       <b>${clock(s.effort.elapsed_s)}</b><span class="effort-speed">${segSpeed(s, s.effort.elapsed_s)}</span>${segCell(s, s.year_best, "Best this year", s.year_best_effort, s.year_prev)}${segCell(s, s.all_best, "All-time best", s.all_best_effort, s.all_prev)}</div>`).join("");
   return `<div class="card act-tile act-efforts"><h3 class="tile-title">${LAUREL_SVG}<span>Best efforts</span></h3>
-    <div class="efforts"><div class="effort effort-head"><span></span><span class="eh-now" data-tip="This activity">Activity</span><span class="eh-year" data-tip="Best this year">Year</span><span class="eh-rec" data-tip="${long}">${short}</span></div>
+    <div class="efforts"><div class="effort effort-head"><span></span><span class="eh-now" data-tip="This activity">Activity</span><span class="eh-year" data-tip="Best this year: from 1 January to today">YTD</span><span class="eh-rec" data-tip="${long}">${short}</span></div>
     ${list.filter((e) => !power(e)).map((e) => row(e)).join("")}${segRows}${list.filter(power).map((e) => row(e)).join("")}</div></div>`;
   function row(e) {
     return `<div class="effort${better(e, e.value, e.record) ? " pb" : ""}" data-effort="${e.k}"><span class="effort-name">${name(e)}</span>
@@ -1762,7 +1780,7 @@ function routeHighlight(route, range) {
   if (map.getSource("effort-hl")) { map.getSource("effort-hl").setData(data); return; }
   map.addSource("effort-hl", { type: "geojson", data });
   map.addLayer({ id: "effort-hl-casing", type: "line", source: "effort-hl", layout: { "line-join": "round", "line-cap": "round" },
-                 paint: { "line-color": "#fff", "line-width": 9, "line-offset": ROUTE_OFFSET_PX } }, "ends");
+                 paint: { "line-color": mapHalo(), "line-width": 9, "line-offset": ROUTE_OFFSET_PX } }, "ends");
   map.addLayer({ id: "effort-hl", type: "line", source: "effort-hl", layout: { "line-join": "round", "line-cap": "round" },
                  paint: { "line-color": "#f59e0b", "line-width": 5.5, "line-offset": ROUTE_OFFSET_PX } }, "ends");
 }
@@ -1779,7 +1797,7 @@ function bindRouteHover(route) {
   const map = activeMap;
   map.addSource("hover-pt", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
   map.addLayer({ id: "hover-pt", type: "circle", source: "hover-pt",
-                 paint: { "circle-radius": 6, "circle-color": cssVar("--fg") || "#1b1e25", "circle-stroke-width": 2.5, "circle-stroke-color": "#fff" } });
+                 paint: { "circle-radius": 6, "circle-color": cssVar("--fg") || "#1b1e25", "circle-stroke-width": 2.5, "circle-stroke-color": mapHalo() } });
   const pts = routePoints(route.st, null);
   map.on("mousemove", (e) => {
     if (!route.charts || !pts.length) return;
@@ -1822,8 +1840,13 @@ function climbCategory(gain, lenM, foot) {
 }
 // Intervals on the map: work bouts and recoveries (warm-up and cool-down are recoveries too).
 const INTERVAL_MAP_COLOR = { work: "#f2552c", rest: "#9aa3b2" };
-// Surface on the map: one colour per kind (the base colours of the chart hatching).
-const SURFACE_MAP_COLOR = { paved: "#5b6472", gravel: "#d39a2f", dirt: "#8b5a2b", unknown: "#b8bec7" };
+// Surface on the map: one colour per kind (the base colours of the chart hatching). On the dark
+// map the same kinds lighter, so a grey paved road does not sink into the grey streets.
+const SURFACE_MAP_LIGHT = { paved: "#5b6472", gravel: "#d39a2f", dirt: "#8b5a2b", unknown: "#b8bec7" };
+const SURFACE_MAP_DARK = { paved: "#c9d0db", gravel: "#f0b041", dirt: "#d08850", unknown: "#7a8291" };
+const surfaceMapColor = (k) => (document.documentElement.dataset.theme === "dark" ? SURFACE_MAP_DARK : SURFACE_MAP_LIGHT)[k];
+// Outline of lines, dots and markers on maps: white on light maps, near black on dark ones.
+const mapHalo = () => cssVar("--map-halo") || "#fff";
 const routeModeIcon = (k) => (ROUTE_ICON[k] ? metricIcon(ROUTE_ICON[k], 16) : "");
 const routeModeLabel = (k) => (k === "plain" ? "None" : `<span class="badge-metric">${routeModeIcon(k)}${k === "surface" ? "Surface" : k === "intervals" ? "Intervals" : ROUTE_SCALES[k].label}</span>`);
 
@@ -1957,12 +1980,12 @@ function drawActivityRoute(route) {
     for (let i = 1; i < pts.length; i++) {
       const d = pts[i].d;
       while (r < runs.length - 1 && d > runs[r][1]) r++;
-      features.push({ type: "Feature", properties: { c: SURFACE_MAP_COLOR[runs[r]?.[2]] || SURFACE_MAP_COLOR.unknown },
+      features.push({ type: "Feature", properties: { c: surfaceMapColor(runs[r]?.[2]) || surfaceMapColor("unknown") },
                       geometry: { type: "LineString", coordinates: [pts[i - 1].p, pts[i].p] } });
     }
     const kinds = SURFACE_KINDS.filter((k) => route.surface.shares?.[k]);
     legend.innerHTML = `<span class="route-legend-title">Surface</span><div class="route-legend-kinds">${kinds.map((k) =>
-      `<span><i style="background:${SURFACE_MAP_COLOR[k]}"></i>${SURFACE_LABEL[k]}</span>`).join("")}</div>`;
+      `<span><i style="background:${surfaceMapColor(k)}"></i>${SURFACE_LABEL[k]}</span>`).join("")}</div>`;
   }
   else if (route.mode === "intervals" && route.sections && pts.length > 1) {
     // Sections between the chart lines: work where the section is faster (or harder) than
@@ -2080,10 +2103,10 @@ function defaultMapSettings() {
   return {
     layer: "heatmap",
     kpis: false,
-    map: { source: "osm", tone: "faded" },
+    map: { source: "osm", tone: "dusk" }, // until the person picks one: Dusk in both themes
     heatmap: { style: "density", color: "#e8590c", ramp: "fire", width: 2, intensity: 0.45, perPerson: true },
     tiles: { zoom: 14, style: "coverage", color: "#0f766e", ramp: "viridis", display: "grid",
-             square: true, cluster: true, routes: true },
+             square: true, cluster: true, routes: true, regions: [] },
   };
 }
 
@@ -2107,6 +2130,7 @@ const DARK_TONES = new Set(["soft-dark", "slate", "dusk", "dark"]);
 const TONE_PROPS = ["raster-saturation", "raster-brightness-min", "raster-brightness-max", "raster-contrast", "raster-hue-rotate"];
 const TONE_DEFAULTS = { "raster-saturation": 0, "raster-brightness-min": 0, "raster-brightness-max": 1, "raster-contrast": 0, "raster-hue-rotate": 0 };
 const toneOf = (key) => (BASE_TONES.find(([k]) => k === key) || BASE_TONES[0])[2];
+const routeTone = (tone) => (document.documentElement.dataset.theme === "dark" && !DARK_TONES.has(tone) ? "soft-dark" : tone);
 
 function baseStyle(mapSettings) {
   const src = (BASEMAPS || []).find((b) => b.key === mapSettings.source);
@@ -2138,10 +2162,25 @@ async function createMap(container, mapSettings, opts = {}) {
   disposeMap();
   // Start directly at the data (no jump from a world view = no flicker).
   const start = opts.bounds ? { bounds: opts.bounds, fitBoundsOptions: opts.fitBoundsOptions || { padding: 40, maxZoom: 15 } } : { center: [10, 50], zoom: 3 };
-  const zoomOffset = opts.zoomOffset || 0, focus = opts.focus, withReset = opts.reset;
-  delete opts.bounds; delete opts.fitBoundsOptions; delete opts.zoomOffset; delete opts.focus; delete opts.reset;
-  activeMap = new ml.Map({ container, style: baseStyle(mapSettings), attributionControl: false,
-                           fadeDuration: 0, ...start, ...opts });
+  const zoomOffset = opts.zoomOffset || 0, focus = opts.focus, withReset = opts.reset, keepTone = opts.keepTone;
+  delete opts.bounds; delete opts.fitBoundsOptions; delete opts.zoomOffset; delete opts.focus; delete opts.reset; delete opts.keepTone;
+  // Route maps (activity, segment, segment creator) follow the page theme: in dark a light base
+  // tone becomes Soft dark. The Map tab (keepTone) shows exactly the tone of its options.
+  const tone = () => (keepTone ? mapSettings.tone : routeTone(mapSettings.tone));
+  const map = activeMap = new ml.Map({ container, style: baseStyle({ ...mapSettings, tone: tone() }), attributionControl: false,
+                                       fadeDuration: 0, ...start, ...opts });
+  // Light / dark switched while the map is open: the base tone and the outlines follow.
+  const watch = new MutationObserver(() => {
+    if (activeMap !== map) { watch.disconnect(); return; }
+    if (map.getLayer("base")) {
+      const paint = toneOf(tone());
+      TONE_PROPS.forEach((p) => map.setPaintProperty("base", p, paint[p] ?? TONE_DEFAULTS[p]));
+    }
+    for (const [id, prop] of [["ends", "circle-stroke-color"], ["hover-pt", "circle-stroke-color"], ["effort-hl-casing", "line-color"]]) {
+      if (map.getLayer(id)) map.setPaintProperty(id, prop, mapHalo());
+    }
+  });
+  watch.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
   if (zoomOffset) {
     // Zoom out from the data, but never further than the CONTINENT view on this screen.
     // When even the data does not fit at that level, centre on `focus`.
@@ -2483,7 +2522,7 @@ async function renderHeatmap(params) {
   });
 
   const bounds = boundsOf(tracks.map((t) => t.coords));
-  const map = await createMap("map", s.map, bounds ? { bounds, fitBoundsOptions: { padding: { top: 150, left: 40, right: 40, bottom: 40 }, maxZoom: 15 }, zoomOffset: -4, focus: busiestArea(tracks) } : {});
+  const map = await createMap("map", s.map, { keepTone: true, ...(bounds ? { bounds, fitBoundsOptions: { padding: { top: 150, left: 40, right: 40, bottom: 40 }, maxZoom: 15 }, zoomOffset: -4, focus: busiestArea(tracks) } : {}) });
   heat.map = map;
   drawHeatLayers();
   map.on("click", "routes", (e) => {
@@ -2523,7 +2562,8 @@ function renderSettingsPanel() {
     + row("Display", pickList("tiles.display", [["grid", "Single tiles"], ["area", "One area"]], T.display))
     + row("Highlights", `<div class="checks">${checkCtl("tiles.square", T.square, "Max square", "Largest square made only of visited tiles")}
         ${checkCtl("tiles.cluster", T.cluster, "Cluster", "Largest connected group of tiles with visited tiles on all four sides")}
-        ${checkCtl("tiles.routes", T.routes, "Routes")}</div>`);
+        ${checkCtl("tiles.routes", T.routes, "Routes")}</div>`)
+    + regionPickerHtml(T.regions);
   heat.openAcc ??= "map";
   const el = view.querySelector("[data-settings]");
   el.innerHTML = accordion([
@@ -2533,6 +2573,9 @@ function renderSettingsPanel() {
   ], heat.openAcc);
   bindAccordion(el, (key) => { heat.openAcc = key; });
   bindSettingsPanel(el);
+  bindRegionPicker(el, () => heat.settings.tiles.regions || [], (ids) => {
+    heat.settings.tiles.regions = ids; saveMapSettings(heat.settings); renderHeatKpis();
+  });
 }
 
 // Apply one setting with the cheapest possible map update. Settings of the mode that is not
@@ -2575,7 +2618,7 @@ function bindSettingsPanel(el) {
     refresh(b.dataset.chip, "layers");
     if (b.dataset.chip === "heatmap.style") summary();
   });
-  el.querySelectorAll("input[type=checkbox]").forEach((c) => c.onchange = () => {
+  el.querySelectorAll("input[type=checkbox][name]").forEach((c) => c.onchange = () => {
     set(c.name, c.checked);
     refresh(c.name, c.name === "heatmap.perPerson" ? "paint" : "layers");
   });
@@ -2661,7 +2704,8 @@ function renderHeatKpis() {
     const { tiles, square, cluster } = heatTiles();
     items.push(["Tiles", num(tiles.size), TILE_SIZES.find(([z]) => z === heat.settings.tiles.zoom)?.[1] || ""],
       ["Max square", square.size ? `${square.size} × ${square.size}` : "–", ""],
-      ["Cluster", `${num(cluster.length)} tiles`, ""]);
+      ["Cluster", `${num(cluster.length)} tiles`, ""],
+      ...regionSummaryItems(heat.settings.tiles.regions, heat.settings.tiles.zoom, tiles, renderHeatKpis));
   } else {
     items.push(["Elevation gain", meters(sum("ascent_m")), ""]);
   }
@@ -2737,7 +2781,7 @@ async function showRouteMap(container, polyline, { offset = false } = {}) {
   map.addSource("ends", { type: "geojson", data: { type: "FeatureCollection", features: [
     { type: "Feature", properties: { c: "#3ecf8e" }, geometry: { type: "Point", coordinates: coords[0] } },
     { type: "Feature", properties: { c: "#ff6b6b" }, geometry: { type: "Point", coordinates: coords[coords.length - 1] } }] } });
-  map.addLayer({ id: "ends", type: "circle", source: "ends", paint: { "circle-radius": 5, "circle-color": ["get", "c"], "circle-stroke-width": 2, "circle-stroke-color": "#fff" } });
+  map.addLayer({ id: "ends", type: "circle", source: "ends", paint: { "circle-radius": 5, "circle-color": ["get", "c"], "circle-stroke-width": 2, "circle-stroke-color": mapHalo() } });
 }
 
 // ---- Coming-soon pages --------------------------------------------------------------
@@ -2788,6 +2832,7 @@ async function renderCompare(params) {
 
 const SETTINGS_TABS = [
   ["general", "General", svg(`<path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/>`)],
+  ["data", "Data", svg(`<ellipse cx="12" cy="5.5" rx="7.5" ry="2.5"/><path d="M4.5 5.5v13c0 1.4 3.4 2.5 7.5 2.5s7.5-1.1 7.5-2.5v-13"/><path d="M4.5 12c0 1.4 3.4 2.5 7.5 2.5s7.5-1.1 7.5-2.5"/>`)],
   ["people", "People", svg(`<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.8-3.6 3.4-5.5 6.5-5.5s5.7 1.9 6.5 5.5"/><path d="M16 4.5a3.5 3.5 0 0 1 0 7M18 14.8c2 .7 3.2 2.5 3.6 5.2"/>`)],
   ["import", "Imported", svg(`<path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 17v3h16v-3"/>`)],
   ["backup", "Backup", svg(`<path d="M4 7h16v13H4z"/><path d="M2 4h20v3H2z"/><path d="M10 11h4"/>`)],
@@ -2801,10 +2846,12 @@ async function renderSettings(tab, params) {
   if (tab === "people") await settingsPeople(el);
   else if (tab === "import") await settingsImport(el, params);
   else if (tab === "backup") await settingsBackup(el);
-  else await settingsGeneral(el);
+  else await settingsGeneral(el, tab);
 }
 
-async function settingsGeneral(el) {
+// General (appearance, road surface) and Data (sources: Garmin Connect, upload, folder, Strava)
+// share one function; `tab` picks the cards.
+async function settingsGeneral(el, tab = "general") {
   const [s, devices, garminState] = await Promise.all([api("settings"), api("devices"), api("garmin")]);
   PERSONS = await api("persons");
   const people = realPeople();
@@ -2925,7 +2972,18 @@ async function settingsGeneral(el) {
       </div>
     </div>` : ""}`;
 
-  el.innerHTML = `
+  el.innerHTML = tab === "data" ? `
+    <div class="card">
+      <h3>Data connection</h3>
+      <div class="source-grid">
+        ${choice("data_source", "garmin", source, "Garmin Connect", "Recommended — the most complete data.")}
+        ${choice("data_source", "upload", source, "Upload a ZIP", "One-time import of an export or FIT files.")}
+        ${choice("data_source", "folder", source, "Watch a folder", "FIT files saved to a folder, e.g. by Home Assistant.")}
+      </div>
+      <span data-source-msg></span>
+    </div>
+    ${source === "folder" ? folderCards : source === "upload" ? uploadCard : garminCard}
+    ${otherSourcesCard}` : `
     <div class="card appearance">
       <h3>Appearance <span class="title-note">(saved per browser)</span></h3>
       <div class="appearance-grid">
@@ -2941,24 +2999,16 @@ async function settingsGeneral(el) {
       </div>
     </div>
     <div class="card">
-      <h3>Data connection</h3>
-      <div class="source-grid">
-        ${choice("data_source", "garmin", source, "Garmin Connect", "Recommended — the most complete data.")}
-        ${choice("data_source", "upload", source, "Upload a ZIP", "One-time import of an export or FIT files.")}
-        ${choice("data_source", "folder", source, "Watch a folder", "FIT files saved to a folder, e.g. by Home Assistant.")}
-      </div>
-      <span data-source-msg></span>
-    </div>
-    ${source === "folder" ? folderCards : source === "upload" ? uploadCard : garminCard}
-    ${otherSourcesCard}
-    <div class="card">
       <h3>Road surface <span class="title-note">(from OpenStreetMap: the route's area is sent to a public map server)</span></h3>
       ${choice("surface_mode", "open", s.surface_mode, "When an activity is opened", "The first visit can take a few minutes.")}
       ${choice("surface_mode", "background", s.surface_mode, "All activities, slowly in the background", "Newest first, one at a time with a pause; opened activities are then ready.")}
       <div>${state(`${num(s.surface_progress.done)} of ${num(s.surface_progress.total)} activities with a route done`)} <span data-msg></span></div>
     </div>`;
 
-  const reload = () => settingsGeneral(el);
+  const reload = () => {
+    api("garmin/alerts").then((a) => { renderAlerts(a); setHeaderHeight(); }).catch(() => {});
+    return settingsGeneral(el, tab);
+  };
   el.querySelectorAll("[data-accent]").forEach((b) => b.onclick = () => {
     store.set("accent", b.dataset.accent);
     applyAccent();
@@ -3011,6 +3061,7 @@ async function settingsGeneral(el) {
   el.querySelectorAll("[data-gperson]").forEach((box) => {
     const pid = box.dataset.gperson, out = box.querySelector("[data-gmsg]");
     const show = (r) => {
+      api("garmin/alerts").then((a) => { renderAlerts(a); setHeaderHeight(); }).catch(() => {});
       out.innerHTML = r.ok
         ? state(`Connected${r.latest ? ` · newest activity: ${esc(r.latest.name || "")} (${esc((r.latest.start || "").slice(0, 10))})` : ""}`, "ok")
         : state(esc(r.error || "Failed"), "bad");
@@ -3049,7 +3100,7 @@ async function settingsGeneral(el) {
     } catch (e) { out.innerHTML = state(esc(e.message), "bad"); }
   };
   const sup = el.querySelector("[data-strava-upload]");
-  sup.onclick = async () => {
+  if (sup) sup.onclick = async () => {
     const out = el.querySelector("[data-strava-msg]");
     const pid = el.querySelector("[name=strava-person]").value;
     const files = [...el.querySelector("[name=strava-files]").files];
@@ -3257,7 +3308,7 @@ function scanCard(st) {
   const label = { folder: "Scan now", garmin: "Download now", upload: `Import ${num(queued)} queued file${queued === 1 ? "" : "s"}` }[src];
   return `<div class="card">
     <dl class="kv">
-      <dt>Current setting</dt><dd>${sourceText} <a href="#/settings/general">Change</a></dd>
+      <dt>Current setting</dt><dd>${sourceText} <a href="#/settings/data">Change</a></dd>
       ${auto ? `<dt>Automatic</dt><dd>${auto}</dd>` : ""}
       <dt>Last run</dt><dd>${last}</dd>
       ${st.missing_to_review ? `<dt>To review</dt><dd>${state(`${num(st.missing_to_review)} missing file(s)`, "warn")}</dd>` : ""}
@@ -3335,6 +3386,16 @@ async function settingsImport(el, params) {
 // ---- Router ------------------------------------------------------------------------
 
 // The page header frame sticks right below the top bar, whose height changes when it wraps.
+// Banner under the header: Garmin keys refused for 12 h or more (garmin.key_alerts).
+function renderAlerts(alerts) {
+  const el = document.getElementById("alerts");
+  const keys = alerts?.keys || [];
+  el.hidden = !keys.length;
+  el.innerHTML = keys.length
+    ? `Garmin stopped accepting the key of ${keys.map((k) => `<b>${esc(k.label)}</b>`).join(", ")}, new activities are not downloaded. <a href="#/settings/data">Paste a new key in Settings › Data</a>`
+    : "";
+}
+
 function setHeaderHeight() {
   document.documentElement.style.setProperty("--header-h", document.querySelector("header").offsetHeight + "px");
 }
@@ -3368,8 +3429,10 @@ async function route() {
     if (CURRENT === "all" && (section === "fitness" || section === "stats" || section === "wellbeing")) { location.hash = "#/compare"; return; }
     if (CURRENT !== "all" && section === "compare") { location.hash = "#/activities"; return; }
     const who = CURRENT && CURRENT !== "all" ? "?" + new URLSearchParams({ person: CURRENT }) : "";
-    [TYPE_COUNTS, TIME_RANGE] = await Promise.all([api("types/counts" + who), api("time-range" + who).catch(timeRangeFallback)]);
+    let alerts;
+    [TYPE_COUNTS, TIME_RANGE, alerts] = await Promise.all([api("types/counts" + who), api("time-range" + who).catch(timeRangeFallback), api("garmin/alerts").catch(() => null)]);
     renderHeader(section);
+    renderAlerts(alerts);
     setHeaderHeight();
     if (parts[0] === "activity") await renderActivity(parts[1]);
     else if (parts[0] === "segment") await renderSegment(parts[1], params);

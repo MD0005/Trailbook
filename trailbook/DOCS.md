@@ -8,7 +8,7 @@ older history. Opens from the sidebar (Ingress).
 
 - Database and imported files: the add-on's own storage (`/data`), included in HA backups of
   the add-on.
-- Watched folder: choose it in Settings › General. Allowed: `/share`, `/media` (read only) and
+- Watched folder: choose it in Settings › Data. Allowed: `/share`, `/media` (read only) and
   `/config` (this add-on's config folder), e.g. `/share/trailbook`.
 - Exports: `/share/trailbook-exports`.
 

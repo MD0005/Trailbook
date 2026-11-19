@@ -111,10 +111,15 @@ performance condition, stamina and potential stamina. Streams without data are n
 - **Stats on the map too**: hovering a stat that marks something on the chart shows it on the
   route map as well — a point (Max, Min) as the map's dot, stretches (Max 20 min / 1 h, Ascent,
   Descent, Steepest and Longest climb, In target, Above tempo) as the amber highlight, the same one
-  best efforts and surface kinds use. A stat that is only a value (Avg, NP, Steps…) marks nothing.
+  best efforts and surface kinds use. A stat that is only a value (Avg, NP, Steps…) marks nothing,
+  nor does a pill with the latest value (Fitness, Fatigue, Form): its point is the end of the
+  line, next to the pill.
+- **Dark theme:** series colours are mixed 22 % towards the card background and the fills
+  under the lines are weaker (× 0,65), on the activity charts and the duration curves alike.
 - **Road surface** (from OpenStreetMap, see SPEC): a hatched strip along the bottom of the
   altitude chart (or the first chart) — paved solid grey, gravel dotted, dirt diagonal
-  stripes; unknown is not drawn — and one pill per kind in the side column (share of the
+  stripes; unknown is not drawn; the y range reaches below the data by the strip's height, so
+  the lowest values sit just above it, the x axis stays — and one pill per kind in the side column (share of the
   distance, the ribbon in the kind's colour and hatching; hover highlights all its stretches on
   the charts and the map); the value flag names the surface at the cursor. A chart whose side
   column is taller than the plot grows to fit it.

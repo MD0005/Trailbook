@@ -29,6 +29,8 @@
   --m-cadence: #0d9488;
   --m-energy: #db2777;
   --m-oxygen: #4f46e5;
+  --m-stress: #ea7a0c;
+  --map-halo: #ffffff;     /* outline of route lines, dots and markers on maps */
   color-scheme: light;
 }
 :root[data-theme="dark"] {
@@ -44,6 +46,7 @@
   --state: #38bdf8;       /* status / state text */
   --accent: #38bdf8;
   --accent-fg: #0f1115;
+  --map-halo: #12151b;     /* on the dark maps a dark outline, not a white glow */
   --danger: #ff6b6b;
   --warn: #f0b429;
   --ok: #3ecf8e;
@@ -57,6 +60,7 @@
   --m-cadence: #2dd4bf;
   --m-energy: #f472b6;
   --m-oxygen: #818cf8;
+  --m-stress: #fdab5c;
   color-scheme: dark;
 }
 
@@ -90,6 +94,13 @@ nav { display: flex; gap: 4px; flex-wrap: wrap; }
 nav a { padding: 6px 10px; border-radius: 8px; color: var(--fg); }
 nav a:hover { background: var(--surface-2); text-decoration: none; }
 nav a.active { background: var(--surface-2); color: var(--accent); }
+
+/* Banner under the header (e.g. a refused Garmin key): one line, yellow, on every page */
+.alerts { flex-basis: 100%; margin: 2px -16px -10px; padding: 8px 16px; font-size: 13px;
+          background: color-mix(in srgb, var(--warn) 18%, var(--surface)); color: var(--fg);
+          border-top: 1px solid color-mix(in srgb, var(--warn) 40%, var(--surface)); }
+.alerts[hidden] { display: none; }
+.alerts a { font-weight: 600; }
 
 main { padding: 12px 16px 16px; max-width: 1600px; margin: 0 auto; }
 
@@ -222,13 +233,16 @@ header button.icon svg { width: 18px; height: 18px; }
         background: var(--surface-2); color: var(--fg); }
 .tile:hover { text-decoration: none; filter: brightness(1.1); }
 .tile-head b { display: block; }
-.tile-stats { display: flex; flex-wrap: wrap; gap: 6px 16px; font-variant-numeric: tabular-nums; }
-.tile-stats > span { display: flex; flex-direction: column; }
+.tile-stats { display: flex; flex-wrap: wrap; gap: 6px 16px; justify-content: space-between; font-variant-numeric: tabular-nums; } /* spread over the tile's width */
+.tile-stats > span { display: flex; flex-direction: column; font-size: 13px; } /* values 1 px under the body text */
+.tile-stats .hint { font-size: 11px; } /* labels 1 px smaller too */
 .tile-map { height: 160px; border-radius: 10px; background: var(--bg); display: flex;
             align-items: center; justify-content: center; overflow: hidden; }
 svg.tile-track { width: 100%; height: 100%; }
 /* Large tiles: static map in one style, Faded light, in both themes */
 .faded-tiles { filter: saturate(.2) contrast(.7) brightness(1.15); }
+/* dark theme: the tile maps dark too, like the segment maps */
+:root[data-theme="dark"] .faded-tiles { filter: grayscale(1) invert(1) brightness(.78) contrast(.82); }
 
 /* Settings tabs */
 .tabs { display: flex; gap: 4px; margin-bottom: 16px; padding: 4px; border-radius: 12px;
@@ -279,6 +293,14 @@ tr.dragging { opacity: 0.4; }
   url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23333' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5'/%3E%3C/svg%3E"); }
 .maplibregl-map .maplibregl-ctrl button.maplibregl-ctrl-shrink .maplibregl-ctrl-icon { background-image:
   url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23333' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5'/%3E%3C/svg%3E"); }
+/* Dark theme: map buttons on the card colour with light icons, the attribution and the scale
+   light on dark (MapLibre draws them for a light map) */
+:root[data-theme="dark"] .maplibregl-ctrl-group { background: var(--surface-2); box-shadow: 0 0 0 1px var(--line), 0 2px 8px rgba(0,0,0,.4); }
+:root[data-theme="dark"] .maplibregl-ctrl-group button + button { border-top-color: var(--line); }
+:root[data-theme="dark"] .maplibregl-ctrl-group button .maplibregl-ctrl-icon { filter: invert(.9); }
+:root[data-theme="dark"] .maplibregl-ctrl-group button:hover:not(:disabled) { background-color: rgba(255, 255, 255, .06); }
+:root[data-theme="dark"] .maplibregl-map .maplibregl-ctrl-bottom-right .maplibregl-ctrl-attrib { background: color-mix(in srgb, var(--surface) 70%, transparent); color: var(--muted); }
+:root[data-theme="dark"] .maplibregl-ctrl-bottom-left .maplibregl-ctrl-scale { border-color: var(--fg); color: var(--fg); }
 
 /* Full-screen heatmap: the map fills everything, the header bar floats above it */
 body.fullmap main { padding: 0; max-width: none; }
@@ -291,6 +313,13 @@ body.fullmap main { padding: 0; max-width: none; }
 #heat-kpis { position: relative; z-index: 1; }
 body.fullmap .page-head { margin: 0; position: relative; top: auto; }
 body.fullmap .page-head::after { display: none; } /* the map shows through, nothing to fade */
+/* dark theme: the dark map is as light as the frame's border, so frames over it get a lighter
+   border - they stand out like the header on the other tabs */
+:root[data-theme="dark"] body.fullmap .page-head::before,
+:root[data-theme="dark"] body.fullmap .stat-strip.floating { border-color: color-mix(in srgb, var(--fg) 22%, var(--surface)); }
+/* ...and a solid card background: through a see-through one the grey map lightens it, so the
+   badge outlines and the selected Heatmap / Explorer tiles button disappear */
+:root[data-theme="dark"] body.fullmap .page-head::before { background: var(--surface); }
 #heat-kpis { margin-top: 8px; width: fit-content; max-width: 100%; }
 #heat-kpis[hidden] { display: none; }
 .switch svg { width: 16px; height: 16px; }
@@ -603,24 +632,89 @@ tr.filters-row .tpick { min-width: 150px; }
 .tpick-empty { padding: 6px 8px; }
 
 /* ---- Calendar ---- */
-.cal-nav { display: inline-flex; align-items: center; gap: 6px; }
-.cal-nav .cal-label { min-width: 130px; text-align: center; font-size: 14px; }
-.cal-nav button.icon svg { width: 16px; height: 16px; }
 .cal-card { padding: 10px; }
-.cal-month { display: grid; grid-template-columns: repeat(7, minmax(92px, 1fr)) minmax(110px, 0.9fr); gap: 4px; min-width: 780px; }
-.cal-head { font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; padding: 2px 6px; }
-.cal-day { min-height: 92px; border: 1px solid var(--line); border-radius: 8px; padding: 4px 5px; display: flex; flex-direction: column; gap: 3px; background: var(--surface); }
-.cal-day.other { background: transparent; opacity: .55; }
+/* weeks: 7 days and the week's totals; the summary and the weekday names stay under the header */
+.cal-heads, .cal-row { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)) minmax(96px, 0.8fr); gap: 4px; }
+.cal-row + .cal-row { margin-top: 4px; }
+/* week number and year: plain text in the left margin, only where the screen leaves room for
+   it (as the back button of an activity); it moves with its week */
+.cal-row { position: relative; }
+.cal-wk { display: none; }
+@media (min-width: 1740px) {
+  .cal-wk { display: flex; flex-direction: column; align-items: flex-end; position: absolute; top: 4px;
+            right: calc(100% + 11px + 14px); font-size: 11px; line-height: 1.3; color: var(--muted);
+            font-variant-numeric: tabular-nums; transition: opacity .15s; }
+  .cal-wk b { font-size: 13px; color: var(--fg); }
+  .cal-wk.off { opacity: 0; }
+}
+.cal-sticky { position: sticky; z-index: 4; background: var(--bg); padding: 0 11px 2px; margin: -8px -1px 0; }
+.cal-sticky [data-csummary] .stat-strip { margin: 8px 0 6px; }
+.cal-mstat { justify-content: center; }
+.cal-mname { font-size: 16px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+.cal-head { font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; padding: 4px 6px 2px; }
+/* a day is at least as high as one with two activities: header line + two activity cards */
+.cal-day { --cal-act-h: 56px; min-height: calc(10px + 15px + 2 * (4px + var(--cal-act-h))); min-width: 0; border: 1px solid var(--line); border-radius: 8px;
+           padding: 4px 5px; display: flex; flex-direction: column; gap: 4px; background: var(--surface); container-type: inline-size; }
+.cal-day.odd { background: color-mix(in srgb, var(--surface-2) 45%, var(--surface)); } /* every other month a shade darker */
 .cal-day.today { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.cal-day.target { box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent); }
+/* the day's values and the forecast: one line each, shorter forms in a narrow day */
+.cal-dh, .cal-wx { display: flex; flex-wrap: nowrap; align-items: center; white-space: nowrap; overflow: hidden; min-height: 15px; }
+.cal-dh { gap: 7px; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.cal-dh .cal-short { display: none; }
 .cal-num { font-size: 11px; color: var(--muted); }
 .cal-day.today .cal-num { color: var(--accent); font-weight: 700; }
-.cal-act { display: flex; align-items: center; gap: 5px; padding: 2px 5px; border-radius: 6px; font-size: 12px; color: var(--fg);
-           background: color-mix(in srgb, var(--accent) 9%, var(--surface)); }
-.cal-act:hover { text-decoration: none; background: color-mix(in srgb, var(--accent) 18%, var(--surface)); }
-.cal-act-text { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.cal-m { display: inline-flex; align-items: center; gap: 3px; flex: none; }
+.cal-m svg, .cal-ic { width: 12px; height: 12px; flex: none; }
+.cal-wx.wx { gap: 5px; font-size: 11px; color: var(--muted); }
+.cal-wx .wx-sky { width: 15px; height: 15px; }
+.cal-wx > * { flex: none; }
+.cal-wx .wx-wind { padding-left: 5px; gap: 2px; display: inline-flex; align-items: center; }
+.cal-wx .wx-wind svg { width: 11px; height: 11px; }
+@container (max-width: 165px) {
+  .cal-dh .cal-full { display: none; }
+  .cal-dh .cal-short { display: inline; }
+  .cal-dh { gap: 5px; }
+  .cal-rain { display: none; }
+}
+@container (max-width: 125px) {
+  .cal-dh { gap: 4px; }
+  .cal-m { gap: 2px; }
+  .cal-m svg, .cal-ic { width: 10px; height: 10px; }
+  .cal-unit { display: none; }
+  .cal-wx.wx { gap: 3px; }
+  .cal-wx .wx-wind { padding-left: 3px; }
+}
+/* very narrow (small windows): the numbers take their icon's colour instead of the icon */
+@container (max-width: 100px) {
+  .cal-dh { gap: 4px; }
+  .cal-m svg, .cal-ic { display: none; }
+  .cal-m.cal-steps { color: var(--m-cadence); }
+  .cal-m.cal-floors { color: var(--m-elev); }
+  .cal-m.cal-stress { color: var(--m-stress); }
+  .cal-m.cal-daylight { color: var(--m-sleep); }
+  .cal-kind { display: none; }
+  .cal-wx .wx-sky { width: 13px; height: 13px; }
+}
+/* an activity: the header over the small chart of Activities › Charts */
+.cal-act { display: flex; flex-direction: column; border-radius: 6px; overflow: hidden; color: var(--fg);
+           border: 1px solid color-mix(in srgb, var(--accent) 16%, var(--line)); background: var(--surface); }
+.cal-act:hover { text-decoration: none; border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
+.cal-act-head { display: flex; align-items: center; gap: 5px; padding: 0 5px; height: 20px; flex: none; font-size: 12px; min-width: 0;
+                background: color-mix(in srgb, var(--accent) 9%, var(--surface)); }
+.cal-act:hover .cal-act-head { background: color-mix(in srgb, var(--accent) 18%, var(--surface)); }
+.cal-act-text { flex: none; white-space: nowrap; }
+.cal-kind { margin-left: auto; font-size: 10px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.cal-act-chart { display: flex; align-items: center; justify-content: center; height: 34px; flex: none; background: var(--surface); }
+.cal-act-chart .tile-sport svg { width: 22px; height: 22px; }
 .cal-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
 .cal-week { border-radius: 8px; padding: 6px 8px; display: flex; flex-direction: column; gap: 1px; font-size: 12px; background: var(--surface-2); }
 .cal-week b { font-size: 13px; }
+.cal-card .sentinel { padding: 10px 0; }
+@media (max-width: 760px) {
+  .cal-heads, .cal-row { grid-template-columns: repeat(7, minmax(0, 1fr)); }
+  .cal-week, .cal-heads .cal-head:last-child, .cal-act-chart, .cal-kind { display: none; }
+}
 .cal-year { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 14px; }
 .cal-mini { display: block; color: var(--fg); padding: 8px; border-radius: 8px; }
 .cal-mini:hover { background: var(--surface-2); text-decoration: none; }
@@ -753,7 +847,8 @@ a.head-date:hover { color: var(--accent); text-decoration: none; }
 .opt-row.na .opt-control { opacity: .35; filter: grayscale(1); cursor: default; }
 
 /* Shared filters: Time (range slider, clickable dates, year chips) and Type (checkbox list) */
-.tf { min-width: 340px; }
+.tf { min-width: 340px; width: max-content; max-width: min(560px, calc(100vw - 32px)); }
+.tf .tf-last { flex-wrap: nowrap; } /* All time and the five periods in one row */
 .tf-slider { position: relative; height: 28px; margin: 6px 8px 2px; }
 .tf-track { position: absolute; left: 0; right: 0; top: 12px; height: 4px; border-radius: 2px;
             background: var(--line); }
@@ -773,6 +868,11 @@ a.head-date:hover { color: var(--accent); text-decoration: none; }
 .tf-thumb:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 25%, transparent); }
 .tf-values { display: flex; justify-content: space-between; margin: 0 0 12px; font-size: 12px;
              color: var(--muted); font-variant-numeric: tabular-nums; }
+/* first row: All time and the periods up to today (one choice); under it the years (several) */
+.tf-last + .tf-years { margin-top: 8px; }
+.tf-years:empty { display: none; }
+/* years with a gap: the slider shows their span greyed (it cannot draw two ranges) */
+.tf-slider.tf-split .tf-fill { background: repeating-linear-gradient(90deg, var(--muted) 0 6px, transparent 6px 10px); }
 .tf-part { padding: 0 1px; border-radius: 3px; cursor: text; outline: none; }
 .tf-part:hover { color: var(--accent); }
 .tf-part.editing { color: var(--fg); background: color-mix(in srgb, var(--accent) 14%, transparent);
@@ -887,7 +987,7 @@ tr.th-row > td { padding: 4px 8px 16px; }
 .route-legend-title { font-weight: 600; color: var(--muted); }
 .route-ramp { height: 8px; border-radius: 4px; margin: 4px 0 2px; }
 .route-ramp-labels { display: flex; justify-content: space-between; font-variant-numeric: tabular-nums; }
-.km-marker { width: 20px; height: 20px; border-radius: 50%; background: var(--accent); color: #fff; border: 2px solid #fff;
+.km-marker { width: 20px; height: 20px; border-radius: 50%; background: var(--accent); color: var(--accent-fg); border: 2px solid var(--map-halo);
              display: flex; align-items: center; justify-content: center; font: 700 10px/1 system-ui, sans-serif;
              box-shadow: 0 1px 3px rgba(0, 0, 0, .35); }
 .badge-panel.right { left: auto; right: 0; }
@@ -1282,6 +1382,13 @@ a.effort-rec.plain-link:hover { text-decoration: underline; color: var(--accent)
 }
 
 /* Time card: moving time, the elapsed time small under it */
+/* "label value" lines in the small cards: small muted label, the value in the same small size */
+.kv-lines { display: flex; flex-direction: column; font-size: 12px; line-height: 1.2; font-weight: 400; white-space: nowrap; }
+.stat-card .kv-lines > span { line-height: 1.2; }
+.kv-lines small { font-size: 10.5px; color: var(--muted); }
+.stat-card .kv-lines b { display: inline; font-size: 12.5px; font-weight: 600; padding: 0; color: color-mix(in srgb, var(--fg) 85%, transparent); }
+.kv-lines b small { font-weight: 400; }
+.effect-lines .kv-lines { margin-top: 1px; }
 .time-lines { display: flex; flex-direction: column; line-height: 1.25; }
 .time-lines small { font-size: 11px; color: var(--muted); }
 
@@ -1355,7 +1462,7 @@ svg.tile-chart { width: 100%; height: 100%; display: block; }
 .tiles.small .tile-head .tile-title { flex: 1; }
 /* distance and time on the right of the name, two bold lines, no labels */
 .tile-dist { flex: none; display: flex; flex-direction: column; align-items: flex-end; line-height: 1.25;
-             font-size: 12.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+             font-size: 11.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 /* Small tile without route, heart rate or speed: the sport's icon, large and faint */
 .tile-sport { display: flex; opacity: .25; }
 .tile-sport svg { width: 64px; height: 64px; }
@@ -1388,3 +1495,33 @@ svg.tile-chart { width: 100%; height: 100%; display: block; }
 @keyframes loader-bob { to { transform: translateY(-1px); } }
 @media (prefers-reduced-motion: reduce) { .loader-wheel, .loader-road, .loader-ride { animation: none; } }
 .page-loader { display: flex; justify-content: center; padding: 48px 16px; }
+
+/* Map › Options › Explorer tiles › Regions coverage statistics: label + Choose, the chosen
+   ones as a plain list under it (× removes one); the list itself is a small window (dialog) with OK */
+.region-row { display: grid; grid-template-columns: 1fr auto; gap: 6px 10px; align-items: center; padding: 5px 0; }
+.region-chips { grid-column: 1 / -1; display: flex; flex-direction: column; }
+.region-chips:empty { display: none; }
+.region-chip { display: flex; align-items: center; gap: 6px; min-height: 26px; padding: 0 2px 0 8px; font-size: 12px;
+               border-radius: 6px; }
+.region-chip + .region-chip { border-top: 1px solid var(--line); border-radius: 0; }
+.region-chip > span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.region-chip .region-of { flex: none; color: var(--muted); font-size: 11px; }
+.region-chip button { width: 22px; height: 22px; padding: 0; border-radius: 50%; background: transparent;
+                      color: var(--muted); font-size: 15px; line-height: 1; flex: none; }
+.region-chip button:hover { color: var(--fg); background: var(--surface-2); filter: none; }
+.region-dialog { width: min(380px, calc(100vw - 32px)); padding: 14px; border: 1px solid var(--line); border-radius: 12px;
+                 background: var(--surface); color: var(--fg); box-shadow: 0 12px 40px rgba(0,0,0,.25); }
+.region-dialog::backdrop { background: rgba(0,0,0,.25); }
+.region-dialog-head { font-weight: 650; font-size: 14px; margin-bottom: 10px; }
+.region-dialog input[type=search] { width: 100%; }
+.region-dialog .region-list { height: min(360px, 55vh); overflow-y: auto; margin-top: 6px; padding-right: 2px; }
+.region-dialog-foot { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
+.region-dialog-foot .spacer { flex: 1; }
+.region-head { display: flex; align-items: center; min-height: 26px; }
+.region-head .check { flex: 1; margin-right: 0; }
+.region-hint { margin: -4px 0 8px; font-size: 12px; color: var(--muted); }
+.region-more { height: 22px; padding: 0 8px; border-radius: 999px; background: var(--surface-2); color: var(--accent);
+               font-size: 11px; font-weight: 600; flex: none; }
+.region-more:hover { background: color-mix(in srgb, var(--accent) 14%, var(--surface)); filter: none; }
+.region-sub { display: flex; flex-direction: column; margin: 2px 0 6px 6px; padding-left: 14px; border-left: 2px solid var(--line); }
+.region-sub .check { min-height: 24px; margin-right: 0; }

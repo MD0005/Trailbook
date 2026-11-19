@@ -11,6 +11,17 @@ const CHART_H = 240;
 const cssVar = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 const withAlpha = (hex, a) => `${hex}${Math.round(a * 255).toString(16).padStart(2, "0")}`;
 const dark = () => document.documentElement.dataset.theme === "dark";
+// Dark theme: series colours a little calmer - mixed 22 % towards the card background.
+const DARK_MUTE = 0.22;
+function muteDark(hex) {
+  if (!dark() || !/^#[0-9a-f]{6}$/i.test(hex || "")) return hex;
+  const bg = (cssVar("--surface") || "#171a21").replace("#", "");
+  const ch = (h, i) => parseInt(h.slice(i, i + 2), 16);
+  const b = hex.slice(1);
+  return "#" + [0, 2, 4].map((i) => Math.round(ch(b, i) + (ch(bg, i) - ch(b, i)) * DARK_MUTE).toString(16).padStart(2, "0")).join("");
+}
+// Fill strength under a line: weaker on the dark background.
+const fillAlpha = (a) => (dark() ? a * 0.65 : a);
 
 // A group of synced charts over the same x values.
 //   x: { distance: [km] | null, time: [s], percent: [%], date: [unix s] },
@@ -119,7 +130,7 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, onHov
     const muted = cssVar("--muted"), line = cssVar("--chart-grid") || cssVar("--line"), axis = cssVar("--chart-frame") || line;
     const grad = (u) => {
       const c = u.ctx.createLinearGradient(0, u.bbox.top, 0, u.bbox.top + u.bbox.height);
-      c.addColorStop(0, withAlpha(s.color, 0.45)); c.addColorStop(1, withAlpha(s.color, 0.04));
+      c.addColorStop(0, withAlpha(s.color, fillAlpha(0.45))); c.addColorStop(1, withAlpha(s.color, 0.04));
       return c;
     };
     // Zones: the line takes the colour of the zone it is in (hard stops at the zone limits).
@@ -141,11 +152,20 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, onHov
       const pad = (hi - lo) * 0.06 || 1;
       return [lo === s.yMin ? lo : lo - pad, hi === s.yMax ? hi : hi + pad];
     };
+    // The chart with the road surface strip: the y range reaches below the data by the strip's
+    // height, so the lowest values sit just above the strip instead of under it.
+    const liftForSurface = (u, [lo, hi]) => {
+      if (g.surface?.key !== s.key || s.invert) return [lo, hi];
+      const ph = u.bbox?.height ? u.bbox.height / (devicePixelRatio || 1) : (s.height || CHART_H) - 26;
+      const strip = SURFACE_STRIP_PX + 3; // the strip and a small gap
+      return ph > strip * 2 ? [lo - ((hi - lo) * strip) / (ph - strip), hi] : [lo, hi];
+    };
     const date = g.kind === "date";
     return {
       width, height: s.height || CHART_H, padding: [8, 2, 0, 0],
       scales: { x: { time: g.kind === "date", range: (u, mn, mx) => (g.range || [mn, mx]) },
-                y: { dir: s.invert ? -1 : 1, ...(s.yMin != null || s.yMax != null ? { range: yRange } : {}) } },
+                y: { dir: s.invert ? -1 : 1,
+                     range: (u, mn, mx) => liftForSurface(u, s.yMin != null || s.yMax != null ? yRange(u, mn, mx) : uPlot.rangeNum(mn ?? 0, mx ?? 1, 0.1, true)) } },
       legend: { show: false },
       cursor: {
         sync: { key: syncKey, scales: ["x", null] },
@@ -496,7 +516,7 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, onHov
   function drawSurface(u, s) {
     const sf = g.surface;
     if (!sf || s.key !== sf.key) return;
-    const ctx = u.ctx, { left, top, width, height } = u.bbox, dpr = devicePixelRatio || 1, h = 9 * dpr;
+    const ctx = u.ctx, { left, top, width, height } = u.bbox, dpr = devicePixelRatio || 1, h = SURFACE_STRIP_PX * dpr;
     ctx.save();
     ctx.beginPath(); ctx.rect(left, top, width, height); ctx.clip();
     for (const [a, b, kind] of sf.ranges) { // unknown is filtered out in surface()
@@ -704,6 +724,10 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, onHov
     g.yw = {};
     root.innerHTML = "";
     for (const s of series) {
+      // colours for the current theme, always from the original ones (theme switches rebuild)
+      s._color ??= s.color; s.color = muteDark(s._color);
+      (s.lines || []).forEach((l) => { l._color ??= l.color; l.color = muteDark(l._color); });
+      (s.zones || []).forEach((z) => { z._color ??= z.color; z.color = muteDark(z._color); });
       const el = block(s);
       root.appendChild(el);
       const holder = el.querySelector(".chart-plot");
@@ -745,7 +769,7 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, onHov
       el.querySelectorAll("[data-tag]").forEach((st) => {
         const t = s.tags[st.dataset.tag];
         st.onmouseenter = () => {
-          if (t.i == null) return;
+          if (t.i == null || t.mark === false) return; // a latest value: its point is the line's end, next to the pill
           const vals = t.values || s.values;
           g.mark = { i: t.i, u, s: { ...s, color: t.color, values: vals } }; st.classList.add("on"); u.redraw(false);
         };
@@ -838,7 +862,7 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, onHov
         el.onmouseleave = () => { el.classList.remove("on"); onKind(null); };
       });
       fitSide();
-      p.u.redraw(false);
+      p.u.setData(p.u.data); // y range again: room for the strip under the line (x keeps g.range)
     },
     // Show sample i on all charts (e.g. hovered on the map); null hides it.
     hover(i) {
@@ -872,6 +896,7 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, onHov
   function fade(fn) { root.classList.add("chart-fade"); setTimeout(() => { fn(); root.classList.remove("chart-fade"); onState(); }, 150); }
 }
 
+const SURFACE_STRIP_PX = 9; // height of the road surface strip at the bottom of a chart
 // Road surface kinds: the same hatching on the chart strip, the legend and the shares bar.
 const SURFACE_KINDS = ["paved", "gravel", "dirt", "unknown"];
 const SURFACE_LABEL = { paved: "Paved", gravel: "Gravel", dirt: "Dirt", unknown: "Unknown" };
@@ -917,6 +942,7 @@ const statTip = (label, s) => (STAT_WORDS[label] ? `${STAT_WORDS[label]} ${s.lab
 function curveChart(root, { points, color, unit, label, compareLabel, onHover = () => {} }) {
   const pts = points.filter((p) => p.value != null).sort((p, q) => p.key - q.key);
   if (pts.length < 2) return null;
+  color = muteDark(color); // dark theme: calmer colour and weaker fills, like the activity charts
   const dl = (s) => (s < 60 ? `${s}s` : s < 3600 ? `${s / 60}m` : `${num(s / 3600, s % 3600 ? 1 : 0)}h`);
   const full = (s) => (s < 60 ? `${s} s` : s < 3600 ? `${s / 60} min` : `${num(s / 3600, s % 3600 ? 1 : 0)} h`);
   root.innerHTML = `<div class="chart-frame curve-frame">
@@ -926,7 +952,7 @@ function curveChart(root, { points, color, unit, label, compareLabel, onHover = 
   const muted = cssVar("--muted"), line = cssVar("--line"), grey = muted || "#8a8f98";
   const grad = (c, a0) => (u) => {
     const gr = u.ctx.createLinearGradient(0, u.bbox.top, 0, u.bbox.top + u.bbox.height);
-    gr.addColorStop(0, withAlpha(c, a0)); gr.addColorStop(1, withAlpha(c, 0.03));
+    gr.addColorStop(0, withAlpha(c, fillAlpha(a0))); gr.addColorStop(1, withAlpha(c, 0.03));
     return gr;
   };
   const tip = Object.assign(document.createElement("div"), { className: "chart-tip", hidden: true });

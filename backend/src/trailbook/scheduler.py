@@ -12,12 +12,13 @@ import logging
 from contextlib import closing
 from datetime import UTC, datetime, timedelta
 
-from . import db, jobs
+from . import db, garmin, jobs
 
 log = logging.getLogger("trailbook.scheduler")
 
 DEFAULT_INTERVAL_MIN = 60
 INTERVAL_CHOICES_MIN = (0, 15, 30, 60, 180, 360, 720, 1440)
+NOTIFY_RETRY_MIN = 10  # next try when Home Assistant did not take a notification
 
 
 def interval_min(conn) -> int:
@@ -54,6 +55,7 @@ class Scheduler:
         self.job = job
         self._wake = asyncio.Event()
         self._task: asyncio.Task | None = None
+        self._notify_retry_at = datetime.min.replace(tzinfo=UTC)
 
     def start(self) -> None:
         self._task = asyncio.create_task(self._run(), name="trailbook-scheduler")
@@ -74,16 +76,28 @@ class Scheduler:
         while True:
             with closing(db.connect(self.db_path, apply_migrations=False)) as c:
                 due = next_scan_at(c)
-            if due is None:
+                notify_at = garmin.next_ha_notification_at(c)
+            if notify_at is not None and notify_at < self._notify_retry_at:
+                notify_at = self._notify_retry_at  # Home Assistant did not answer: wait a bit
+            # A Home Assistant notification for a refused Garmin key may be due before the
+            # next run (or with automatic runs off).
+            notify_first = notify_at is not None and (due is None or notify_at < due)
+            wake_at = notify_at if notify_first else due
+            if wake_at is None:
                 timeout = None  # disabled: sleep until settings change
             else:
-                timeout = max(0.0, (due - datetime.now(UTC)).total_seconds())
+                timeout = max(0.0, (wake_at - datetime.now(UTC)).total_seconds())
             try:
                 await asyncio.wait_for(self._wake.wait(), timeout)
                 self._wake.clear()
                 continue  # settings changed: recompute
             except TimeoutError:
                 pass
+            if notify_first:
+                self._notify_retry_at = datetime.now(UTC) + timedelta(minutes=NOTIFY_RETRY_MIN)
+                await asyncio.to_thread(self._notify)
+                await asyncio.sleep(1)
+                continue
             if self.job.running():
                 await asyncio.sleep(60)
                 continue
@@ -93,3 +107,7 @@ class Scheduler:
             while self.job.running():
                 await asyncio.sleep(5)
             await asyncio.sleep(1)
+
+    def _notify(self) -> None:
+        with closing(db.connect(self.db_path, apply_migrations=False)) as c:
+            garmin.update_ha_notifications(c)

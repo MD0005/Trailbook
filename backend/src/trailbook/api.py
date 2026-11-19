@@ -12,8 +12,9 @@ import os
 import re
 import sqlite3
 import zipfile
+from calendar import monthrange
 from contextlib import asynccontextmanager, closing
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 from starlette.applications import Starlette
@@ -105,12 +106,20 @@ FILE_TEXT_FILTERS = {
 
 # Best efforts ranked per (kind, key): rk = 1 is the record (lowest time for pace/ride, highest
 # value otherwise; the earliest wins a tie), with when it was set. {where} filters oa (activities).
-_RECORDS_SQL = """SELECT o.kind, o.key, o.value, oa.start_time_utc, oa.utc_offset_s,
+# Best efforts plus one computed row per run and ride: the longest distance (kind "longest",
+# key 0, value = the activity's distance in m; higher is better), so it ranks, has records per
+# period and a previous best like every other effort, without being stored.
+EFFORTS_SQL = """(SELECT activity_id, kind, key, value, start_s, end_s FROM best_efforts
+    UNION ALL
+    SELECT id, 'longest', 0, distance_m, 0, elapsed_s FROM activities
+    WHERE distance_m > 0 AND category IN ('run', 'ride'))"""
+
+_RECORDS_SQL = f"""SELECT o.kind, o.key, o.value, oa.start_time_utc, oa.utc_offset_s,
            oa.id AS activity_id,
            ROW_NUMBER() OVER (PARTITION BY o.kind, o.key
                ORDER BY CASE WHEN o.kind IN ('pace', 'ride') THEN o.value ELSE -o.value END,
                         oa.start_time_utc) AS rk
-    FROM best_efforts o JOIN activities oa ON oa.id = o.activity_id WHERE {where}"""
+    FROM {EFFORTS_SQL} o JOIN activities oa ON oa.id = o.activity_id WHERE {{where}}"""
 
 
 def _prev_bests(c: sqlite3.Connection, a, where: list[str], params: list) -> dict:
@@ -124,10 +133,37 @@ def _prev_bests(c: sqlite3.Connection, a, where: list[str], params: list) -> dic
     return {(r["kind"], r["key"]): r for r in rows}
 
 
+# Time filter `last`: a period ending today, kept relative (a saved link stays "the last 3
+# months"): months back from today, or "ytd" from 1 January.
+LAST_MONTHS = {"1m": 1, "3m": 3, "6m": 6, "1y": 12}
+
+
+def last_since(key: str | None, today: date | None = None) -> str | None:
+    """First local day of the `last` period (inclusive), None for no or an unknown key."""
+    today = today or date.today()
+    if key == "ytd":
+        return f"{today.year}-01-01"
+    n = LAST_MONTHS.get(key or "")
+    if not n:
+        return None
+    y, m = divmod(today.year * 12 + today.month - 1 - n, 12)
+    m += 1
+    return date(y, m, min(today.day, monthrange(y, m)[1])).isoformat()
+
+
+def years_of(q) -> list[str]:
+    """Time filter `years`: comma list of years (any, not only side by side)."""
+    raw = [v for v in (q.get("years") or "").split(",") if v]
+    if any(not re.fullmatch(r"\d{4}", v) for v in raw):
+        raise HTTPException(400, "years must be a comma list of years (YYYY)")
+    return raw
+
+
 def activity_filters(q, alias: str = "a", person: bool = True) -> tuple[list[str], list]:
     """The filters every tab shares (SPEC §10, Filters), as SQL conditions on `activities`:
-    person (comma list), from / to (local days, inclusive) and types (comma list of type
-    keys; `g:<group>` selects a whole group). `type` and `year` are older single-value forms."""
+    person (comma list), time - from / to (local days, inclusive), last (1m, 3m, 6m, ytd, 1y
+    up to today) and years (comma list, any years) - and types (comma list of type keys;
+    `g:<group>` selects a whole group). `type` and `year` are older single-value forms."""
     p = f"{alias}." if alias else ""
     where: list[str] = []
     params: list = []
@@ -146,6 +182,14 @@ def activity_filters(q, alias: str = "a", person: bool = True) -> tuple[list[str
     if q.get("year"):
         where.append(f"substr({day}, 1, 4) = ?")
         params.append(q["year"])
+    since = last_since(q.get("last"))
+    if since:
+        where.append(f"{day} >= ?")
+        params.append(since)
+    years = years_of(q)
+    if years:
+        where.append(f"substr({day}, 1, 4) IN ({','.join('?' for _ in years)})")
+        params += years
     raw = q.get("types") or q.get("type") or ""
     values = [v for v in raw.split(",") if v]
     if values:
@@ -348,6 +392,8 @@ def create_app(db_path: str | Path) -> Starlette:
                     "stale_days": analysis.STALE_DAYS,
                     "ftp_groups": list(analysis.FTP_GROUPS),
                 },
+                # the small charts of Activities › Charts (Manual › Activity charts)
+                "tile_chart_rules": tilechart.RULES,
             }
         )
 
@@ -432,7 +478,7 @@ def create_app(db_path: str | Path) -> Starlette:
             "next_scan_at": due.strftime("%Y-%m-%dT%H:%M:%SZ") if due else None,
             "allowed_roots": os.environ.get("TRAILBOOK_ALLOWED_ROOTS"),
             # road surface: "open" (when an activity is opened) or "background" (all, slowly)
-            "surface_mode": db.get_setting(c, "surface_mode") or "open",
+            "surface_mode": db.get_setting(c, "surface_mode") or "background",
             "surface_progress": surface.progress(c),
         }
 
@@ -684,7 +730,7 @@ def create_app(db_path: str | Path) -> Starlette:
                        SELECT b.kind, b.key, b.value, b.start_s, b.end_s, r.value AS record,
                               r.start_time_utc AS record_time, r.utc_offset_s AS record_offset_s,
                               r.activity_id AS record_activity
-                       FROM best_efforts b
+                       FROM {EFFORTS_SQL} b
                        LEFT JOIN r ON r.kind = b.kind AND r.key = b.key AND r.rk = 1
                        WHERE b.activity_id = ? ORDER BY b.kind, b.key""",
                     (a["person_id"], a["category"], aid),
@@ -713,6 +759,7 @@ def create_app(db_path: str | Path) -> Starlette:
                 (aid, aid),
             ).fetchone()
             a["connect"] = json.loads(g["summary"]) if g else None
+            a["fatigue"] = analysis.fatigue_on(c, row) if row["load"] is not None else None
             # Previous / next activity in time, within the activities page filters (from, to,
             # types, workouts; person in the All view): same person, everyone with
             # ?neighbours=all.
@@ -892,12 +939,12 @@ def create_app(db_path: str | Path) -> Starlette:
                     )
                 else:  # cleared: back to the Garmin Connect title, or no name (UI shows type)
                     c.execute(
-                        "UPDATE activities SET name = NULL, name_overridden = 0 WHERE id = ?",
+                        """UPDATE activities SET name = NULL, name_source = NULL,
+                                  name_overridden = 0
+                           WHERE id = ?""",
                         (aid,),
                     )
-                    files = c.execute("SELECT id FROM files WHERE activity_id = ?", (aid,))
-                    for f in files.fetchall():
-                        importer.apply_connect_name(c, f["id"])
+                    importer.apply_connect_title(c, aid)
             return JSONResponse(dict(_activity_or_404(c, aid)))
 
     async def activity_delete(request: Request):
@@ -1217,7 +1264,13 @@ def create_app(db_path: str | Path) -> Starlette:
                 )
             }
             th = _thresholds_state(c, pid)
-            since, until = request.query_params.get("from"), request.query_params.get("to")
+            qp = request.query_params
+            # the time filter: from / to, last (a period up to today) and years
+            since = max(filter(None, [qp.get("from"), last_since(qp.get("last"))]), default=None)
+            until = qp.get("to")
+            years = set(years_of(qp))
+            if years:  # the warnings look at the whole span of the chosen years
+                since, until = f"{min(years)}-01-01", f"{max(years)}-12-31"
             warnings = analysis.threshold_warnings(
                 c, pid, since or "", until or "", _accepted(c, pid)
             )
@@ -1249,17 +1302,47 @@ def create_app(db_path: str | Path) -> Starlette:
                 raise HTTPException(400, "from / to must be dates (YYYY-MM-DD)")
         day = analysis.LOCAL_DAY_SQL
         where, params = [f"{day} BETWEEN ? AND ?"], [start, end]
-        if q.get("person") and q["person"] != "all":
+        pid = q.get("person") if q.get("person") not in (None, "", "all") else None
+        if pid:
             where.append("person_id = ?")
-            params.append(q["person"])
+            params.append(pid)
         with closing(conn()) as c:
             rows = c.execute(
                 f"""SELECT id, person_id, start_time_utc, utc_offset_s, activity_type, category,
-                           name, distance_m, moving_s, ascent_m, load, {day} AS day
+                           name, distance_m, moving_s, ascent_m, load, workout,
+                           workout_override, indoor, {day} AS day
                     FROM activities WHERE {" AND ".join(where)} ORDER BY start_time_utc""",
                 params,
             ).fetchall()
-        return JSONResponse({"activities": [dict(r) for r in rows]})
+            items = [dict(r) for r in rows]
+            if q.get("chart") == "1":  # the small chart of each activity (tilechart.py)
+                for item in items:
+                    item["tile_chart"] = tilechart.tile_chart(c, item["id"])
+            # steps, floors, stress of each day (one person only: they do not add up)
+            days = analysis.daily_values(c, pid, start, end) if pid else {}
+        return JSONResponse({"activities": items, "days": days})
+
+    async def forecast(request: Request):
+        """Weather forecast and the latitude for the day length, at the start of the person's
+        latest activity with a route."""
+        q = request.query_params
+        pid = q.get("person") if q.get("person") not in (None, "", "all") else None
+        with closing(conn()) as c:
+            row = c.execute(
+                f"""SELECT start_lat, start_lon FROM activities
+                    WHERE start_lat IS NOT NULL AND start_lon IS NOT NULL
+                    {"AND person_id = ?" if pid else ""}
+                    ORDER BY start_time_utc DESC LIMIT 1""",
+                (pid,) if pid else (),
+            ).fetchone()
+        if row is None:
+            return JSONResponse({"lat": None, "days": []})
+        lat, lon = row["start_lat"], row["start_lon"]
+        try:
+            days = await run_in_threadpool(weather.forecast, lat, lon)
+        except OSError:
+            days = []
+        return JSONResponse({"lat": round(lat, 2), "days": days})
 
     async def stats_totals(request: Request):
         q = request.query_params
@@ -1757,6 +1840,8 @@ def create_app(db_path: str | Path) -> Starlette:
                     return garmin.test_account(c, pid)
                 except garmin.GarminError as exc:
                     return {"ok": False, "error": str(exc)}
+                finally:
+                    garmin.update_ha_notifications(c)
 
         result = await run_in_threadpool(run)
         with closing(conn()) as c:
@@ -1767,8 +1852,19 @@ def create_app(db_path: str | Path) -> Starlette:
         pid = request.path_params["id"]
         with closing(conn()) as c:
             c.execute("DELETE FROM garmin_accounts WHERE person_id = ?", (pid,))
+
+        def notify() -> None:
+            with closing(conn()) as c:
+                garmin.update_ha_notifications(c)
+
+        await run_in_threadpool(notify)
         sched.settings_changed()
         return JSONResponse({"deleted": True})
+
+    async def garmin_alerts(request: Request):
+        """Keys refused for a while: the banner on every page."""
+        with closing(conn()) as c:
+            return JSONResponse({"keys": garmin.key_alerts(c)})
 
     # ---- export / restore --------------------------------------------------------------
 
@@ -1984,9 +2080,11 @@ def create_app(db_path: str | Path) -> Starlette:
         Route("/api/thresholds/{id}/{valid_from}", thresholds_delete, methods=["DELETE"]),
         Route("/api/fitness", fitness),
         Route("/api/calendar", calendar),
+        Route("/api/forecast", forecast),
         Route("/api/stats/totals", stats_totals),
         Route("/api/stats/records", stats_records),
         Route("/api/garmin", garmin_accounts),
+        Route("/api/garmin/alerts", garmin_alerts),
         Route("/api/garmin/{id}", garmin_account_set, methods=["PUT"]),
         Route("/api/garmin/{id}", garmin_account_delete, methods=["DELETE"]),
         Route("/api/garmin/{id}/test", garmin_account_test, methods=["POST"]),
@@ -2012,7 +2110,7 @@ def create_app(db_path: str | Path) -> Starlette:
         while True:
             wait = 600.0
             with closing(conn()) as c:
-                on = (db.get_setting(c, "surface_mode") or "open") == "background"
+                on = (db.get_setting(c, "surface_mode") or "background") == "background"
                 aid = surface.next_missing(c) if on else None
             if aid is not None:
 

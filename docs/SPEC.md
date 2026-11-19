@@ -28,8 +28,10 @@ small ARM boards such as the Home Assistant Yellow (Raspberry Pi CM4).
 ### Non-goals (for now)
 - Syncing with Strava or other cloud services (Garmin Connect only through each person's
   own personal API key, see §3a).
-- Sleep, daily monitoring, HRV and other non-activity FIT data (skipped on import for now;
-  the files are archived, so the Wellbeing stage can read them later).
+- Sleep, HRV and other non-activity FIT data (skipped on import for now; the files are
+  archived, so the Wellbeing stage can read them later). Daily monitoring files are read
+  only for the Calendar's steps, floors and stress (`daily_parts`, see docs/MANUAL.md); the
+  Garmin API daily summary wins over them.
 - Editing activities beyond category, name and deletion.
 
 ---
@@ -93,7 +95,7 @@ Browser: static HTML/JS (MapLibre GL + ECharts) — all rendering client-side
 
 ## 3a. Data connection
 
-Settings › General › *Data connection* chooses where new activities come from (setting
+Settings › Data › *Data connection* chooses where new activities come from (setting
 `data_source`); only the options of the chosen source are shown below it. Garmin Connect is
 the recommended source and the UI says so: it gives the most complete data — the same
 original FIT files as an export or a folder, plus the values only the Garmin Connect API has
@@ -116,8 +118,19 @@ with the Wellbeing stage, the full set of lifestyle data (steps, sleep, stress, 
      new activities (until it meets known ones), then continues the history from a stored
      offset (`backfill_offset`, re-reading 10 rows) until the end (`backfill_done`).
    - 429 / 5xx / network errors stop the whole run (retried next run); 401/403 on the token
-     marks the account `auth_error` and it is skipped until a new key is saved; a single
-     failing download is recorded (`garmin_activities.status = error`) and not retried.
+     marks the account `auth_error`; a single failing download is recorded
+     (`garmin_activities.status = error`) and not retried.
+   - **Refused key** (expired, deleted, wrong): `auth_error_since` keeps the first refusal,
+     `auth_checked_at` the last try. Scheduled runs try it again every 3 h with one token
+     request only (never a key that is empty, e.g. after restoring an export without keys); an
+     accepted token, a successful run or a new key clears both. After **12 h** every page shows
+     a yellow banner under the header (`GET /garmin/alerts`, `garmin.key_alerts`) with a link to
+     Settings. After **24 h** the add-on creates a Home Assistant persistent notification
+     (`homeassistant.py`, Supervisor API, `homeassistant_api: true`; id
+     `trailbook_garmin_key_<person>`), once per refusal, and dismisses it when the key works
+     again or the account is removed. The open ones are kept in the setting `garmin_ha_notified`
+     (not exported). The scheduler wakes for a due notification even with automatic runs off.
+     Outside Home Assistant there is no notification.
    - Downloads are saved as `uploads/<person>/garmin-<id>.zip` and queued like uploads, so
      the FIT id dedup applies (activities already imported from a folder become `duplicate`).
      `garmin_activities` remembers every downloaded id → nothing is downloaded twice.
@@ -135,7 +148,15 @@ with the Wellbeing stage, the full set of lifestyle data (steps, sleep, stress, 
      trigger of the add-on. After the history is complete each run only reads the first page of
      the activity list until it meets known activities (1–2 requests when nothing is new).
    - The key is stored in the database (never returned by the API, only `…last4`).
-   - Later: sleep, HRV, stress, resting HR, steps, weight for the Wellbeing tab. Stored with
+   - Daily summaries (`GET /usersummary-service/v2/dailysummaries?startDate&endDate`, verified
+     with the personal key): one JSON per day (steps, floors, stress, resting HR, Body Battery,
+     calories, intensity minutes…) kept in `garmin_days` (person, day; a day asked for again
+     replaces its row). Each run asks for the last 3 days again (today is still counting) and
+     for every day since the previous run's newest day (`days_to`: no gap after the server was
+     off), then fills the history backwards, 31 days a request and 4 requests a run, down to
+     *Download from* or the first activity, else a year (`days_from`; an earlier date later
+     continues it, `days_done`). A key without access to the service skips it quietly. Used by the Calendar today; the Wellbeing tab will read it too.
+   - Later: sleep, HRV, weight for the Wellbeing tab. Stored with
      the key person + day (+ metric), written as upserts, so a day fetched again (or the same
      day from another source, e.g. sleep FIT files from a folder) replaces the row instead of
      adding one. Priority when two sources disagree: Garmin API values (Garmin's own
@@ -149,7 +170,7 @@ with the Wellbeing stage, the full set of lifestyle data (steps, sleep, stress, 
    "assign by watch" is chosen), automatic folder scan. Scheduled runs happen in folder and
    Garmin mode (never for uploads).
 
-**Other sources** (Settings › General, a card shown whatever the data connection is): one-time
+**Other sources** (Settings › Data, a card shown whatever the data connection is): one-time
 imports of history kept elsewhere, uploaded for a chosen person through the same
 `POST /api/uploads`, one file after another (several files can be picked; the running import
 picks up files that arrive meanwhile). Today: **Strava** — the bulk export ZIP or single
@@ -257,6 +278,11 @@ Three keys, from cheap to strong:
 4. GPX/TCX and manual Strava activities have no watch id (`gpx:<start>:<points>`,
    `tcx:…`, `strava:<id>`): one that starts within 120 s of an activity the person already
    has is a `duplicate` of it (a Strava copy of a watch activity imported from Garmin).
+5. The FIT recording always wins, whatever arrives first: a FIT file that starts within
+   120 s of such a copy of the same person replaces it in place (same activity id, so the
+   user's changes stay; the copy's files become `duplicate`). The copy's title and
+   description stay unless the FIT brings its own. A Strava file that is a `duplicate` still
+   gives the activity its `activities.csv` title and description.
 
 ### 5.4 Statuses (`files.status`)
 | Status | Meaning |
@@ -305,10 +331,12 @@ Each file goes through stages. Each stage writes its own table.
 | 7 | Best efforts | Power / pace / HR bests in `best_efforts`. |
 | 8 | Load | Training load on the activity; `daily_load` recomputed from that date on. |
 
-**Activity name** = the Garmin Connect title (`activityName`, kept in `garmin_activities`), or
-the title in a GPX/TCX file or Strava's `activities.csv`. FIT files carry no title, so an activity from a folder or upload has no name and the UI
-shows its type. When Garmin later delivers the same activity (imported or duplicate), its
-title replaces the empty name. A name the user set (`name_overridden`) is never replaced.
+**Activity name**, first that exists: the name the user set (`name_overridden`, never
+replaced) → the title in a GPX/TCX file or Strava's `activities.csv` → the Garmin Connect
+title (`activityName`, kept in `garmin_activities`). `activities.name_source` says where it
+came from (`file` / `garmin`). FIT files carry no title, so an activity from a folder or
+upload has no name and the UI shows its type until Garmin delivers or matches the same
+activity. Clearing the name falls back to the Garmin Connect title.
 
 Every activity stores `importer_version`. When a later version adds a metric, activities
 whose file still exists can be reprocessed in the background; others keep their data and
@@ -414,6 +442,11 @@ Form zones: > 25 transition, 5…25 fresh, −10…5 grey zone, −30…−10 op
 - Pace (running group): 400 m, 1 km, 1 mile, 5 km, 10 km, half marathon, marathon —
   fastest time within any run from the distance stream (interpolated), not only races.
 - HR: max average over 1, 5, 20, 60 min.
+- Longest (runs and rides, each on its own: same category): the activity's distance. Not
+  stored — added to the stored efforts in the queries (`api.EFFORTS_SQL`, kind `longest`, key
+  0, higher is better), so it gets records, YTD and the previous best like the others. Shown
+  on the activity page after the distances as **Max** (tooltip: longest distance in one
+  activity), the distance in each column; hovering highlights the whole activity.
 Streams are resampled to 1 s; gaps > 10 s break a window. Stored in `best_efforts`; shown on
 the activity page and as records + curve in Statistics (all time, last 90 days, per year,
 with the all-time curve dashed for comparison). On the activity page each effort is compared
@@ -544,7 +577,8 @@ All JSON, prefix `/api`. Read endpoints accept `person`, `from`, `to`, `category
 | DELETE | `/activities/{id}` | Delete activity (used for missing files). |
 | GET | `/tracks` | All simplified tracks for a filter, as compact binary/GeoJSON, cacheable (ETag). |
 | GET | `/fitness?person&from&to` | Daily load, CTL, ATL, TSB, ramp rate (CTL change in 7 days); methods; thresholds in use; threshold warnings of the period. |
-| GET | `/calendar?from&to&person` | Activities by local day. |
+| GET | `/calendar?from&to&person&chart` | Activities by local day (`chart=1`: with the small chart of each), and for one person the day's steps, floors, ascent and average stress. |
+| GET | `/forecast?person` | 16-day forecast (Open-Meteo, cached 3 h) and the latitude for the day length, at the start of the person's latest activity with a route. |
 | GET | `/stats/totals?person&by&type&year` | Totals per year / month / week and per group. |
 | GET | `/stats/records?person&kind&range&type` | Best effort per distance / duration. |
 | GET/PUT | `/thresholds/{person}` | Threshold rows, values in use (set / auto / default). |
@@ -561,6 +595,7 @@ All JSON, prefix `/api`. Read endpoints accept `person`, `from`, `to`, `category
 | PUT | `/garmin/{person}` | Save a key and/or *Download from* date, then test it. |
 | POST | `/garmin/{person}/test` | Get a token and read the newest activity. |
 | DELETE | `/garmin/{person}` | Disconnect (delete the key; imported activities stay). |
+| GET | `/garmin/alerts` | Keys refused for 12 h or more (person, label, since): the banner. |
 | GET | `/import/files?status=…` | Import manager list. |
 | GET | `/backup` | Running job, export / restore progress, exports list (with manifest summary), exports folder, whether the install is empty, default folder for restored files. |
 | POST | `/export` | Start an export (`files`, `secrets`). |
@@ -653,15 +688,16 @@ The visual design is defined by the project owner; the technical preview follows
 ### Views
 | View | Content |
 |---|---|
-| Activities | KPI row (count, distance, time, ascent, calories for the current filters); Tiles / Charts / List switch (Charts: a rounded card with four bars as its icon). Tile names stay on one line, a long one cut with "…". **Tiles**: the route on a static map (always the Faded light tone), the stats under the title. **Charts**: tiles about 17 % narrower (one more tile per row), the box 25 % lower (120 px), under it only the title and date with the distance and the moving time in two bold lines on the right (no labels); hovering the tile shows the averages in a lighter frame at the top centre, in one row with the training type (left) and the segment (right), cut with "…" when space is short (heart rate, pace on foot or speed, power on rides; no speed for team and racket sports); and in the box a **chart** (`tilechart.py`, no numbers, fills the box, the activity charts' colours; the training type sits in its top left corner on the frame of the map weather widget — translucent surface, blur, soft shadow — instead of in the line under the title). Heart rate blocks — side by side without gaps, width = time, height = average heart rate on a scale from the resting HR (watch, else the person's, else the default) to the maximum HR (Garmin's top zone limit), colour = its Garmin HR zone (green → red; grey below zone 1) under a light vertical gloss (lighter at the top) with a faint shadow along each block's left edge, so two blocks of one zone side by side read as two, a dashed line at the activity's average heart rate (no heart rate but power, e.g. a bike computer without an HR strap: the same blocks from power — height from 0 W to the top of Garmin's power zones, an open last zone ending 10 % above its start; colour = the power zone in the heart rate colours, hysteresis 3 % of the top): **Intervals** — a block per section between the interval lines (the saved ones, else the detected); **Easy, Tempo, Race, team and racket sports** — a block per phase of the session: stretches of one zone (15 s means; the zone changes only when the heart rate is 3 bpm past its limit, so hovering at a limit stays one block; a stretch shorter than 1/12 of the activity, at least 1 min, merged into the neighbour closer in heart rate); **Long** — the same, less sensitive: at least 1/20. **Hills** — the altitude profile along the distance in the altitude green, the climbs between the profile's turning points darker. **Commute and sports without a training type** (motor sports, other, multisport…) — the route alone (no map) as a thick line in the HR zone colours (below zone 1 in the zone 1 colour; no heart rate: one plain zone 1 green) on a plain tinted background, in proportion; without a route the heart rate blocks, else speed, else the sport's icon large and faint. Without the data a kind needs: speed over time. The switch sits at the right of the page title, Tiles first; sortable columns (no filter row; filters are the badges). |
-| Activity | Back button; header with type icon, name, start date (smaller, lighter), place (the training type is a tile, §7.6), Charts and Options badges (Options: X axis, power averaging), an **Edit** badge (panel like Map › Options: name — empty = back to the Connect title or the type —, type, kind — Automatic (the detected one) or one of the seven, §7.6 —, FTP for this activity — activities with power, empty = automatic, the automatic value as placeholder, §7.2 —, delete) and **Create segment** (activities with a route; opens the segment creator on this activity). FIT activity files carry no surface type, so the route has no surface colouring. Tiles at the top, each its own card, side by side (flex, wrapping on narrow screens, as low and as even as possible; columns have different widths — power widest, best efforts narrow): first column four small tiles one under another — **Distance**, **Moving time**, **Elapsed time**, **Calories** (active / total; active = total − the resting share the watch writes) — each with a title like a chart title (same font, 18 px icon) and the value below; **Gear** (icon in the title; small pictures; from the FIT `device_info`: the watch or bike computer and the sensors — HR strap, power meter, radar, lights…; a drawing per kind, or the owner's own photo from `<data>/device-images/<product>.png|jpg|webp`, e.g. `edge_850.png`; unknown or older devices show a generic picture; no battery status); **Heart rate in zones** and under it, in the same column, **Surface** (its own tile: a stacked bar in the surface hatching and the share of paved / gravel / dirt / unknown); heart rate zones: (Garmin's time in HR zones from the FIT `time_in_zone` message — one bar per zone with its share; time and zone range on hover; a grey row for the time below zone 1); **Power** (rides only, i.e. a power meter, not running power) as a sliding tile: first the **power curve** (a chart of the standard filling the tile: best average power 5 s … 5 h on a log axis — every duration labelled, a stop counts as 0 W —, this activity filled, the comparison dashed and lightly filled, crosshair with the values; hovering a point highlights that effort on the charts and the map), then **Power in zones**; dots under it switch; **Best efforts** (laurel icon; fastest time per distance — runs 400 m … marathon, rides 5, 10, 20, 30, 40, 50, 100 km and the best 20 min and 1 h power — in columns: distance, time, average speed (rides) or pace (runs) and the best of the comparison under a short header (ATH, Year, 12 mo…), a laurel there when this activity is the best; hovering highlights the stretch on the charts and the map). Best efforts columns: This activity | This year | the comparison. Options › **Compare with** (the last column): All time (default, ATH) | Last 12 months | Last 3 months | Last 30 days, saved per person (`ui_settings` key `activity-compare`); used by the power curve and the best efforts. Zone colours are fixed: HR zones green → red and power zones yellow → violet, the same scales as the route colouring. Titles of all tiles and of the Route card use the chart title font with an icon; the route map is 414 px high. No training load card on this page. Options › **Route lines**: where the route runs twice (out and back) the lines are drawn side by side (default) or on top; saved per person (`ui_settings` key `activity-route-offset`). FIT activity files (Edge included) carry no road surface and no gear (bike, shoes: those live in Garmin Connect only); it comes from OpenStreetMap (`surface.py`): the route is cut into ~1 km boxes, the ways with a highway tag in them are fetched from an Overpass server (`overpass_url` setting, default overpass-api.de; only these boxes are sent), each track point (every 20 m) takes the surface of the nearest way within 25 m (surface tag; without it roads count as paved, tracks by their grade, paths unknown) and the result is cached in `activities.surface` as runs along the distance with shares. Runs shorter than 80 m join their neighbours (no flicker when a few points catch a road beside a gravel path; the stored runs stay point by point, the page gets them smoothed). Settings › General › Road surface: when an activity is opened (default) or all activities slowly in the background (newest first, one at a time with a 15 s pause, 10 min after a server error; setting `surface_mode`). Shown for every activity with a route for now (later maybe only wheeled sports). Hovering a surface kind in its tile highlights all its stretches on the charts and the map. With at most one device the Surface tile shares the Devices column and heart rate zones take a full column. When there is no power tile, a **Heart rate curve** tile (same chart as the power curve: best average HR for 10 s … 1 h, this activity and the comparison) takes its place. Tiles without a value are hidden, and values that belong to a chart (HR, pace, power, cadence, ascent…) live only next to it, even when it is hidden. Route card: Data badge (single colour, speed, heart rate, power / cadence / altitude when recorded, surface — one colour per kind with a legend of the kinds, intervals — interval workouts only: the sections between the chart lines, work orange and recovery grey (work = faster than halfway between the slowest and the fastest section), following the lines as they are moved; 5–95 % range, legend with the scale on the map; HR green → red, power → violet, altitude green → brown like a relief map) and Markers badge (numbered dot in the accent colour every 1 km, every 5 km for rides and activities ≥ 40 km); a distance scale is always on the map; a reset view button (refresh pictogram, in a block like Fullscreen, under it) appears only after the map was moved, zoomed or rotated. Charts right below the map (docs/CHARTS.md), laps (Group badge: every 1, 2, 5 or 10 km — default 1 km, 5 km for rides and activities ≥ 40 km — built from the device auto-laps when they are 1 km long, else cut from the streams; device laps of another kind — manual laps, workout steps — as the extra choice Device laps; rides show speed, runs pace), best efforts. Indoor and virtual activities show no weather on the map; virtual rides and runs show a small **Virtual** frame in its place (top left, the weather frame's style, smaller). |
-| Calendar | Month view (Mon–Sun, activity chips with type icon and distance or time, week totals: time, distance, load, count) and year view (12 small month grids coloured by moving time per day); ‹ › and Today; summary strip for the shown month/year. With Everyone: a person dot on each chip. |
+| Activities | KPI row (count, distance, time, ascent, calories for the current filters); Tiles / Charts / List switch (Charts: a rounded card with four bars as its icon). Tile names stay on one line, a long one cut with "…". **Tiles**: the route on a static map (always the Faded light tone; in the dark theme dark, like the segment maps), the stats under the title. **Charts**: tiles about 17 % narrower (one more tile per row), the box 25 % lower (120 px), under it only the title and date with the distance and the moving time in two bold lines on the right (no labels); hovering the tile shows the averages in a lighter frame at the top centre, in one row with the training type (left) and the segment (right), cut with "…" when space is short (heart rate, pace on foot or speed, power on rides; no speed for team and racket sports); and in the box a **chart** (`tilechart.py`, no numbers, fills the box, the activity charts' colours; the training type sits in its top left corner on the frame of the map weather widget — translucent surface, blur, soft shadow — instead of in the line under the title). Heart rate blocks — side by side without gaps, width = time, height = average heart rate on a scale from the resting HR (watch, else the person's, else the default) to the maximum HR (Garmin's top zone limit), colour = its Garmin HR zone (green → red; grey below zone 1) under a light vertical gloss (lighter at the top) with a faint shadow along each block's left edge, so two blocks of one zone side by side read as two, a dashed line at the activity's average heart rate (no heart rate but power, e.g. a bike computer without an HR strap: the same blocks from power — height from 0 W to the top of Garmin's power zones, an open last zone ending 10 % above its start; colour = the power zone in the heart rate colours, hysteresis 3 % of the top): **Intervals** — a block per section between the interval lines (the saved ones, else the detected); **Easy, Tempo, Race, team and racket sports** — a block per phase of the session: stretches of one zone (15 s means; the zone changes only when the heart rate is 3 bpm past its limit, so hovering at a limit stays one block; a stretch shorter than 1/12 of the activity, at least 1 min, merged into the neighbour closer in heart rate); **Long** — the same, less sensitive: at least 1/20. **Hills** — the altitude profile along the distance in the altitude green, the climbs between the profile's turning points darker. **Commute and sports without a training type** (motor sports, other, multisport…) — the route alone (no map) as a thick line in the HR zone colours (below zone 1 in the zone 1 colour; no heart rate: one plain zone 1 green) on a plain tinted background, in proportion; without a route the heart rate blocks, else speed, else the sport's icon large and faint. Without the data a kind needs: speed over time. The switch sits at the right of the page title, Tiles first; sortable columns (no filter row; filters are the badges). |
+| Activity | Back button; header with type icon, name, start date (smaller, lighter), place (the training type is a tile, §7.6), Charts and Options badges (Options: X axis, power averaging), an **Edit** badge (panel like Map › Options: name — empty = back to the Connect title or the type —, type, kind — Automatic (the detected one) or one of the seven, §7.6 —, FTP for this activity — activities with power, empty = automatic, the automatic value as placeholder, §7.2 —, delete) and **Create segment** (activities with a route; opens the segment creator on this activity). FIT activity files carry no surface type, so the route has no surface colouring. Tiles at the top, each its own card, side by side (flex, wrapping on narrow screens, as low and as even as possible; columns have different widths — power widest, best efforts narrow): first column four small tiles one under another — **Distance**, **Moving time**, **Elapsed time**, **Calories** (active / total; active = total − the resting share the watch writes) — each with a title like a chart title (same font, 18 px icon) and the value below; **Gear** (icon in the title; small pictures; from the FIT `device_info`: the watch or bike computer and the sensors — HR strap, power meter, radar, lights…; a drawing per kind, or the owner's own photo from `<data>/device-images/<product>.png|jpg|webp`, e.g. `edge_850.png`; unknown or older devices show a generic picture; no battery status); **Heart rate in zones** and under it, in the same column, **Surface** (its own tile: a stacked bar in the surface hatching and the share of paved / gravel / dirt / unknown); heart rate zones: (Garmin's time in HR zones from the FIT `time_in_zone` message — one bar per zone with its share; time and zone range on hover; a grey row for the time below zone 1); **Power** (rides only, i.e. a power meter, not running power) as a sliding tile: first the **power curve** (a chart of the standard filling the tile: best average power 5 s … 5 h on a log axis — every duration labelled, a stop counts as 0 W —, this activity filled, the comparison dashed and lightly filled, crosshair with the values; hovering a point highlights that effort on the charts and the map), then **Power in zones**; dots under it switch; **Best efforts** (laurel icon; fastest time per distance — runs 400 m … marathon, rides 5, 10, 20, 30, 40, 50, 100 km and the best 20 min and 1 h power — in columns: distance, time, average speed (rides) or pace (runs) and the best of the comparison under a short header (ATH, YTD, 12 mo…), a laurel there when this activity is the best; hovering highlights the stretch on the charts and the map). Best efforts columns: Activity | YTD (best from 1 January to today) | the comparison. Options › **Compare with** (the last column): All time (default, ATH) | Last 12 months | Last 3 months | Last 30 days, saved per person (`ui_settings` key `activity-compare`); used by the power curve and the best efforts. Zone colours are fixed: HR zones green → red and power zones yellow → violet, the same scales as the route colouring. Titles of all tiles and of the Route card use the chart title font with an icon; the route map is 414 px high. No training load card on this page. Options › **Route lines**: where the route runs twice (out and back) the lines are drawn side by side (default) or on top; saved per person (`ui_settings` key `activity-route-offset`). FIT activity files (Edge included) carry no road surface and no gear (bike, shoes: those live in Garmin Connect only); it comes from OpenStreetMap (`surface.py`): the route is cut into ~1 km boxes, the ways with a highway tag in them are fetched from an Overpass server (`overpass_url` setting, default overpass-api.de; only these boxes are sent), each track point (every 20 m) takes the surface of the nearest way within 25 m (surface tag; without it roads count as paved, tracks by their grade, paths unknown) and the result is cached in `activities.surface` as runs along the distance with shares. Runs shorter than 80 m join their neighbours (no flicker when a few points catch a road beside a gravel path; the stored runs stay point by point, the page gets them smoothed). Settings › General › Road surface: when an activity is opened or all activities slowly in the background (default; newest first, one at a time with a 15 s pause, 10 min after a server error; setting `surface_mode`). Shown for every activity with a route for now (later maybe only wheeled sports). Hovering a surface kind in its tile highlights all its stretches on the charts and the map. With at most one device the Surface tile shares the Devices column and heart rate zones take a full column. When there is no power tile, a **Heart rate curve** tile (same chart as the power curve: best average HR for 10 s … 1 h, this activity and the comparison) takes its place. Tiles without a value are hidden, and values that belong to a chart (HR, pace, power, cadence, ascent…) live only next to it, even when it is hidden. Route card: Data badge (single colour, speed, heart rate, power / cadence / altitude when recorded, surface — one colour per kind with a legend of the kinds, intervals — interval workouts only: the sections between the chart lines, work orange and recovery grey (work = faster than halfway between the slowest and the fastest section), following the lines as they are moved; 5–95 % range, legend with the scale on the map; HR green → red, power → violet, altitude green → brown like a relief map) and Markers badge (numbered dot in the accent colour every 1 km, every 5 km for rides and activities ≥ 40 km); a distance scale is always on the map; a reset view button (refresh pictogram, in a block like Fullscreen, under it) appears only after the map was moved, zoomed or rotated. Charts right below the map (docs/CHARTS.md), laps (Group badge: every 1, 2, 5 or 10 km — default 1 km, 5 km for rides and activities ≥ 40 km — built from the device auto-laps when they are 1 km long, else cut from the streams; device laps of another kind — manual laps, workout steps — as the extra choice Device laps; rides show speed, runs pace), best efforts. Indoor and virtual activities show no weather on the map; virtual rides and runs show a small **Virtual** frame in its place (top left, the weather frame's style, smaller). |
+| Calendar | Weeks down the page, newest on top (this week, or the next one once fewer than 4 days of this week are left); older weeks load while scrolling down, after **Go to** (date panel like Time: slider, editable date, Today, years) newer ones also while scrolling up. Day: number, then steps, floors (else ascent) and average stress of the whole day (Garmin daily summary, else the watch's monitoring files); from today on, days without them show the day length and the forecast (latitude and place of the latest activity's start). The day's values and the forecast each stay on one line: narrower days switch to short forms (12k steps, 8:47), the narrowest show coloured numbers without icons. Activity: header (type icon, distance or time, training type) over the small chart of Activities › Charts. A day is at least as high as one with two activities. Week totals on the right; on screens wide enough (as the back button of an activity) the ISO week number and year as plain text in the left margin, moving with the week and hidden under the header and at the bottom edge. **Summary** (off on each visit) shows the month of the first week row under the header (its Thursday): month name and year first, then activities, distance, time, elevation, load, steps, floors, stress. Year view: 12 small month grids coloured by moving time; a month opens the weeks at its end. With Everyone: a person dot on each activity, no daily values. |
 | Heatmap | All routes as low-opacity lines; explorer tiles, max square, cluster. |
 | Fitness | Header: Time filter, Options (activity icons under the fitness chart, fitness filled / line, fatigue, form zones; saved per person) and a Summary toggle (off when the tab is entered); on the right two toggles with icons (Fitness, Form), each shows or hides its chart, any number may be on (remembered in the browser). A ⚠ icon after the title only when thresholds can distort the load (§7.2). Summary (fitness, fatigue, form with zone, ramp rate, 7-day load) at the end of the period; charts per docs/CHARTS.md (Fitness page): fitness and fatigue lines, and form (fresher = higher), zone bands and the line coloured by its zone; ramp rate (fitness change in 7 days; above 8 too fast, below 0 losing fitness) is only a summary value, as it is the slope of the fitness line. How it is computed lives in Manual › Fitness (no explanation card on the page). |
 | Wellbeing | Sleep, stress, heart rate (mostly charts), from the Garmin API; some daily values also in the Calendar. Later stage. |
 | Statistics | *Totals*: filter (type, year, group by year/month/week, chart metric), bar chart, table per period (years link to their months), moving time by group. *Records*: running pace / power / heart rate, range all / 90 days / year, curve + table with links to activities. |
 | Compare | Everyone side by side (only with “Everyone” selected). |
 | Manual (?) | A knowledge base of how Trailbook computes things and how to read them, tabs like Settings: **Training types** (what a training type is, the types with what they do and the recovery, sports and their settings, the detection rules, intervals in detail, relative to you, changing the type, terms) and **Training effect** (what it is, Garmin's aerobic / anaerobic scale, primary benefit with the codes, how to read it, how it relates to the training type, where it is shown). **Weather help** (what the meter shows, which activities, how it is counted with the levels, weights per sport, examples, limits; the weights come from `HELP_PROFILES`, the values the meter uses). **Fitness** (what the charts show, load per activity by method, the fitness model, form and ramp zones, thresholds and the ⚠, terms; constants from `/api/types` › `fitness_rules`, zones from the charts' own tables). Every table is fitted to its content: when every cell fits on one line, the columns keep their natural width and only the last column takes the rest (measured in `fitManualTables`, again on resize); otherwise short columns stay on one line and the text columns share the rest and wrap; row lines run across the card; rules and terms are tables too. A section's text and tables sit 16 px in from its title (the first column without cell padding, so text and tables line up); tiles inside a section are not indented. Built only from the app's existing pieces (grey tiles, ranked rows and panel titles, plain data tables), no colours of its own; the first card holds the contents as tiles that jump to the sections. All of Trailbook's own numbers come from the server (`/api/types`), the same values the code uses; new topics get a tab of their own. |
+| Settings | Tabs: General (appearance, road surface), **Data** (data connection, Garmin Connect / upload / watched folder cards, automatic download or scan, other sources), People, Imported, Backup. |
 | Settings › Backup | Export (with / without FIT files, optionally with Garmin keys), list of exports (download, restore, delete), restore from an uploaded export (one file picker, no folder choice: every file goes into the archive); progress while a job runs, page reloads after a restore. |
 
 ### Page structure
@@ -691,13 +727,26 @@ map the same frame floats over the map without the fade.
   **Apply**, and **Clear filter** (next to Apply, only while that filter is set) removes just
   that filter (Clear filter and Apply side by side on the right, the same outlined button like
   the badges). URL parameters `from` / `to` (local days, inclusive; left out at the ends of
-  the data) and `types` (comma list of type keys; `g:<group>` = a whole group), handled by
-  one function on the server (`activity_filters`) for every endpoint.
+  the data), `last` (`1m`, `3m`, `6m`, `ytd`, `1y`: a period up to today), `years` (comma
+  list, gaps allowed) and `types` (comma list of type keys; `g:<group>` = a whole group),
+  handled by one function on the server (`activity_filters`) for every endpoint.
   - *Time*: a range slider with a dot at each end, from the first activity (`GET
     /api/time-range?person=`) to today; under the dots the two dates in small muted numbers
     (no dash between them) — a click on the year, month or day makes that number editable in
     place, without a box (digits only, Enter keeps it, Escape cancels, the day is clipped to
-    the month); under that one chip per year (and *All time*) to pick a whole year. The badge shows *All time*, the year, or `from – to`.
+    the month). Under that two rows of chips:
+    1. *All time · 1 month · 3 months · 6 months · YTD · 1 year* — one choice. A period up to
+       today, kept relative in the URL (`last=3m`), so a saved link or the kept filter stays
+       "the last 3 months". Months are calendar months back from today (the day clipped to
+       the month), YTD from 1 January, 1 year = 12 months.
+    2. One chip per year — several can be on, also with a gap (2023 and 2025).
+    Choosing one kind clears the others: a period clears the years, a year clears the period,
+    moving the slider or typing a date is a range of your own and clears both. The slider
+    shows the choice; years with a gap cannot be one range, so the slider shows their span
+    dashed and "*n* years selected". The badge shows *All time*, *Last 3 months*, *Year to
+    date*, *Last 12 months*, a year, `2023–2025` (side by side), `2023, 2025`, *n years* (more
+    than three with gaps), or `from – to`. Fitness shows the whole span from the first to the
+    last chosen year (fitness is a continuous model; a cut year would be a jump in the line).
   - *Type*: the panel is the list itself — a checkbox per type with its icon and count,
     under a small heading per group; the heading of a group with more than one type is itself
     a checkbox that selects the whole group (half-checked when only some types are); only types with
@@ -707,7 +756,7 @@ map the same frame floats over the map without the fade.
   Action buttons in Settings have the same size (30 px high, 13 px semibold): the primary ones
   stay blue, the others are outlined like the filter buttons; selects and the file picker
   line up at 30 px.
-  Calendar and Fitness have no filters: their time is the page navigation (month / year,
+  Calendar and Fitness have no filters: their time is the page navigation (Go to / year,
   range switch). Name and person stay as column filters in the Activities list.
 - The main switch (e.g. Heatmap | Explorer tiles, List | Tiles | Large tiles, settings tabs)
   looks like the main navigation: no box, the selected option on a light tint in the accent
@@ -756,15 +805,24 @@ map the same frame floats over the map without the fade.
   floats above it, aligned with the content column of the other tabs.
   Settings is one panel with three columns, always all of them: Map, Heatmap, Explorer tiles
   (the base map is shared; settings of the hidden mode are kept for when you switch):
-  - Base map: OpenStreetMap (default), OpenTopoMap, CyclOSM or none; colours: faded light
-    (default), original, muted, grayscale, soft dark, slate, dusk, dark (high contrast). The
-    soft dark tones lift blacks and lower contrast so routes stand out without a harsh map.
+  - Base map: OpenStreetMap (default), OpenTopoMap, CyclOSM or none; colours: faded light,
+    original, muted, grayscale, soft dark, slate, dusk (default, in both themes), dark (high
+    contrast). The soft dark tones lift blacks and lower contrast so routes stand out without
+    a harsh map. Route maps (activity, segment, segment creator) follow the page theme: in
+    dark a light tone becomes soft dark; the Map tab shows exactly the chosen tone.
+  - Dark theme on maps: outlines of lines, dots and km markers are near black (`--map-halo`)
+    instead of white; map buttons, attribution and scale dark; road surface colours lighter.
   - Heatmap: style (density, coverage, heat glow), colour (presets or any colour from a
     colour wheel; gradient for heat glow; a colour per person for Everyone), line width,
     overlap strength.
   - Explorer tiles: size (zoom 13 large squares, 14 explorer tiles, 16 medium, 17
     small squares), style (coverage / by visits), colours, display (single tiles / one area),
-    highlights (max square, cluster, routes on top of tiles).
+    highlights (max square, cluster, routes on top of tiles), **Regions coverage
+    statistics**: a Choose badge opens a small window with a searchable list of countries,
+    each expandable to its regions; any number can be ticked, OK applies them. The chosen
+    ones are listed under the badge (a region with its country), each with × to remove it (saved per person with the
+    other options). Each chosen country / region adds an item to
+    Summary: its name, share of visited tiles, "visited of all" (`regions.js`).
   Colour, width and strength changes only update paint properties (instant); the map starts
   directly at the data bounds (no world-view jump).
 - All choices are saved per browser and separately per mode, so switching between heatmap
@@ -772,6 +830,10 @@ map the same frame floats over the map without the fade.
 - Tiles, max square and cluster on this page are computed **in the browser** from the route
   polylines for the chosen tile size; the server stores zoom-14 tiles per activity for
   statistics. MapLibre has no blend modes, so overlapping people are not colour-mixed.
+- Region boundaries: Natural Earth 1:10m admin-0 / admin-1 (public domain), built by
+  `tools/build_regions.py` into `static/regions/` (index + one file per country, ~5,8 MB in
+  all, kept under 6 MB; Antarctica left out). A country file is fetched only when that
+  country or one of its regions is chosen.
 
 ---
 
@@ -922,7 +984,7 @@ a single, documented operation.
   paths rejected → check the database copy (`PRAGMA integrity_check`) and copy it into the live
   database with the backup API → run migrations if the export is older → point the restored
   folder rows at the archive; keep the watched-folder setting only if that folder exists on
-  this device (otherwise it is cleared and chosen in Settings › General) → scan (Garmin
+  this device (otherwise it is cleared and chosen in Settings › Data) → scan (Garmin
   downloads wait for the next run). Nothing depends on a folder of the old device.
 - A damaged archive stops before the database is touched; files already written stay.
 - Restoring onto a non-empty install requires explicit confirmation and replaces the database.
@@ -982,9 +1044,11 @@ Training-load concepts follow publicly documented models
 
 ### Garmin Connect data beyond the FIT file
 
-Activities already here (e.g. from a folder) are matched to Connect activities by start time
-(±90 s) and not downloaded again; their activity-list entry is kept (`garmin_activities.summary`):
-title (becomes the name unless the user set one), location, training effect (aerobic /
+Activities already here from a FIT file (e.g. from a folder) are matched to Connect activities
+by start time (±120 s) and not downloaded again; a GPX/TCX or manual copy (e.g. from Strava)
+is not matched, so the FIT is downloaded and replaces it (5.3). The activity-list entry is
+kept (`garmin_activities.summary`): title (becomes the name only when the activity has no
+title of its own, see Activity name), location, training effect (aerobic /
 anaerobic, label), Garmin's training load, Body Battery change, elevation-corrected flag,
 BMR calories, intensity minutes. Activity details (one request per activity, within the
 download budget) give extra streams kept in `connect_streams` (not dropped on a FIT

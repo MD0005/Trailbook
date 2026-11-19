@@ -26,105 +26,319 @@ const personParam = () => (CURRENT && CURRENT !== "all" ? { person: CURRENT } : 
 
 const ICON_CAL_MONTH = svg(`<rect x="3" y="4" width="18" height="17" rx="2"/><path d="M3 9h18M8 2v4M16 2v4"/><path d="M7 13h2M11 13h2M15 13h2M7 17h2M11 17h2"/>`);
 const ICON_CAL_YEAR = svg(`<rect x="3" y="3" width="5" height="5" rx="1"/><rect x="10" y="3" width="5" height="5" rx="1"/><rect x="17" y="3" width="4" height="5" rx="1"/><rect x="3" y="10" width="5" height="5" rx="1"/><rect x="10" y="10" width="5" height="5" rx="1"/><rect x="17" y="10" width="4" height="5" rx="1"/><rect x="3" y="17" width="5" height="4" rx="1"/><rect x="10" y="17" width="5" height="4" rx="1"/>`);
-const ICON_PREV = svg(`<path d="M15 6l-6 6 6 6"/>`);
-const ICON_NEXT = svg(`<path d="M9 6l6 6-6 6"/>`);
 const ICON_TOTALS = svg(`<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>`);
 const ICON_RECORDS = svg(`<path d="M8 21h8M12 17v4M7 4h10v5a5 5 0 0 1-10 0z"/><path d="M17 5h3a3 3 0 0 1-3 4M7 5H4a3 3 0 0 0 3 4"/>`);
 
 // ---- Calendar ---------------------------------------------------------------------------
 
+// Weeks run down the page, the newest on top (Mon–Sun and the week's totals); older weeks
+// load while scrolling down and, after Go to, newer ones while scrolling up. The top week is
+// the current one, or the next one once fewer than 4 days of this week are left.
+// Each day: its number with the day's steps, floors (else ascent) and average stress (the
+// watch's monitoring files, the whole day); days without them from today on: the day length
+// and the forecast at the start of the latest activity. Activities: a header (type, distance,
+// training type) over the small chart of Activities › Charts.
+const CAL_BATCH = 6; // weeks per load
+const calIcon = (body, color) => `<svg class="cal-ic" viewBox="0 0 24 24" style="color:var(${color})" aria-hidden="true">${body}</svg>`;
+const CAL_ICONS = {
+  steps: () => metricIcon("steps", 12),
+  ascent: () => metricIcon("total_ascent", 12),
+  // stairs going up
+  floors: () => calIcon(`<path d="M2.5 21h7v-6h6V9h6" ${iconLine(2.6)}/><path d="M3 12.5 10.5 5M7 5h3.5v3.5" ${iconLine(2)}/>`, "--m-elev"),
+  // a jagged line in a circle
+  stress: () => calIcon(`<circle cx="12" cy="12" r="9" ${iconLine()}/><path d="M6.5 13.5 9 9.5l2.5 5 2.5-6 3.5 4.5" ${iconLine(1.9)}/>`, "--m-stress"),
+  // the sun on the horizon, rays above
+  daylight: () => calIcon(`<path d="M2.5 19h19M6.5 19a5.5 5.5 0 0 1 11 0" ${iconLine()}/><path d="M12 4.5v3M5.2 7.6l2 2M18.8 7.6l-2 2M2.8 13.5h2.4M18.8 13.5h2.4" ${iconLine(1.9)}/>`, "--m-sleep"),
+};
+// Day length (sunrise to sunset) at a latitude, in seconds: the sun's declination of the day
+// and a sun 0.833° below the horizon at sunrise and sunset (refraction and its radius).
+function dayLength(lat, iso) {
+  const d = parseDay(iso), n = Math.round((d - Date.UTC(d.getUTCFullYear(), 0, 1)) / DAY_MS) + 1;
+  const rad = Math.PI / 180;
+  const decl = -23.44 * rad * Math.cos(((2 * Math.PI) / 365) * (n + 10));
+  const cosH = (Math.sin(-0.833 * rad) - Math.sin(lat * rad) * Math.sin(decl)) / (Math.cos(lat * rad) * Math.cos(decl));
+  if (cosH <= -1) return 86400;
+  if (cosH >= 1) return 0;
+  return ((2 * Math.acos(cosH)) / rad / 15) * 3600;
+}
+// The day's forecast on one line, in the style of the map's weather: sky, lowest–highest
+// temperature, rain, wind arrow and speed; rain and the unit go first when the day is narrow.
+function calWeather(w) {
+  const sky = WMO.find(([max]) => (w.code ?? 0) <= max) || WMO[WMO.length - 1];
+  const deg = (t) => Math.round(t) || 0; // whole degrees, no "-0"
+  const from = w.wind_dir != null ? COMPASS[Math.round(w.wind_dir / 45) % 8] : "";
+  const rain = w.precip >= 0.1 ? `${num(w.precip, 1)} mm` : "";
+  const tip = `Forecast: ${sky[1].toLowerCase()}, ${deg(w.temp_min)} to ${deg(w.temp_max)} °C${rain ? `, ${rain} of rain` : ""}${w.wind_speed != null ? `, wind up to ${num(w.wind_speed)} km/h from the ${from}` : ""}. Open-Meteo, for the start of the latest activity.`;
+  return `<div class="cal-wx wx" data-tip="${esc(tip)}">
+    <svg class="wx-sky" viewBox="0 0 24 24" fill="none" aria-label="${sky[1]}">${SKY_SVG[sky[2]]}</svg>
+    <span>${deg(w.temp_min)}–${deg(w.temp_max)}°</span>${rain ? `<span class="cal-rain">${rain}</span>` : ""}
+    ${w.wind_speed != null ? `<span class="wx-wind"><svg viewBox="0 0 24 24" style="transform:rotate(${(w.wind_dir ?? 0) + 180}deg)"><path d="M12 3v16M12 3l-4.5 5M12 3l4.5 5" stroke="currentColor" stroke-width="2.4" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>${num(w.wind_speed)}<span class="cal-unit">&nbsp;km/h</span></span>` : ""}
+  </div>`;
+}
+const hm = (s) => { const m = Math.round(s / 60); return `${Math.floor(m / 60)} h ${String(m % 60).padStart(2, "0")} min`; };
+
+let CAL_FORECAST = null; // {key, at, data}: forecast of the person, kept for 30 minutes
+async function calForecast() {
+  const key = CURRENT;
+  if (CAL_FORECAST?.key === key && Date.now() - CAL_FORECAST.at < 30 * 60000) return CAL_FORECAST.data;
+  const data = await api("forecast?" + new URLSearchParams(personParam())).catch(() => ({ lat: null, days: [] }));
+  CAL_FORECAST = { key, at: Date.now(), data };
+  return data;
+}
+const CAL_MONTHS = new Map(); // "<person> <yyyy-mm>" -> month data (activities, days)
+
 async function renderCalendar(params) {
   const mode = params.view === "year" ? "year" : "month";
+  if (mode === "year") return renderCalendarYear(params);
   const today = todayIso();
-  const month = /^\d{4}-\d{2}$/.test(params.month || "") ? params.month : today.slice(0, 7);
-  const year = /^\d{4}$/.test(params.year || "") ? params.year : month.slice(0, 4);
-  const go = (p) => { location.hash = "#/calendar?" + new URLSearchParams({ view: mode, ...p }); };
-
-  let from, to, label, prev, next;
-  if (mode === "month") {
-    const first = month + "-01";
-    const last = addDays(isoDay(new Date(Date.UTC(+month.slice(0, 4), +month.slice(5, 7), 1))), -1);
-    from = mondayOf(first);
-    to = addDays(mondayOf(last), 6);
-    label = `${MONTHS[+month.slice(5, 7) - 1]} ${month.slice(0, 4)}`;
-    const shift = (n) => { const d = new Date(Date.UTC(+month.slice(0, 4), +month.slice(5, 7) - 1 + n, 1)); return isoDay(d).slice(0, 7); };
-    prev = { month: shift(-1) }; next = { month: shift(1) };
-  } else {
-    from = `${year}-01-01`; to = `${year}-12-31`; label = year;
-    prev = { year: String(+year - 1) }; next = { year: String(+year + 1) };
-  }
-  const data = await api("calendar?" + new URLSearchParams({ from, to, ...personParam() }));
-  const byDay = {};
-  for (const a of data.activities) (byDay[a.day] ||= []).push(a);
+  const left = 6 - ((parseDay(today).getUTCDay() + 6) % 7); // days of this week after today
+  const newest = addDays(mondayOf(today), left < 4 ? 7 : 0);
+  const first = TIME_RANGE.first && TIME_RANGE.first < today ? TIME_RANGE.first : today;
+  const oldest = mondayOf(first);
+  const target = /^\d{4}-\d{2}-\d{2}$/.test(params.date || "") ? params.date : null;
+  const anchor = target ? mondayOf(target < first ? first : target > today ? today : target) : null;
+  let top = anchor ? [addDays(anchor, 14), newest].sort()[0] : newest;
+  let bottom = [anchor ? addDays(anchor, -21) : addDays(newest, -7 * (CAL_BATCH - 1)), oldest].sort().reverse()[0];
   const isAll = CURRENT === "all";
+  CAL_MONTHS.clear(); // data may have changed since the last visit
 
-  const nav = `<div class="cal-nav">
-      <button class="icon" data-cal="prev" title="Previous" aria-label="Previous">${ICON_PREV}</button>
-      <b class="cal-label">${esc(label)}</b>
-      <button class="icon" data-cal="next" title="Next" aria-label="Next">${ICON_NEXT}</button>
-      <button class="small" data-cal="today">Today</button>
-    </div>`;
+  const fetchWeeks = (a, b) => api("calendar?" + new URLSearchParams({ from: a, to: addDays(b, 6), chart: "1", ...personParam() }));
+  const [data, fc] = await Promise.all([fetchWeeks(bottom, top), calForecast()]);
+  const wx = Object.fromEntries((fc.days || []).map((d) => [d.date, d]));
+
+  const card = (a) => {
+    const kind = workoutOf(a) ? workoutLabel(workoutOf(a)) : "";
+    const chart = a.tile_chart ? tileChart(a.tile_chart) : "";
+    return `<a class="cal-act" href="#/activity/${a.id}" title="${esc(a.name || typeLabel(a.activity_type))} · ${esc(typeLabel(a.activity_type))}${isAll ? " · " + esc(personLabel(a.person_id)) : ""}">
+      <span class="cal-act-head">${isAll ? `<span class="cal-dot" style="background:${personColor(person(a.person_id))}"></span>` : ""}${typeIcon(a.activity_type, 16)}
+        <span class="cal-act-text">${esc(shortDist(a.distance_m) || shortDur(a.moving_s))}</span>${kind ? `<span class="cal-kind">${esc(kind)}</span>` : ""}</span>
+      <span class="cal-act-chart">${chart.startsWith("<svg") ? chart : `<span class="tile-sport">${typeIcon(a.activity_type, 26)}</span>`}</span></a>`;
+  };
+  // One line each: in a narrow day the long forms give way to short ones (CSS container
+  // queries: `full` / `short`), the full values stay in the tooltip.
+  const both = (full, short) => `<span class="cal-full">${full}</span><span class="cal-short">${short}</span>`;
+  const dayHead = (d, v) => {
+    const parts = [];
+    const k = (n) => (n < 10000 ? `${num(n / 1000, 1)}k` : `${num(n / 1000, 0)}k`);
+    if (v?.steps != null) parts.push(`<span class="cal-m cal-steps" title="${num(v.steps)} steps">${CAL_ICONS.steps()}${both(num(v.steps), k(v.steps))}</span>`);
+    if (v?.floors != null) parts.push(`<span class="cal-m cal-floors" title="${num(v.floors)} floors climbed">${CAL_ICONS.floors()}${num(v.floors)}</span>`);
+    else if (v?.ascent_m != null) parts.push(`<span class="cal-m cal-floors" title="${meters(v.ascent_m)} ascent">${CAL_ICONS.ascent()}${both(meters(v.ascent_m), num(v.ascent_m, 0))}</span>`);
+    if (v?.stress != null) parts.push(`<span class="cal-m cal-stress" title="Average stress ${num(v.stress)}">${CAL_ICONS.stress()}${num(v.stress)}</span>`);
+    if (!parts.length && d >= today && fc.lat != null) {
+      const s = dayLength(fc.lat, d), m = Math.round(s / 60);
+      parts.push(`<span class="cal-m cal-daylight" title="Day length ${hm(s)}">${CAL_ICONS.daylight()}${both(hm(s), `${Math.floor(m / 60)}:${String(m % 60).padStart(2, "0")}`)}</span>`);
+    }
+    const label = d.slice(8) === "01" ? both(`1 ${MONTHS[+d.slice(5, 7) - 1].slice(0, 3)}`, "1") : +d.slice(8);
+    return `<div class="cal-dh"><span class="cal-num">${label}</span>${parts.join("")}</div>`;
+  };
+  const weekHtml = (w, byDay, days) => {
+    const wdays = [...Array(7)].map((_, i) => addDays(w, i));
+    const wacts = wdays.flatMap((d) => byDay[d] || []);
+    const ws = (k) => wacts.reduce((s, a) => s + (a[k] || 0), 0);
+    // ISO week: the week of its Thursday's year; shown in the left margin on wide screens
+    const thu = addDays(w, 3), wk = Math.floor((parseDay(thu) - parseDay(thu.slice(0, 4) + "-01-01")) / (7 * DAY_MS)) + 1;
+    return `<div class="cal-row" data-week="${w}"><div class="cal-wk" aria-hidden="true"><b>W${wk}</b><span>${thu.slice(0, 4)}</span></div>${wdays.map((d) => {
+      const m = +d.slice(5, 7);
+      const weather = d >= today && wx[d] ? calWeather(wx[d]) : "";
+      return `<div class="cal-day ${m % 2 ? "odd" : ""} ${d === today ? "today" : ""} ${d > today ? "future" : ""} ${d === target ? "target" : ""}" data-day="${d}">
+          ${dayHead(d, days[d])}${weather}${(byDay[d] || []).map(card).join("")}</div>`;
+    }).join("")}<div class="cal-week">${wacts.length ? `<b>${hours(ws("moving_s"))}</b><span>${km(ws("distance_m"))}</span><span>${loadUnit(ws("load"))}</span><span class="hint">${num(wacts.length)} activit${wacts.length === 1 ? "y" : "ies"}</span>` : `<span class="hint">–</span>`}</div></div>`;
+  };
+  // weeks a..b (Mondays) of one load, the newest first
+  const rowsHtml = (a, b, d) => {
+    const byDay = {};
+    for (const x of d.activities) (byDay[x.day] ||= []).push(x);
+    const out = [];
+    for (let w = b; w >= a; w = addDays(w, -7)) out.push(weekHtml(w, byDay, d.days || {}));
+    return out.join("");
+  };
+
+  const showSummary = TAB.kpis ?? false;
   const sw = switchHtml("calview", [["month", `${ICON_CAL_MONTH}<span>Month</span>`], ["year", `${ICON_CAL_YEAR}<span>Year</span>`]], mode);
+  view.innerHTML = `${pageHead("Calendar", `${gotoBadge(target)}<button class="badge ${showSummary ? "on" : ""}" data-ckpis>Summary</button>`, sw)}
+    <div class="cal-sticky" data-csticky>
+      <div data-csummary ${showSummary ? "" : "hidden"}></div>
+      <div class="cal-heads">${WEEKDAYS.map((w) => `<div class="cal-head">${w}</div>`).join("")}<div class="cal-head">Week</div></div>
+    </div>
+    <div class="card cal-card">
+      ${top < newest ? `<div class="sentinel" data-csentinel="up">${loaderHtml()}</div>` : ""}
+      <div class="cal-weeks" data-weeks>${rowsHtml(bottom, top, data)}</div>
+      ${bottom > oldest ? `<div class="sentinel" data-csentinel="down">${loaderHtml()}</div>` : ""}
+    </div>`;
+  bindBadges(view.querySelector(".page-head"));
+  bindGotoPanel(view, (d) => {
+    const next = d >= today ? "#/calendar" : "#/calendar?" + new URLSearchParams({ date: d });
+    if (location.hash === next) { document.onclick?.(); window.scrollTo({ top: 0 }); } else location.hash = next;
+  });
+  view.querySelectorAll("[data-switch=calview]").forEach((b) => b.onclick = () => {
+    location.hash = "#/calendar?" + new URLSearchParams(b.dataset.value === "year" ? { view: "year", year: (target || today).slice(0, 4) } : {});
+  });
 
+  // The summary and the weekday names stay under the page header; the summary is the month
+  // of the first week row below them (its Thursday's month).
+  const sticky = view.querySelector("[data-csticky]"), weeks = view.querySelector("[data-weeks]");
+  const head = view.querySelector(".page-head");
+  const placeSticky = () => { sticky.style.top = `${parseFloat(getComputedStyle(head).top) + head.offsetHeight + 6}px`; };
+  placeSticky();
+  let month = null;
+  const activeMonth = () => {
+    const edge = sticky.getBoundingClientRect().bottom + 4;
+    const row = [...weeks.children].find((r) => r.getBoundingClientRect().bottom > edge) || weeks.lastElementChild;
+    return row ? addDays(row.dataset.week, 3).slice(0, 7) : today.slice(0, 7);
+  };
+  const paintSummary = async () => {
+    const box = view.querySelector("[data-csummary]");
+    if (!box || box.hidden) return;
+    const m = activeMonth();
+    if (m === month) return;
+    month = m;
+    const html = await calMonthSummary(m);
+    if (month === m) box.innerHTML = html;
+  };
+  const onScroll = () => {
+    if (!document.body.contains(weeks)) { window.removeEventListener("scroll", onScroll); window.removeEventListener("resize", placeSticky); return; }
+    requestAnimationFrame(() => { paintSummary(); paintWeekNumbers(); });
+  };
+  // week numbers go away under the header at the top and at the bottom edge of the window
+  const paintWeekNumbers = () => {
+    const topEdge = sticky.getBoundingClientRect().bottom, bottomEdge = innerHeight - 8;
+    weeks.querySelectorAll(".cal-wk").forEach((el) => {
+      const r = el.getBoundingClientRect();
+      el.classList.toggle("off", r.top < topEdge || r.bottom > bottomEdge);
+    });
+  };
+  window.addEventListener("scroll", onScroll, { passive: true });
+  window.addEventListener("resize", placeSticky);
+  view.querySelector("[data-ckpis]").onclick = (e) => {
+    const on = !e.currentTarget.classList.contains("on");
+    TAB.kpis = on;
+    e.currentTarget.classList.toggle("on", on);
+    view.querySelector("[data-csummary]").hidden = !on;
+    month = null;
+    paintSummary();
+  };
+
+  // more weeks: older below, newer above (the page keeps its place)
+  const more = async (dir, sentinel, obs) => {
+    if (dir === "down") {
+      const b = addDays(bottom, -7), a = [addDays(bottom, -7 * CAL_BATCH), oldest].sort().reverse()[0];
+      const d = await fetchWeeks(a, b);
+      weeks.insertAdjacentHTML("beforeend", rowsHtml(a, b, d));
+      bottom = a;
+      if (bottom <= oldest) { obs.disconnect(); sentinel.remove(); }
+    } else {
+      const a = addDays(top, 7), b = [addDays(top, 7 * CAL_BATCH), newest].sort()[0];
+      const d = await fetchWeeks(a, b);
+      // keep the row that was on top where it was (the browser may already have done it)
+      const ref = weeks.firstElementChild, y0 = ref.getBoundingClientRect().top;
+      weeks.insertAdjacentHTML("afterbegin", rowsHtml(a, b, d));
+      window.scrollBy(0, ref.getBoundingClientRect().top - y0);
+      top = b;
+      if (top >= newest) { obs.disconnect(); sentinel.remove(); }
+    }
+    paintWeekNumbers();
+  };
+  view.querySelectorAll("[data-csentinel]").forEach((sentinel) => {
+    let busy = false;
+    const obs = new IntersectionObserver(async (entries) => {
+      if (busy || !entries.some((e) => e.isIntersecting)) return;
+      busy = true;
+      try { await more(sentinel.dataset.csentinel, sentinel, obs); } finally { busy = false; }
+      if (sentinel.isConnected) { obs.unobserve(sentinel); obs.observe(sentinel); } // still visible: load again
+    }, { rootMargin: "400px" });
+    observers.push(obs);
+    // after Go to: start loading upwards only once the target is in place
+    if (sentinel.dataset.csentinel === "up") setTimeout(() => obs.observe(sentinel), 300);
+    else obs.observe(sentinel);
+  });
+  await paintSummary(); // its height first, then the place of the target week
+  if (target) {
+    const el = weeks.querySelector(`[data-week="${anchor}"]`);
+    if (el) window.scrollTo({ top: el.getBoundingClientRect().top + scrollY - sticky.getBoundingClientRect().bottom - 8 });
+    month = null;
+    paintSummary();
+  } else window.scrollTo({ top: 0 });
+  paintWeekNumbers();
+}
+
+// Summary of one month: activities and the watch's daily values (one person).
+async function calMonthSummary(m) {
+  const key = `${CURRENT} ${m}`;
+  if (!CAL_MONTHS.has(key)) {
+    const last = isoDay(new Date(Date.UTC(+m.slice(0, 4), +m.slice(5, 7), 0)));
+    CAL_MONTHS.set(key, api("calendar?" + new URLSearchParams({ from: `${m}-01`, to: last, ...personParam() })));
+  }
+  const data = await CAL_MONTHS.get(key);
+  const acts = data.activities, days = Object.values(data.days || {});
+  const sum = (k) => acts.reduce((s, a) => s + (a[k] || 0), 0);
+  const active = new Set(acts.map((a) => a.day)).size;
+  const longest = acts.reduce((best, a) => ((a.distance_m || 0) > (best?.distance_m || 0) ? a : best), null);
+  const of = (k) => days.map((d) => d[k]).filter((v) => v != null);
+  const steps = of("steps"), floors = of("floors"), ascent = of("ascent_m"), stress = of("stress");
+  const total = (xs) => xs.reduce((s, v) => s + v, 0);
+  const items = [
+    ["Activities", num(acts.length), `${num(active)} active days`],
+    ["Distance", km(sum("distance_m")), longest?.distance_m ? `longest ${km(longest.distance_m)}` : ""],
+    ["Moving time", hours(sum("moving_s")), acts.length ? `${dur(sum("moving_s") / acts.length)} on average` : ""],
+    ["Elevation gain", meters(sum("ascent_m"))],
+    ["Training load", loadUnit(sum("load"))],
+  ];
+  if (steps.length) items.push(["Steps", num(total(steps)), `${num(total(steps) / steps.length, 0)} a day`]);
+  if (floors.length) items.push(["Floors", num(total(floors)), `${num(total(floors) / floors.length, 0)} a day`]);
+  else if (ascent.length) items.push(["Ascent, whole days", meters(total(ascent)), `${meters(total(ascent) / ascent.length)} a day`]);
+  if (stress.length) items.push(["Stress", num(total(stress) / stress.length, 0), "average of the days"]);
+  const name = `<div class="stat-item cal-mstat"><span class="cal-mname">${MONTHS[+m.slice(5, 7) - 1]}</span><span class="stat-note">${m.slice(0, 4)}</span></div>`;
+  return statStrip(items).replace('<div class="stat-strip ">', `<div class="stat-strip ">${name}`);
+}
+
+// Year: one small grid per month, each day coloured by moving time; Go to picks the year.
+async function renderCalendarYear(params) {
+  const today = todayIso();
+  const year = /^\d{4}$/.test(params.year || "") ? params.year : today.slice(0, 4);
+  const data = await api("calendar?" + new URLSearchParams({ from: `${year}-01-01`, to: `${year}-12-31`, ...personParam() }));
   const acts = data.activities;
-  const days = new Set(acts.filter((a) => mode === "year" || a.day.startsWith(month)).map((a) => a.day));
-  const inRange = mode === "year" ? acts : acts.filter((a) => a.day.startsWith(month));
-  const rsum = (k) => inRange.reduce((s, a) => s + (a[k] || 0), 0);
+  const days = new Set(acts.map((a) => a.day));
+  const rsum = (k) => acts.reduce((s, a) => s + (a[k] || 0), 0);
   const strip = statStrip([
-    ["Activities", num(inRange.length), `${num(days.size)} active days`],
+    ["Activities", num(acts.length), `${num(days.size)} active days`],
     ["Distance", km(rsum("distance_m"))],
     ["Moving time", hours(rsum("moving_s"))],
     ["Elevation gain", meters(rsum("ascent_m"))],
     ["Training load", loadUnit(rsum("load"))],
   ]);
-
-  let body;
-  if (mode === "month") {
-    const weeks = [];
-    for (let d = from; d <= to; d = addDays(d, 7)) weeks.push(d);
-    const chip = (a) => `<a class="cal-act" href="#/activity/${a.id}" title="${esc(a.name || typeLabel(a.activity_type))} · ${esc(typeLabel(a.activity_type))}${isAll ? " · " + esc(personLabel(a.person_id)) : ""}">
-        ${isAll ? `<span class="cal-dot" style="background:${personColor(person(a.person_id))}"></span>` : ""}${typeIcon(a.activity_type, 16)}
-        <span class="cal-act-text">${esc(shortDist(a.distance_m) || shortDur(a.moving_s))}</span></a>`;
-    body = `<div class="scroll"><div class="cal-month">
-      ${WEEKDAYS.map((w) => `<div class="cal-head">${w}</div>`).join("")}<div class="cal-head">Week</div>
-      ${weeks.map((w) => {
-        const wdays = [...Array(7)].map((_, i) => addDays(w, i));
-        const wacts = wdays.flatMap((d) => byDay[d] || []);
-        const ws = (k) => wacts.reduce((s, a) => s + (a[k] || 0), 0);
-        return wdays.map((d) => `<div class="cal-day ${d.startsWith(month) ? "" : "other"} ${d === today ? "today" : ""}">
-            <span class="cal-num">${+d.slice(8)}</span>${(byDay[d] || []).map(chip).join("")}</div>`).join("")
-          + `<div class="cal-week">${wacts.length ? `<b>${hours(ws("moving_s"))}</b><span>${km(ws("distance_m"))}</span><span>${loadUnit(ws("load"))}</span><span class="hint">${num(wacts.length)} activit${wacts.length === 1 ? "y" : "ies"}</span>` : `<span class="hint">–</span>`}</div>`;
-      }).join("")}
-    </div></div>`;
-  } else {
-    // Year: one small grid per month, each day coloured by moving time.
-    const dayTime = {};
-    for (const a of acts) dayTime[a.day] = (dayTime[a.day] || 0) + (a.moving_s || 0);
-    const level = (s) => (!s ? 0 : s < 1800 ? 1 : s < 3600 ? 2 : s < 7200 ? 3 : 4);
-    body = `<div class="cal-year">${MONTHS.map((name, mi) => {
-      const m = `${year}-${String(mi + 1).padStart(2, "0")}`;
-      const first = m + "-01";
-      const lastDay = new Date(Date.UTC(+year, mi + 1, 0)).getUTCDate();
-      const lead = (parseDay(first).getUTCDay() + 6) % 7;
-      const macts = acts.filter((a) => a.day.startsWith(m));
-      const ms = (k) => macts.reduce((s, a) => s + (a[k] || 0), 0);
-      return `<a class="cal-mini" href="#/calendar?${new URLSearchParams({ view: "month", month: m })}">
-        <div class="cal-mini-head"><b>${name}</b><span class="hint">${macts.length ? `${hours(ms("moving_s"))} · ${km(ms("distance_m"))}` : "–"}</span></div>
-        <div class="cal-mini-grid">${"<span></span>".repeat(lead)}${[...Array(lastDay)].map((_, i) => {
-          const d = `${m}-${String(i + 1).padStart(2, "0")}`;
-          return `<span class="lv${level(dayTime[d])} ${d === today ? "today" : ""}" title="${d}${dayTime[d] ? " · " + dur(dayTime[d]) : ""}"></span>`;
-        }).join("")}</div></a>`;
-    }).join("")}</div>
-    <div class="cal-legend hint">Moving time per day: <span class="lv1"></span> &lt; 30 min <span class="lv2"></span> &lt; 1 h <span class="lv3"></span> &lt; 2 h <span class="lv4"></span> 2 h +</div>`;
-  }
-
-  view.innerHTML = `${pageHead("Calendar", nav, sw)}${strip}<div class="card cal-card">${body}</div>`;
+  const dayTime = {};
+  for (const a of acts) dayTime[a.day] = (dayTime[a.day] || 0) + (a.moving_s || 0);
+  const level = (s) => (!s ? 0 : s < 1800 ? 1 : s < 3600 ? 2 : s < 7200 ? 3 : 4);
+  const body = `<div class="cal-year">${MONTHS.map((name, mi) => {
+    const m = `${year}-${String(mi + 1).padStart(2, "0")}`;
+    const lastDay = new Date(Date.UTC(+year, mi + 1, 0)).getUTCDate();
+    const lead = (parseDay(m + "-01").getUTCDay() + 6) % 7;
+    const macts = acts.filter((a) => a.day.startsWith(m));
+    const ms = (k) => macts.reduce((s, a) => s + (a[k] || 0), 0);
+    const to = `${m}-${String(lastDay).padStart(2, "0")}`;
+    return `<a class="cal-mini" href="#/calendar?${new URLSearchParams({ date: to > today ? today : to })}">
+      <div class="cal-mini-head"><b>${name}</b><span class="hint">${macts.length ? `${hours(ms("moving_s"))} · ${km(ms("distance_m"))}` : "–"}</span></div>
+      <div class="cal-mini-grid">${"<span></span>".repeat(lead)}${[...Array(lastDay)].map((_, i) => {
+        const d = `${m}-${String(i + 1).padStart(2, "0")}`;
+        return `<span class="lv${level(dayTime[d])} ${d === today ? "today" : ""}" title="${d}${dayTime[d] ? " · " + dur(dayTime[d]) : ""}"></span>`;
+      }).join("")}</div></a>`;
+  }).join("")}</div>
+  <div class="cal-legend hint">Moving time per day: <span class="lv1"></span> &lt; 30 min <span class="lv2"></span> &lt; 1 h <span class="lv3"></span> &lt; 2 h <span class="lv4"></span> 2 h +</div>`;
+  const showSummary = TAB.kpis ?? false;
+  const sw = switchHtml("calview", [["month", `${ICON_CAL_MONTH}<span>Month</span>`], ["year", `${ICON_CAL_YEAR}<span>Year</span>`]], "year");
+  view.innerHTML = `${pageHead(`Calendar <span class="hint">${year}</span>`, `${gotoBadge(year === today.slice(0, 4) ? today : `${year}-12-31`)}<button class="badge ${showSummary ? "on" : ""}" data-ckpis>Summary</button>`, sw)}
+    <div data-csummary ${showSummary ? "" : "hidden"}>${strip}</div><div class="card cal-card">${body}</div>`;
+  bindBadges(view.querySelector(".page-head"));
+  bindGotoPanel(view, (d) => { location.hash = "#/calendar?" + new URLSearchParams({ view: "year", year: d.slice(0, 4) }); });
   view.querySelectorAll("[data-switch=calview]").forEach((b) => b.onclick = () => {
-    location.hash = "#/calendar?" + new URLSearchParams(b.dataset.value === "year" ? { view: "year", year: month.slice(0, 4) } : { view: "month", month: mode === "year" ? `${year}-${today.slice(5, 7)}` : month });
+    location.hash = "#/calendar?" + new URLSearchParams(b.dataset.value === "year" ? { view: "year", year } : { date: year === today.slice(0, 4) ? today : `${year}-12-31` });
   });
-  view.querySelector("[data-cal=prev]").onclick = () => go(prev);
-  view.querySelector("[data-cal=next]").onclick = () => go(next);
-  view.querySelector("[data-cal=today]").onclick = () => go(mode === "month" ? { month: today.slice(0, 7) } : { year: today.slice(0, 4) });
+  view.querySelector("[data-ckpis]").onclick = (e) => {
+    const on = !e.currentTarget.classList.contains("on");
+    TAB.kpis = on;
+    e.currentTarget.classList.toggle("on", on);
+    view.querySelector("[data-csummary]").hidden = !on;
+  };
 }
 
 // ---- Fitness ----------------------------------------------------------------------------
@@ -167,10 +381,8 @@ const fitnessOptions = () => ({ ...FITNESS_OPTIONS, ...(UI.data["fitness-options
 async function renderFitness(params) {
   const shown = fitnessShown();
   const opt = fitnessOptions();
-  const q = { person: CURRENT };
-  if (params.from) q.from = params.from;
-  if (params.to) q.to = params.to;
-  const data = await api("fitness?" + new URLSearchParams(q));
+  const { types, workouts, ...time } = filterQuery(params); // Fitness: the time filter only
+  const data = await api("fitness?" + new URLSearchParams({ person: CURRENT, ...time }));
   const s = data.series;
   const toggles = `<div class="switch" role="group">${FITNESS_SECTIONS.map(([k, l, icon]) =>
     `<button class="${shown.has(k) ? "on" : ""}" data-fsec="${k}" aria-pressed="${shown.has(k)}">${icon}<span>${l}</span></button>`).join("")}</div>`;
@@ -249,7 +461,8 @@ function fitnessSeries(s, { marks = [], opt = FITNESS_OPTIONS } = {}) {
   const ctl = vals("ctl"), atl = vals("atl"), tsb = vals("tsb");
   const zc = (zones, v) => zones.find(([lo, hi]) => v >= lo && v < hi)?.[3] || COLORS.neutral;
   const tag = (label, values, i, color, d = 0, sign = true, tip = "") =>
-    ({ label, value: values[i], i, values, color, text: sign ? signed(values[i], d) : num(values[i], d), tip });
+    // the latest value marks nothing on hover: its point is the end of the line, next to the pill
+    ({ label, value: values[i], i, values, color, text: sign ? signed(values[i], d) : num(values[i], d), tip, mark: i !== last });
   const fresh = extreme(tsb, true), tired = extreme(tsb, false);
   return [
     { key: "fitness", label: "Fitness", title: opt.fatigue === "off" ? "Fitness" : "Fitness and fatigue", yTitle: "Training load", unit: "TSS/d", dec: 0, height: 396,
@@ -342,7 +555,8 @@ async function renderStats(params) {
 }
 
 async function renderTotals(params, sw) {
-  const oneYear = params.from && params.to && params.from.slice(0, 4) === params.to.slice(0, 4);
+  const oneYear = (params.from && params.to && params.from.slice(0, 4) === params.to.slice(0, 4)) || yearList(params).length === 1
+    || ["1m", "3m", "6m", "ytd"].includes(params.last);
   const by = ["year", "month", "week"].includes(params.by) ? params.by : (oneYear ? "month" : "year");
   const metric = STAT_METRICS.some(([k]) => k === params.metric) ? params.metric : "moving_s";
   const q = { person: CURRENT, by, ...filterQuery(params) };
@@ -375,7 +589,7 @@ async function renderTotals(params, sw) {
     <div class="two-col wide-first">
       <div class="card"><h3>Totals per ${by}</h3><div class="scroll"><table class="data">
         <thead><tr><th>${by[0].toUpperCase() + by.slice(1)}</th><th class="num">Activities</th><th class="num">Active days</th><th class="num">Distance</th><th class="num">Moving time</th><th class="num">Elevation gain</th><th class="num">Load</th></tr></thead>
-        <tbody>${[...rows].reverse().map((r) => `<tr><td>${by === "year" ? `<a href="#/stats?${new URLSearchParams({ ...filterQuery(params), from: r.period + "-01-01", to: r.period + "-12-31", by: "month", metric })}">${r.period}</a>` : esc(periodLabel(r.period))}</td>
+        <tbody>${[...rows].reverse().map((r) => `<tr><td>${by === "year" ? `<a href="#/stats?${new URLSearchParams({ ...filterQuery(params), from: "", to: "", last: "", years: r.period, by: "month", metric })}">${r.period}</a>` : esc(periodLabel(r.period))}</td>
           <td class="num">${num(r.count)}</td><td class="num">${num(r.active_days)}</td><td class="num">${km(r.distance_m)}</td><td class="num">${hours(r.moving_s)}</td><td class="num">${meters(r.ascent_m)}</td><td class="num">${loadUnit(r.load)}</td></tr>`).join("")}</tbody></table></div></div>
       <div class="card"><h3>By activity group</h3>${hint("Moving time")}
         ${data.groups.map((g) => `<div class="bar-row"><span class="bar-label tb-activity-name">${groupIcon(g.category)}<span>${esc(groupLabel(g.category))}</span></span><span class="bar"><span style="width:${((g.moving_s || 0) / gmax) * 100}%;background:var(--accent)"></span></span><span class="bar-value">${hours(g.moving_s)}</span></div>`).join("") || hint("–")}
@@ -390,9 +604,9 @@ async function renderRecords(params, sw) {
   const kind = ["pace", "power", "hr"].includes(params.kind) ? params.kind : "pace";
   const fq = filterQuery(params);
   if (kind === "pace") fq.types = "g:run";
-  const filtered = Boolean(params.from || params.to);
+  const filtered = timeActive(params);
   const q = (f) => api("stats/records?" + new URLSearchParams({ person: CURRENT, kind, ...f }));
-  const [data, all] = await Promise.all([q(fq), filtered ? q({ ...fq, from: "", to: "" }) : null]);
+  const [data, all] = await Promise.all([q(fq), filtered ? q({ ...fq, from: "", to: "", last: "", years: "" }) : null]);
   const labels = RECORD_LABELS[kind];
   const fmt = (r) => (kind === "pace"
     ? `${dur(r.value)} <span class="hint">${pace(r.key / r.value)}</span>`

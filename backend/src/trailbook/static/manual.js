@@ -11,13 +11,15 @@ const MANUAL_TABS = [
   ["effect", "Training effect", svg(`<path d="M3 12h4l3-8 4 16 3-8h4"/>`)],
   ["weather", "Weather help", svg(`<path d="M3 8h10a3 3 0 1 0-3-3M3 12h15a3 3 0 1 1-3 3M3 16h7"/>`)],
   ["fitness", "Fitness", svg(`<path d="M3 20h18"/><path d="M4 16l5-5 4 3 7-7"/><path d="M15 7h5v5"/>`)],
+  ["charts", "Activity charts", svg(`<rect x="3" y="4" width="18" height="16" rx="3"/><path d="M7 16v-3M10.5 16v-6M14 16v-4M17.5 16v-7"/>`)],
 ];
 
 async function renderManual(tab) {
   if (tab === "kinds") tab = "types"; // old link
   tab = MANUAL_TABS.some(([k]) => k === tab) ? tab : "types";
   MAN_MISSING.clear();
-  const sections = tab === "effect" ? manualEffect() : tab === "weather" ? manualWeather() : tab === "fitness" ? manualFitness() : manualTypes();
+  const sections = tab === "effect" ? manualEffect() : tab === "weather" ? manualWeather() : tab === "fitness" ? manualFitness()
+    : tab === "charts" ? manualCharts() : manualTypes();
   const cols = sections.length <= 4 ? sections.length : Math.ceil(sections.length / 2);
   view.innerHTML = `${pageHead("Manual", "", switchHtml("tab", MANUAL_TABS.map(([k, l, icon]) => [k, `${icon}<span>${l}</span>`]), tab))}
     <div class="man">
@@ -441,6 +443,86 @@ function manualFitness() {
         ["Threshold HR, FTP", "The heart rate and the power you can hold for about an hour."],
         ["HR max, resting HR", "Your highest and your lowest heart rate; the range the heart rate load is measured in."],
         ["TRIMP", "Training impulse: time weighted by how high the heart rate is."],
+      ]),
+    },
+  ];
+}
+
+// Activity charts: the small charts of Activities › Charts. The numbers come from the server
+// (/api/types: tile_chart_rules, the values tilechart.py draws with) and from TILE_CLIMB
+// (preview.js) for the climbs on Hills tiles.
+function manualCharts() {
+  const R = manRules(TYPES?.tile_chart_rules);
+  const share = (k) => R.block_share?.[k] ?? R.default_share;
+  const part = (x) => `1/${num(Math.round(1 / x))} of the time`;
+  return [
+    {
+      id: "what", title: "What the tiles show", sum: "One small chart per activity",
+      body: mTiles([
+        ["Where", "Activities › Charts: smaller tiles than Tiles, one more per row, a chart instead of the map."],
+        ["One kind per type", "The chart follows the activity's training type: what matters for that kind of session."],
+        ["No numbers", "Only the shape: blocks, a profile or the route. The numbers are on the activity page."],
+        ["Colours", "The activity charts' colours: heart rate zones green to red, altitude green, speed blue."],
+      ]),
+    },
+    {
+      id: "which", title: "Which chart", sum: "Per training type",
+      body: `<p>The first chart from the left the activity has the data for; without any, speed over time.</p>
+        ${mTable(["Training type", "Chart", "Without the data"], [
+          [mType("intervals"), `Heart rate blocks over the ${mLink("intervals", "interval sections")}.`, "Heart rate blocks over the phases."],
+          [`<b>${mTypes(["easy", "tempo", "race"])}</b>`, `Heart rate blocks over the ${mLink("phases", "phases")}, each at least ${part(share("easy"))}.`, "Speed over time."],
+          [mType("long"), `The same, each phase at least ${part(share("long"))}: a long session shows more of them.`, "Speed over time."],
+          [`<b>${mTypes(["match", "training", "recreation"])}</b>`, `Heart rate blocks over the phases, each at least ${part(R.default_share)}.`, "Speed over time."],
+          [mType("hills"), `The ${mLink("profile", "altitude profile")}, the climbs darker.`, "Speed over time."],
+          [`<b>${esc(workoutLabel("commute"))}, no type</b>`, `The ${mLink("profile", "route alone")} in heart rate zone colours.`, "Heart rate blocks, else speed."],
+        ], ["fit", "*", "fit"])}`,
+    },
+    {
+      id: "blocks", title: "Heart rate blocks", sum: "Width, height, colour",
+      body: `${mTiles([
+          ["Width", "The block's time; the blocks together are the whole activity, side by side."],
+          ["Height", "Its average heart rate between your resting HR (bottom) and HR max (top)."],
+          ["Colour", "The zone of that average: Garmin's heart rate zones of the activity."],
+          ["Dashed line", "The activity's average heart rate on the same scale."],
+        ])}
+        <p>Averages are weighted by time; a recording gap counts at most ${num(R.max_gap_s)} s. HR max is the top of Garmin's zones, else the activity's maximum.</p>
+        ${mPanel("Without heart rate")}
+        <p>A bike computer with a power meter and no strap: the same blocks from power. Height from 0 W to the top of Garmin's power zones (an open last zone ends ${mPct((R.open_zone ?? 1) - 1)} above its start), colour = the power zone in the heart rate colours.</p>`,
+    },
+    {
+      id: "phases", title: "How the phases are found", sum: "Stretches of one zone",
+      body: `<p>Easy, Tempo, Race, Long and the games are split into stretches the heart rate spent in one zone — warm-up, the steady part, a hard finish — not into laps.</p>
+        ${mRows([
+          ["Steps", `The heart rate averaged over ${num(R.step_s)} s steps.`],
+          ["Zone", `Each step's zone. A step changes the zone only when it is ${num(R.hysteresis_bpm)} bpm past the limit (from power: ${mPct(R.hysteresis_power ?? 0)} of the scale), so a heart rate hovering at a limit stays one block.`],
+          ["Join", "Neighbouring steps in the same zone form one block."],
+          ["Merge", `The shortest block under the minimum joins the neighbour closer in heart rate, again and again. Minimum: the share of the time from ${mLink("which", "Which chart")}, at least ${mMin(R.min_block_s)}.`],
+        ], ["Step", "What happens"])}`,
+    },
+    {
+      id: "intervals", title: "Interval sections", sum: "The lines from the activity page",
+      body: `<p>An Intervals tile has a block per section between the interval lines on the activity's charts: work, recovery, work… — so the hard bouts stand out as tall red blocks.</p>
+        ${mTable(["Lines", "From"], [
+          ["<b>Yours</b>", "Lines you moved or saved on the activity page."],
+          ["<b>Detected</b>", `Found the same way as the training type Intervals (<button type="button" class="man-link" data-goto-tab="types">Training types</button> › Intervals in detail).`],
+          ["<b>None found</b>", "The phases, like an Easy session."],
+        ], ["fit", "*"])}`,
+    },
+    {
+      id: "profile", title: "Profile, route, speed", sum: "Hills, Commute, the fallback",
+      body: mTable(["Chart", "How it is drawn"], [
+        ["<b>Altitude profile</b>", `${num(R.points)} points along the distance (else the time), each the mean altitude there. A climb is a rise between turning points of at least ${num(TILE_CLIMB.min_m)} m and ${mPct(TILE_CLIMB.share)} of the profile's height; it is darker.`],
+        ["<b>Route alone</b>", `About ${num(R.track_points)} points of the route, north up, kept in proportion. Each piece in the zone of the heart rate there; below zone 1 and without heart rate in the zone 1 colour.`],
+        ["<b>Speed</b>", `${num(R.points)} points over the time, each the mean speed there.`],
+      ], ["fit", "*"]),
+    },
+    {
+      id: "limits", title: "Limits", sum: "What the shape does not say",
+      body: mTiles([
+        ["Zones of the watch", "The zones Garmin set for the activity; another watch or new zones can colour the same effort differently."],
+        ["Phases, not laps", "Blocks follow the heart rate, not the laps you pressed."],
+        ["Heart rate lags", "Short sprints show little: the heart rate rises after the effort."],
+        ["Computed on demand", "From the stored streams when the tiles load; nothing is saved."],
       ]),
     },
   ];

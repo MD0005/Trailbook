@@ -240,6 +240,65 @@ Rows of 1, 2, 5 or 10 km. They are built from 1 km laps:
 Grouped rows: distance and time are sums, speed is distance ÷ time, the averages are weighted
 by time. Device laps of another kind (manual laps, workout steps) are the choice *Device laps*.
 
+## Activity charts (Activities › Charts)
+
+Shown in Manual › Activity charts; the numbers come from `/api/types` (`tile_chart_rules`) and
+`TILE_CLIMB` in `preview.js`. Code: `tilechart.py`, drawn by `tileChart()` in `preview.js`.
+
+One small chart per tile, chosen by the training type; the first one the activity has the data
+for, else speed over time:
+
+- **Intervals** — heart rate blocks over the interval sections (the person's saved lines, else
+  the detected ones); none: the phases.
+- **Easy, Tempo, Race** (1/12 of the time), **Long** (1/20), **games** (1/12) — heart rate
+  blocks over the phases, each at least that share of the time and at least 60 s.
+- **Hills** — the altitude profile (80 points along the distance), climbs darker: a rise
+  between turning points of at least 5 m and 12 % of the profile's height.
+- **Commute, no type** — the route alone (~160 points, north up), each piece in the heart rate
+  zone there; no route: heart rate blocks.
+
+Blocks: width = time, height = average heart rate between resting HR and HR max (the top of
+Garmin's zones, else the activity's max), colour = the zone of that average; a dashed line at
+the activity's average. Averages are weighted by time, gaps count at most 30 s. Without heart
+rate the same from power: 0 W to the top of Garmin's power zones (an open last zone ends 10 %
+above its start).
+
+Phases: 15 s means of the heart rate; the zone changes only 3 bpm past a limit (power: 3 % of
+the scale); neighbours in one zone are joined; the shortest block under the minimum joins the
+neighbour closer in heart rate, until none is shorter.
+
+## Calendar: steps, floors, stress, day length
+
+Code: `fitfile.parse_monitoring`, `analysis.daily_values`, `dayLength()` in `training.js`,
+`weather.forecast`.
+
+The day values are for the whole day, not only the activities. They come from Garmin
+Connect's daily summary (fetched with the Garmin downloads: steps, floors ascended, average
+stress as Garmin shows them). Days Garmin has no summary for take them from the watch's
+monitoring files (export folder or uploads), computed like this:
+
+- **Steps** — the watch keeps a running total per kind (walking, running) that starts again
+  at local midnight; the day's value is the largest total of each kind, added up.
+- **Floors** — the day's ascent (an undocumented running total in mm, also reset at midnight)
+  ÷ 3.048 m (10 ft), rounded down. No floors but an ascent: the ascent in metres.
+- **Stress** — the average of the day's readings (one a minute, 0–100); readings the watch
+  marks as not valid (during activities, off the wrist) are left out.
+- A total written exactly at midnight belongs to the day that ends. Local days use the file's
+  own time zone. Several files of one day: running totals take the largest value, stress
+  readings are pooled.
+
+From today on, days without these values show:
+
+- **Day length** — sunrise to sunset at the latitude of the latest activity's start: the sun's
+  declination of the day, −23.44° × cos(360°/365 × (day of year + 10)), and the sun 0.833°
+  below the horizon (refraction and its radius). Within a few minutes of the published times.
+- **Forecast** — Open-Meteo daily forecast (16 days) at the same start, rounded to 0.01°:
+  sky of the day, lowest–highest temperature, rain, strongest wind and its main direction.
+  Kept for 3 hours.
+
+Month summary: sums of the month's activities; steps and floors as totals with the average of
+the days that have them; stress as the average of the days' averages.
+
 ## Fitness: training load, fitness, fatigue, form
 
 Shown in Manual › Fitness; the constants come from `/api/types` (`fitness_rules`), the zones
@@ -267,6 +326,11 @@ Every sport. The first method the activity has data for; duration = moving time.
 - Fitness (CTL) += (load − CTL) × (1 − e^(−1/42)) ≈ 2,35 %; Fatigue (ATL) the same with 7 days
   ≈ 13,31 %. Both start at 0 on the first day with a load.
 - Form (TSB) = yesterday's CTL − yesterday's ATL. Ramp rate = CTL − CTL 7 days ago.
+- The activity page's **Load** tile shows Fatigue (ATL) at the end of the activity's day and
+  how much that day raised it (ATL − the day before's ATL), next to Garmin's training load and
+  the Body Battery change (both from Garmin Connect, not computed here).
+- The model is Banister's impulse-response model (fitness and fatigue as decaying sums of
+  training load), in the 42 / 7-day form used by performance-management charts.
 - Form zones: Transition > 25, Fresh 5 to 25, Grey zone −10 to 5, Optimal −30 to −10,
   High risk < −30. Ramp: Too fast > 8, Building 0 to 8, Losing fitness < 0.
 
@@ -302,3 +366,15 @@ time = UTC+2.
 Limits: countries without summer time or with other rules east of 45° get the plain
 longitude estimate; places far from their time zone's meridian (e.g. Spain) can be an hour
 off. The time can be corrected only by editing the file today.
+
+## Explorer tiles in a country or region (Map › Summary)
+
+- **All tiles** of a country or region: every tile of the chosen size whose **centre** lies
+  inside its boundary (holes such as enclaves are left out). Counted row by row in the browser.
+- **Visited**: those of them that are among your visited tiles (same filters as the map).
+- **Share** = visited ÷ all × 100, two decimals below 10 %, one above; below 0,01 % it shows
+  "< 0,01 %".
+- Boundaries: Natural Earth 1:10m, simplified to about 0,5 km. Along a border a tile can fall
+  on either side, so the count of all tiles can differ from an exact boundary by about 1 %
+  (more in small regions with long borders). Example: Poland has about 139 000 explorer tiles
+  (zoom 14).

@@ -41,9 +41,14 @@ UNASSIGNED = "_unassigned"
 
 # Files read in folders, ZIPs and uploads: FIT, GPX and TCX, also gzipped (Strava exports).
 ACTIVITY_SUFFIXES = trackfile.ACTIVITY_SUFFIXES
-# A GPX/TCX/manual activity that starts this close to one the person already has is the
-# same one (e.g. a Strava copy of a watch activity imported from Garmin).
+# Two activities of one person that start this close are the same activity (e.g. a Strava
+# copy of a watch activity). Used for imports and for Garmin Connect matching.
 SAME_START_S = 120
+# Activities that do not come from a FIT file: GPX/TCX files and Strava's manual activities
+# (see trackfile and strava: their fit_uid starts with these). They are copies with less
+# data, so a FIT recording of the same activity replaces them, whichever arrives first.
+COPY_UID_PREFIXES = ("gpx:", "tcx:", "strava:")
+COPY_UID_SQL = "(fit_uid LIKE 'gpx:%' OR fit_uid LIKE 'tcx:%' OR fit_uid LIKE 'strava:%')"
 
 # Statuses that describe a finished outcome for a file.
 DONE_STATUSES = ("imported", "skipped", "duplicate")
@@ -491,30 +496,64 @@ def import_file(
 ) -> str:
     """Import one file row. Returns the resulting status."""
     status = _import_file(conn, root, row, uploads_dir)
+    if status == "duplicate":
+        # A Strava copy of an activity we already have still brings its title and text.
+        csv_row = _strava_row(row, root, uploads_dir)
+        if csv_row is not None:
+            apply_strava_text(conn, row["id"], csv_row)
     if status in ("imported", "duplicate"):
         apply_connect_name(conn, row["id"])
     return status
 
 
+def apply_strava_text(conn: sqlite3.Connection, file_id: int, csv_row: strava.Row) -> None:
+    """Title and description from Strava's activities.csv for the file's activity. The
+    title wins over a Garmin Connect title; the user's own name and an existing
+    description are kept."""
+    conn.execute(
+        """UPDATE activities SET
+               name = CASE WHEN name_overridden = 0 AND ? IS NOT NULL THEN ? ELSE name END,
+               name_source = CASE WHEN name_overridden = 0 AND ? IS NOT NULL THEN 'file'
+                                  ELSE name_source END,
+               description = COALESCE(description, ?)
+           WHERE id = (SELECT activity_id FROM files WHERE id = ?)""",
+        (csv_row.title, csv_row.title, csv_row.title, csv_row.description, file_id),
+    )
+
+
 def apply_connect_name(conn: sqlite3.Connection, file_id: int) -> None:
-    """Give the file's activity its Garmin Connect title, when the file came from Garmin.
+    """Give the file's activity its Garmin Connect title (see `apply_connect_title`)."""
+    row = conn.execute("SELECT activity_id FROM files WHERE id = ?", (file_id,)).fetchone()
+    if row is not None and row[0] is not None:
+        apply_connect_title(conn, row[0])
+
+
+def apply_connect_title(conn: sqlite3.Connection, activity_id: int) -> None:
+    """Give an activity its Garmin Connect title, when it is linked to a Connect activity
+    (downloaded from Garmin, or matched by its start).
 
     FIT files carry no title, so activities are unnamed (the UI shows the type) until a
     Connect title arrives — also later, when Garmin delivers an activity already imported
-    from a folder (a duplicate). A name the user set is kept.
+    from a folder (a duplicate). A name the user set and a title from the activity file or
+    Strava's activities.csv are kept.
     """
+    hit = conn.execute(
+        """SELECT g.name FROM garmin_activities g
+           WHERE COALESCE(g.name, '') != ''
+             AND (g.trailbook_id = ? OR EXISTS (
+                   SELECT 1 FROM files f
+                   WHERE f.activity_id = ? AND f.person_id = g.person_id
+                     AND f.rel_path = g.file_rel))
+           ORDER BY g.activity_id LIMIT 1""",
+        (activity_id, activity_id),
+    ).fetchone()
+    if hit is None:
+        return
     conn.execute(
-        """UPDATE activities SET name = (
-               SELECT g.name FROM files f
-               JOIN garmin_activities g ON g.person_id = f.person_id AND g.file_rel = f.rel_path
-               WHERE f.id = ? AND COALESCE(g.name, '') != '')
-           WHERE id = (SELECT activity_id FROM files WHERE id = ?)
-             AND name_overridden = 0
-             AND EXISTS (
-               SELECT 1 FROM files f
-               JOIN garmin_activities g ON g.person_id = f.person_id AND g.file_rel = f.rel_path
-               WHERE f.id = ? AND COALESCE(g.name, '') != '')""",
-        (file_id, file_id, file_id),
+        """UPDATE activities SET name = ?, name_source = 'garmin'
+           WHERE id = ? AND name_overridden = 0
+             AND (name IS NULL OR name_source IS NULL OR name_source = 'garmin')""",
+        (hit[0], activity_id),
     )
 
 
@@ -560,6 +599,8 @@ def _import_file(
         )
 
     file_type = fid.type if fid else None
+    if file_type in fitfile.FILE_TYPES_MONITORING:
+        _store_monitoring(conn, file_id, data)
     if file_type is not None and file_type != fitfile.FILE_TYPE_ACTIVITY:
         return _set_status(
             conn,
@@ -588,14 +629,27 @@ def _import_file(
             activity_id=existing["id"],
         )  # fmt: skip
 
+    replace_id = existing["id"] if existing else None
+    if replace_id is None:
+        # A GPX/TCX or manual copy of this recording (e.g. from Strava) is replaced by it.
+        replace_id = same_start(conn, person_id, parsed.start_time, copies_only=True)
+
     if csv_row is not None:
         strava.apply(parsed, csv_row, from_file_only=False)
     conn.execute("BEGIN")
     try:
         activity_id = _store_activity(
-            conn, person_id, parsed, existing["id"] if existing else None,
-            fid.serial_number if fid else None,
-        )  # fmt: skip
+            conn, person_id, parsed, replace_id, fid.serial_number if fid else None
+        )
+        # This file owns the activity now; the files of a replaced copy are duplicates.
+        conn.execute(
+            """UPDATE files
+               SET status = CASE WHEN status = 'imported' THEN 'duplicate' ELSE status END,
+                   prev_status = CASE WHEN prev_status = 'imported' THEN 'duplicate'
+                                      ELSE prev_status END
+               WHERE activity_id = ? AND id != ?""",
+            (activity_id, file_id),
+        )
         _set_status(
             conn, file_id, "imported", sha=sha, fid=fid, fit_uid=parsed.fit_uid,
             activity_id=activity_id,
@@ -605,6 +659,27 @@ def _import_file(
         conn.execute("ROLLBACK")
         raise
     return "imported"
+
+
+def _store_monitoring(conn: sqlite3.Connection, file_id: int, data: bytes) -> None:
+    """Daily values of a monitoring file (steps, ascent, stress) for the Calendar; they belong
+    to the file's person. The file itself stays `skipped` (not an activity); a file that
+    cannot be read adds nothing."""
+    try:
+        parts = fitfile.parse_monitoring(data)
+    except Exception:  # the SDK raises a variety of exception types
+        parts = {}
+    conn.execute("BEGIN")
+    try:
+        conn.execute("DELETE FROM daily_parts WHERE file_id = ?", (file_id,))
+        conn.executemany(
+            "INSERT INTO daily_parts (file_id, day, metric, value, n) VALUES (?, ?, ?, ?, ?)",
+            [(file_id, d, m, v, n) for (d, m), (v, n) in parts.items()],
+        )
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
 
 
 def _strava_row(row: sqlite3.Row, root: Path | None, uploads_dir: Path | None) -> strava.Row | None:
@@ -658,18 +733,11 @@ def _store_other(
             activity_id=existing["id"],
         )  # fmt: skip
     if existing is None:
-        start = parsed.start_time.astimezone(UTC)
-        same = conn.execute(
-            """SELECT id FROM activities WHERE person_id = ? AND start_time_utc BETWEEN ? AND ?
-               ORDER BY id LIMIT 1""",
-            (person_id, _iso(start - timedelta(seconds=SAME_START_S)),
-             _iso(start + timedelta(seconds=SAME_START_S))),
-        ).fetchone()  # fmt: skip
+        same = same_start(conn, person_id, parsed.start_time)
         if same is not None:
             return _set_status(
-                conn, file_id, "duplicate", sha=sha, fit_uid=parsed.fit_uid,
-                activity_id=same["id"],
-            )  # fmt: skip
+                conn, file_id, "duplicate", sha=sha, fit_uid=parsed.fit_uid, activity_id=same
+            )
 
     conn.execute("BEGIN")
     try:
@@ -682,6 +750,23 @@ def _store_other(
         conn.execute("ROLLBACK")
         raise
     return "imported"
+
+
+def same_start(
+    conn: sqlite3.Connection, person_id: str, start: datetime, *, copies_only: bool = False
+) -> int | None:
+    """The person's activity starting within SAME_START_S of `start` (the nearest one);
+    `copies_only`: only GPX/TCX files and Strava's manual activities."""
+    start = start.astimezone(UTC)
+    row = conn.execute(
+        f"""SELECT id FROM activities
+            WHERE person_id = ? AND start_time_utc BETWEEN ? AND ?
+                  {"AND " + COPY_UID_SQL if copies_only else ""}
+            ORDER BY ABS(julianday(start_time_utc) - julianday(?)), id LIMIT 1""",
+        (person_id, _iso(start - timedelta(seconds=SAME_START_S)),
+         _iso(start + timedelta(seconds=SAME_START_S)), _iso(start)),
+    ).fetchone()  # fmt: skip
+    return row[0] if row else None
 
 
 def _iso(t: datetime) -> str:
@@ -858,6 +943,7 @@ def _store_activity(
         # FIT has no title (a Garmin Connect title is set after import); GPX/TCX files
         # and Strava exports may give one.
         "name": p.title,
+        "name_source": "file" if p.title else None,
         "description": p.description,
         "device": p.device,
         "importer_version": IMPORTER_VERSION,
@@ -886,8 +972,13 @@ def _store_activity(
         if current["type_overridden"]:
             values.pop("category")
             values.pop("activity_type")
-        if current["name_overridden"]:
+        if current["name_overridden"] or p.title is None:
+            # A file without a title (FIT) keeps the name the activity has: the user's, a
+            # Strava title of the copy it replaces, or the Garmin Connect title.
             values.pop("name")
+            values.pop("name_source")
+        if p.description is None:
+            values.pop("description")
         assignments = ", ".join(f"{c} = ?" for c in values)
         conn.execute(
             f"UPDATE activities SET {assignments} WHERE id = ?", [*values.values(), activity_id]

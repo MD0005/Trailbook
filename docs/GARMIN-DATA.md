@@ -40,7 +40,9 @@ Notes that apply to everything:
 - The Garmin bulk export (account data request) also contains JSON files with many of the
   API values (daily summaries, sleep, metrics, weight, hydration) — a third way to load the
   lifestyle history without calling the API day by day.
-- The wellness endpoints are not yet tested with the personal API key (SPEC §3a, "Later").
+- The daily summary (`/usersummary-service/v2/dailysummaries`, steps, floors, stress, resting HR,
+  Body Battery, calories, intensity minutes) works with the personal API key and is stored
+  (`garmin_days`, SPEC §3a); the other wellness endpoints are not tested yet.
   Fields marked *undocumented* are written by newer watches in FIT, but are not part of the
   public FIT profile; values may change between firmware versions.
 

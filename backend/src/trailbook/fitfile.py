@@ -530,6 +530,67 @@ def parse_watch_thresholds(data: bytes) -> dict[str, float | None]:
     return watch_thresholds(messages)
 
 
+# ---- daily monitoring (steps, floors, stress) ---------------------------------------------
+
+# Undocumented fields of the `monitoring` message (Forerunner 965 and similar): the ascent and
+# descent of the day so far, in mm, reset at local midnight.
+MONITORING_ASCENT_MM = 35
+MONITORING_DESCENT_MM = 36
+FILE_TYPES_MONITORING = (15, 32)  # monitoring_a, monitoring_b
+
+
+def parse_monitoring(data: bytes) -> dict[tuple[str, str], tuple[float, int]]:
+    """Daily values of a monitoring FIT file: {(local day, metric): (value, n)}.
+
+    Metrics: `steps:<activity type>` and `ascent_mm` / `descent_mm` are running totals of the
+    day (the file's largest value counts; a later file of the same day has a larger one);
+    `stress` is the sum of the valid stress readings (0-100, one a minute) with their count n,
+    so files add up to the day's average. Days are local (the file's monitoring_info offset).
+    A total written exactly at midnight belongs to the day that just ended.
+    """
+    messages, _errors = Decoder(Stream.from_byte_array(bytearray(data))).read(
+        convert_datetimes_to_dates=False, expand_components=False, merge_heart_rates=False
+    )
+    infos = messages.get("monitoring_info_mesgs") or []
+    info = infos[0] if infos else {}
+    if not isinstance(info.get("local_timestamp"), int) or not isinstance(
+        info.get("timestamp"), int
+    ):
+        return {}
+    offset = info["local_timestamp"] - info["timestamp"]
+
+    def day(fit_ts: int) -> str:
+        return datetime.fromtimestamp(fit_ts + FIT_EPOCH_S + offset, UTC).strftime("%Y-%m-%d")
+
+    out: dict[tuple[str, str], tuple[float, int]] = {}
+
+    def keep_max(key: tuple[str, str], value) -> None:
+        if isinstance(value, (int, float)) and value >= 0:
+            old = out.get(key)
+            if old is None or value > old[0]:
+                out[key] = (float(value), 1)
+
+    last: int | None = None
+    for m in messages.get("monitoring_mesgs") or []:
+        if isinstance(m.get("timestamp"), int):
+            last = m["timestamp"]
+        elif isinstance(m.get("timestamp_16"), int) and last is not None:
+            last += (m["timestamp_16"] - last) & 0xFFFF
+        if last is None:
+            continue
+        d = day(last - 1)  # running totals: midnight closes the previous day
+        if "steps" in m and m.get("activity_type") is not None:
+            keep_max((d, f"steps:{m['activity_type']}"), m["steps"])
+        keep_max((d, "ascent_mm"), m.get(MONITORING_ASCENT_MM))
+        keep_max((d, "descent_mm"), m.get(MONITORING_DESCENT_MM))
+    for s in messages.get("stress_level_mesgs") or []:
+        t, v = s.get("stress_level_time"), s.get("stress_level_value")
+        if isinstance(t, int) and isinstance(v, (int, float)) and 0 <= v <= 100:
+            total, n = out.get((day(t), "stress"), (0.0, 0))
+            out[(day(t), "stress")] = (total + v, n + 1)
+    return out
+
+
 def _fit_uid(file_id: dict, start_time: datetime, sport: str | None) -> str:
     created = file_id.get("time_created")
     serial = file_id.get("serial_number")

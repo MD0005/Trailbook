@@ -32,6 +32,14 @@ def make_fit(
     return header + b"\x00\x00" + body + b"\x00\x00"
 
 
+@pytest.fixture(autouse=True)
+def _no_background_surface(monkeypatch):
+    """Road surface in the background is on by default; tests never reach OpenStreetMap."""
+    from trailbook import surface
+
+    monkeypatch.setattr(surface, "next_missing", lambda conn: None)
+
+
 @pytest.fixture
 def conn(tmp_path):
     c = db.connect(tmp_path / "test.db")
