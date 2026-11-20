@@ -67,7 +67,9 @@ class ImportJob:
                 sys.executable, "-m", "trailbook.cli", "--db", self.db_path,
                 command, *args, "--low-priority", "--quiet",
             ]  # fmt: skip
-            kwargs: dict = {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
+            # stdout stays the server's: the job's log lines reach the add-on's log too
+            # (applog); its own crash is logged there already, so no stderr
+            kwargs: dict = {"stdout": None, "stderr": subprocess.DEVNULL}
             if os.name == "nt":
                 kwargs["creationflags"] = subprocess.IDLE_PRIORITY_CLASS
             else:

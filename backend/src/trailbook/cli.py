@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import logging
 import os
 import sys
 import time
@@ -12,6 +13,7 @@ from pathlib import Path
 from . import (
     __version__,
     analysis,
+    applog,
     backup,
     db,
     garmin,
@@ -22,6 +24,8 @@ from . import (
     sports,
     workout,
 )
+
+log = logging.getLogger("trailbook.import")
 
 
 def _set_low_priority() -> None:
@@ -61,6 +65,7 @@ def cmd_scan(conn, args) -> int:
 
     started = importer.now_iso()
     jobs.write_progress(conn, state="running", phase="scan", started_at=started)
+    log.info("Import run started (%s)", getattr(args, "trigger", "manual"))
     try:
         t0 = time.monotonic()
         scan = importer.scan(conn, root) if root else importer.ScanResult()
@@ -102,6 +107,11 @@ def cmd_scan(conn, args) -> int:
                 )  # fmt: skip
 
             synced = garmin.sync_all(conn, uploads_dir, progress=garmin_progress)
+            (log.warning if synced.errors or synced.stopped else log.info)(
+                "Garmin: %s activities downloaded, %s errors%s",
+                synced.downloaded, synced.errors,
+                f" (stopped: {synced.stopped})" if synced.stopped else "",
+            )  # fmt: skip
             out(
                 f"Garmin: {synced.downloaded} activities downloaded, {synced.errors} errors"
                 + (f" (stopped: {synced.stopped})" if synced.stopped else "")
@@ -178,6 +188,7 @@ def cmd_scan(conn, args) -> int:
                 f"{result.errors} errors."
             )
     except Exception as exc:
+        log.exception("Import run failed")
         jobs.write_progress(
             conn, state="failed", error=f"{type(exc).__name__}: {exc}",
             started_at=started, finished_at=importer.now_iso(),
@@ -200,6 +211,10 @@ def cmd_scan(conn, args) -> int:
         ),
     )  # fmt: skip
     jobs.write_progress(conn, state="finished", started_at=started, finished_at=finished, **counts)
+    (log.warning if result.errors else log.info)(
+        "Import run finished: %s new files, %s imported, %s skipped, %s duplicates, %s errors",
+        scan.new, result.imported, result.skipped, result.duplicates, result.errors,
+    )  # fmt: skip
     return 0
 
 
@@ -215,6 +230,10 @@ def _job(db_path, kind: str, fn, quiet: bool):
         result = fn(progress)
     except Exception as exc:
         msg = str(exc) if isinstance(exc, backup.BackupError) else f"{type(exc).__name__}: {exc}"
+        if isinstance(exc, backup.BackupError):
+            log.error("%s failed: %s", kind.capitalize(), msg)
+        else:
+            log.exception("%s failed", kind.capitalize())
         backup.write_progress(
             db_path, kind, state="failed", error=msg, started_at=started,
             finished_at=backup.now_iso(),
@@ -253,6 +272,7 @@ def cmd_export(conn, args) -> int:
         args.db, "export", state="finished", started_at=started, finished_at=backup.now_iso(),
         name=r.path.name, files=r.files, bytes=r.bytes,
     )  # fmt: skip
+    log.info("Export finished: %s (%s files)", r.path.name, r.files)
     if not args.quiet:
         print(f"Exported {r.files} files ({r.bytes / 1e6:.1f} MB of files) to {r.path}")
     return 0
@@ -433,8 +453,16 @@ def cmd_serve(conn, args) -> int:
         db.set_setting(conn, "root", str(Path(args.root).resolve()))
     conn.close()
     app = create_app(args.db)
+    logging.getLogger("trailbook.server").info("Trailbook %s started", __version__)
+    # log_config=None: uvicorn's own errors go through the app log (applog)
     uvicorn.run(
-        app, host=args.host, port=args.port, workers=1, log_level="warning", access_log=False
+        app,
+        host=args.host,
+        port=args.port,
+        workers=1,
+        log_level="warning",
+        access_log=False,
+        log_config=None,
     )
     return 0
 
@@ -527,6 +555,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    # the server and the background jobs (quiet) log to the console too: the add-on's log
+    applog.setup(args.db, console=args.func is cmd_serve or getattr(args, "quiet", False))
     conn = db.connect(args.db)
     try:
         return args.func(conn, args)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import shutil
 import sqlite3
@@ -13,6 +14,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from . import IMPORTER_VERSION, db, explorer, fitfile, geo, sports, strava, streams, trackfile
+
+log = logging.getLogger("trailbook.import")
 
 TRACK_TOLERANCE_M = 5.0
 
@@ -895,6 +898,16 @@ def _set_status(
     fit_created = (
         fid.time_created.strftime("%Y-%m-%dT%H:%M:%SZ") if fid and fid.time_created else None
     )
+    if status == "error":
+        f = conn.execute(
+            "SELECT rel_path, zip_member FROM files WHERE id = ?", (file_id,)
+        ).fetchone()
+        name = (
+            f"{f['rel_path']} › {f['zip_member']}"
+            if f and f["zip_member"]
+            else (f["rel_path"] if f else file_id)
+        )
+        log.warning("File %s not imported: %s", name, error)
     conn.execute(
         """UPDATE files SET status = ?, sha256 = COALESCE(?, sha256), skip_reason = ?,
                   error = ?, activity_id = ?, imported_at = ?,

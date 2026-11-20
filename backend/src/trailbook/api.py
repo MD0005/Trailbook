@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import re
 import sqlite3
@@ -30,6 +31,7 @@ from starlette.staticfiles import StaticFiles
 from . import (
     __version__,
     analysis,
+    applog,
     auth,
     backup,
     basemap,
@@ -54,6 +56,7 @@ from . import (
 )
 
 STATIC_DIR = Path(__file__).parent / "static"
+log = logging.getLogger("trailbook.server")
 
 
 class _RevalidatedStatic(StaticFiles):
@@ -874,6 +877,15 @@ def create_app(db_path: str | Path) -> Starlette:
         except OSError as exc:
             return JSONResponse({"error": str(exc)}, status_code=503)
         return JSONResponse(result)
+
+    # Settings › Log: the app log (applog), newest first.
+    async def app_log(request: Request):
+        try:
+            limit = max(1, min(int(request.query_params.get("limit", 1000)), 5000))
+        except ValueError as exc:
+            raise HTTPException(400, "limit must be a number") from exc
+        entries = await run_in_threadpool(applog.read, db_path, limit)
+        return JSONResponse({"entries": entries})
 
     # Road surface along the route (OpenStreetMap via an Overpass server, cached per activity).
     async def activity_surface(request: Request):
@@ -2322,6 +2334,7 @@ def create_app(db_path: str | Path) -> Starlette:
         Route("/api/export/{name}", export_delete, methods=["DELETE"]),
         Route("/api/restore", restore_start, methods=["POST"]),
         Route("/api/import/status", import_status),
+        Route("/api/log", app_log),
         Route("/api/import/scan", import_scan, methods=["POST"]),
         Route("/api/import/files", import_files),
         Route("/api/import/files/{id:int}", import_file_forget, methods=["DELETE"]),
@@ -2350,6 +2363,9 @@ def create_app(db_path: str | Path) -> Starlette:
                     await run_in_threadpool(work)
                     wait = 15.0
                 except OSError:
+                    wait = 600.0  # logged by surface.compute
+                except Exception:  # noqa: BLE001 - keep the loop alive
+                    log.exception("Road surface of activity %s failed", aid)
                     wait = 600.0
             try:
                 await asyncio.wait_for(surface_wake.wait(), wait)
@@ -2376,6 +2392,7 @@ def create_app(db_path: str | Path) -> Starlette:
                     try:
                         await run_in_threadpool(work)
                     except Exception:  # noqa: BLE001 - keep the loop alive, try again later
+                        log.exception("Sending planned workouts to intervals.icu failed")
                         await asyncio.sleep(icu.RETRY_S)
                     continue
             try:
@@ -2399,7 +2416,7 @@ def create_app(db_path: str | Path) -> Starlette:
             try:
                 await run_in_threadpool(work)
             except Exception:  # noqa: BLE001 - keep the loop alive
-                pass
+                log.exception("Records for Home Assistant failed")
             await asyncio.sleep(HA_RECORDS_RETRY_S)
 
     @asynccontextmanager

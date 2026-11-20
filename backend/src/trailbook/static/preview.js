@@ -2846,6 +2846,7 @@ const SETTINGS_TABS = [
   ["workouts", "Workouts", svg(`<rect x="3" y="12" width="4" height="8" rx="1"/><rect x="10" y="5" width="4" height="15" rx="1"/><rect x="17" y="9" width="4" height="11" rx="1"/>`)],
   ["import", "Imported", svg(`<path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 17v3h16v-3"/>`)],
   ["backup", "Backup", svg(`<path d="M4 7h16v13H4z"/><path d="M2 4h20v3H2z"/><path d="M10 11h4"/>`)],
+  ["log", "Log", svg(`<path d="M6 3h9l4 4v14H6z"/><path d="M15 3v4h4"/><path d="M9 11h7M9 15h7M9 19h4"/>`)],
 ];
 
 async function renderSettings(tab, params) {
@@ -2857,7 +2858,52 @@ async function renderSettings(tab, params) {
   else if (tab === "import") await settingsImport(el, params);
   else if (tab === "backup") await settingsBackup(el);
   else if (tab === "workouts") await settingsWorkouts(el);
+  else if (tab === "log") await settingsLog(el);
   else await settingsGeneral(el, tab);
+}
+
+// Log: everything the server and the import runs logged (the same lines as the add-on's log in
+// Home Assistant), newest first; green info, yellow warnings, red errors. Refreshed every 10 s
+// while open; the level choice is fixed on every visit (All).
+const LOG_LEVELS = [["all", "All"], ["warning", "Warnings and errors"], ["error", "Errors"]];
+async function settingsLog(el) {
+  let level = "all", entries = [];
+  const cls = (lv) => (lv === "INFO" ? "ok" : lv === "WARNING" ? "warn" : lv === "DEBUG" ? "" : "bad");
+  const shown = () => entries.filter((e) => level === "all" || (level === "warning" ? e.level !== "INFO" && e.level !== "DEBUG" : cls(e.level) === "bad"));
+  const row = (e) => {
+    const [first, ...rest] = e.message.split("\n");
+    const msg = rest.length ? `<details><summary>${esc(first)}</summary><pre>${esc(rest.join("\n"))}</pre></details>` : esc(first);
+    return `<div class="log-row ${cls(e.level)}"><span class="log-time" title="${esc(e.time)}">${browserTime(e.time)}</span>
+      <span class="log-level">${esc(e.level.toLowerCase())}</span><span class="log-area">${esc(e.area)}</span><div class="log-msg">${msg}</div></div>`;
+  };
+  el.innerHTML = `<div class="card"><div class="card-head"><h3>Log</h3><span class="hint" data-log-count></span><span class="spacer"></span>
+      <div class="badges">${badgeHtml("log-level", "Show", LOG_LEVELS[0][1], { panel: `<div class="opt-panel">${pickList("log-level", LOG_LEVELS, level)}</div>`, right: true })}</div></div>
+    <div class="log-list" data-log></div></div>`;
+  bindBadges(el);
+  const box = el.querySelector("[data-log]");
+  const paint = () => {
+    const list = shown();
+    el.querySelector("[data-log-count]").textContent = `${num(list.length)} entries`;
+    // the open tracebacks stay open after a refresh
+    const open = new Set([...box.querySelectorAll("details[open]")].map((d) => d.closest(".log-row").dataset.key));
+    box.innerHTML = list.map((e, i) => row(e).replace('<div class="log-row', `<div data-key="${esc(e.time + e.message.slice(0, 40))}" class="log-row`)).join("") || hint("Nothing logged yet.");
+    box.querySelectorAll(".log-row").forEach((r) => { if (open.has(r.dataset.key)) r.querySelector("details")?.setAttribute("open", ""); });
+  };
+  el.querySelectorAll('[data-pick="log-level"]').forEach((b) => b.onclick = () => {
+    el.querySelectorAll('[data-pick="log-level"]').forEach((x) => { x.classList.toggle("on", x === b); x.setAttribute("aria-checked", x === b); });
+    level = b.dataset.value;
+    el.querySelector('[data-badge-value="log-level"]').textContent = LOG_LEVELS.find(([k]) => k === level)[1];
+    document.onclick?.();
+    paint();
+  });
+  const load = async () => {
+    if (!el.isConnected) return false;
+    entries = (await api("log").catch(() => ({ entries }))).entries;
+    paint();
+    return true;
+  };
+  await load();
+  const timer = setInterval(async () => { if (!(await load())) clearInterval(timer); }, 10000);
 }
 
 // General (appearance, road surface) and Data (sources: Garmin Connect, upload, folder, Strava)

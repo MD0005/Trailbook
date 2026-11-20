@@ -280,6 +280,10 @@ def _set_status(conn: sqlite3.Connection, person_id: str, status: str, error: st
     """A refusal keeps the time of the first one (`auth_error_since`) and notes this try;
     any other outcome clears both. `error` (e.g. a server error) does not touch them."""
     if status == "auth_error":
+        log.error("Garmin refused the key of %s: %s", person_id, error)
+    elif status == "error":
+        log.error("Garmin sync of %s failed: %s", person_id, error)
+    if status == "auth_error":
         now = importer.now_iso()
         conn.execute(
             """UPDATE garmin_accounts SET status = ?, last_error = ?,
@@ -479,6 +483,10 @@ def _store_download(
 
 
 def _mark_failed(conn: sqlite3.Connection, person_id: str, item: dict, error: str) -> None:
+    log.warning(
+        "Garmin activity %s of %s (%s) not downloaded: %s",
+        item.get("activityId"), person_id, item.get("activityName") or "no name", error,
+    )  # fmt: skip
     conn.execute(
         """INSERT OR REPLACE INTO garmin_activities
                (person_id, activity_id, start_gmt, name, type_key, status, error, fetched_at)
@@ -512,6 +520,7 @@ def sync_person(
             result.errors += 1
             return 0
         except GarminError as exc:
+            log.error("Garmin key check of %s failed: %s", pid, exc)
             conn.execute(
                 "UPDATE garmin_accounts SET auth_checked_at = ? WHERE person_id = ?",
                 (importer.now_iso(), pid),
@@ -642,6 +651,7 @@ def _fetch_details(conn: sqlite3.Connection, client: Client, pid: str, budget: i
         except GarminError as exc:
             if exc.stop_run:
                 raise
+            log.warning("Garmin details of activity %s not available: %s", gid, exc)
         except Exception:  # unexpected details: skip this activity, never stop the run
             log.exception("Garmin details of activity %s could not be stored", gid)
         conn.execute(
@@ -739,6 +749,7 @@ def fetch_days(
         except GarminError as exc:
             if exc.stop_run:
                 raise
+            log.warning("Garmin daily summaries of %s not available: %s", pid, exc)
             return None  # e.g. not available with this key
         return _store_days(conn, pid, body)
 

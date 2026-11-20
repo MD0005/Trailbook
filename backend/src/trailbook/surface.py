@@ -15,6 +15,7 @@ server. Pure standard library (urllib, json, math).
 from __future__ import annotations
 
 import json
+import logging
 import math
 import sqlite3
 import time
@@ -250,6 +251,9 @@ def compute(conn: sqlite3.Connection, activity_id: int) -> dict | None:
     try:
         ways = fetch_ways(points, url)
     except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+        logging.getLogger("trailbook.surface").warning(
+            "Road surface of activity %s: map data server not available: %s", activity_id, exc
+        )
         raise OSError(f"map data server: {exc}") from exc
     runs = match(points, ways)
     result = {"version": SURFACE_VERSION, "runs": runs, "shares": shares(runs)}

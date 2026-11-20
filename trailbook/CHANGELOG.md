@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.1.8
+
+### Added
+- Settings › **Log**: everything the app logs — imports, Garmin sync, intervals.icu, map and
+  weather servers, Home Assistant — newest first, info green, warnings yellow, errors red.
+  The same lines are in the add-on's log in Home Assistant.
+- Fitness: hovering an activity icon under the chart shades the days it stands for; a click
+  lists its activities with their load, each one opens the activity.
+- Workout creator: two more ready steps per sport (run 6 × 800 m, 2 × 15 min; ride
+  4 × 8 min, 2 × 30 min); Delete removes the selected step or repeat.
+
+### Changed
+- Fitness: the icon tooltip sums up the activities per sport (count and load).
+- Workout creator: Repeat frames the step it is dropped on, or leaves an empty frame to drop
+  steps into; long workouts use the whole width; a light background behind the step columns.
+
 ## 0.1.7
 
 ### Changed

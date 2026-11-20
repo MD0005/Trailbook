@@ -708,7 +708,7 @@ The visual design is defined by the project owner; the technical preview follows
 | Statistics | *Totals*: filter (type, year, group by year/month/week, chart metric), bar chart, table per period (years link to their months), time by group. *Records*: running pace / power / heart rate, range all / 90 days / year, curve + table with links to activities. |
 | Compare | Everyone side by side (only with “Everyone” selected). |
 | Manual (?) | A knowledge base of how Trailbook computes things and how to read them, tabs like Settings: **Training types** (what a training type is, the types with what they do and the recovery, sports and their settings, the detection rules, intervals in detail, relative to you, changing the type, terms) and **Training effect** (what it is, Garmin's aerobic / anaerobic scale, primary benefit with the codes, how to read it, how it relates to the training type, where it is shown). **Weather help** (what the meter shows, which activities, how it is counted with the levels, weights per sport, examples, limits; the weights come from `HELP_PROFILES`, the values the meter uses). **Fitness** (what the charts show, load per activity by method, the fitness model, form and ramp zones, thresholds and the ⚠, terms; constants from `/api/types` › `fitness_rules`, zones from the charts' own tables). Every table is fitted to its content: when every cell fits on one line, the columns keep their natural width and only the last column takes the rest (measured in `fitManualTables`, again on resize); otherwise short columns stay on one line and the text columns share the rest and wrap; row lines run across the card; rules and terms are tables too. A section's text and tables sit 16 px in from its title (the first column without cell padding, so text and tables line up); tiles inside a section are not indented. Built only from the app's existing pieces (grey tiles, ranked rows and panel titles, plain data tables), no colours of its own; the first card holds the contents as tiles that jump to the sections. All of Trailbook's own numbers come from the server (`/api/types`), the same values the code uses; new topics get a tab of their own. |
-| Settings | Tabs: General (appearance, road surface), **Data** (data connection, Garmin Connect / upload / watched folder cards, automatic download or scan, other sources), People, Imported, Backup. |
+| Settings | Tabs: General (appearance, road surface), **Data** (data connection, Garmin Connect / upload / watched folder cards, automatic download or scan, other sources), People, Workouts, Imported, Backup, **Log** (last: the app log, newest first — time, level, area, message; info green, warnings yellow, errors red, a traceback folded under its first line; Show: All / Warnings and errors / Errors, fixed on every visit; refreshed every 10 s while open). The log (`applog.py`): every process (server and import / export jobs) logs the same lines to stdout — the add-on's log in Home Assistant — and to `<data>/trailbook.log` (1 MB, two older files), `GET /api/log?limit`. Line: `2026-11-20T08:15:02Z WARNING garmin: …` (UTC). Trailbook's own loggers from INFO, libraries (uvicorn…) warnings and errors. Logged: import runs (start, summary, failure with traceback), every file that failed to import, Garmin (refused key, failed sync, activities not downloaded, daily summaries or details not available, the run's summary), intervals.icu sends that failed, road surface and weather servers not available, Home Assistant calls that failed, export / restore failures, unexpected errors of the background loops and of API requests. |
 | Settings › Backup | Export (with / without FIT files, optionally with Garmin keys), list of exports (download, restore, delete), restore from an uploaded export (one file picker, no folder choice: every file goes into the archive); progress while a job runs, page reloads after a restore. |
 
 ### Page structure
@@ -972,19 +972,26 @@ workouts* on. Code: `planner.py` (workouts, estimates, text), `icu.py` (key, syn
   Ride), *Target* badge (Run: Heart rate or Pace; Ride: Heart rate or Power). Under it the canvas
   across the whole width (fixed height; only the text "Drop the first step here" while empty,
   the zone grid once there are steps): the step chart; on each block, centred in its solid
-  part, the zone and under it the length (white, semi-bold, small); the steps take a share of the width that grows with their number
-  (one step does not fill the width), centred; blocks move and grow animated. A repeat is a
+  part, the zone and under it the length (white, semi-bold, small); the steps take a share of the width that grows with their number and with the
+  workout's length (0,3 + 0,05 per step + 0,6 · (1 − e^(−time / 90 min)), at most 96 %: a short
+  workout with a few steps stands in the middle, a long one fills the width), centred; blocks move and grow animated. A repeat is a
   frame around its steps (its count as ×N, the copies follow lighter); the frame's edges are
   dragged over neighbouring steps to take them in or leave them out, its ×N tag drags the
-  whole repeat; while dragging (a step, a repeat, a new one from the columns, a frame's edge)
+  whole repeat. **Repeat** from the column is only a dashed frame: dropped on a step it frames
+  that step (×4; not a step already in a repeat — one level only), dropped on empty space it
+  is an empty frame ("Drop a step") that takes the first step or ready set dropped into it
+  (empty frames are never saved); clicked, it frames the selected step or adds an empty frame
+  after the selection. While dragging (a step, a repeat, a new one from the columns, a frame's edge)
   the canvas shows the result live — the blocks make room, the new step sits in its place, the
   frame takes in or leaves out steps — and nothing changes until the mouse is let go. Steps may mix time
   and distance lengths (Garmin keeps a length type per step).
   Under the canvas, inside its frame, one centred line of fields — Time, Distance, Load, Kind,
   Watch steps — the labels grey, the values semi-bold.
   Below three framed columns: **Steps** (Warm-up, Interval, Recovery, Rest, Cool-down, Repeat),
-  **Ready steps** (repeats per sport: run 5 × 1 km, 3 × 10 min, 8 × 400 m, 4 × 4 min; ride
-  2 × 20 min, 5 × 3 min, 3 × 12 min, 10 × 1 min — once added they are ordinary steps) and
+  **Ready steps** (repeats per sport: run 5 × 1 km, 3 × 10 min, 8 × 400 m, 4 × 4 min,
+  6 × 800 m, 2 × 15 min; ride 2 × 20 min, 5 × 3 min, 3 × 12 min, 10 × 1 min, 4 × 8 min,
+  2 × 30 min — once added they are ordinary steps; the Steps and Ready steps columns have a
+  very light tint behind their tiles) and
   **Step settings** (the widest, empty until a step is clicked; the three columns have a fixed
   height, so the window does not jump; one row under another, the label on the left and its
   control to the right, all controls 28 px high:
@@ -994,7 +1001,8 @@ workouts* on. Code: `planner.py` (workouts, estimates, text), `icu.py` (key, syn
   at short lengths; switching keeps about the same time at the step's speed); its value is a
   field too (15, 15:30, 1:05:00, 90s; 1,6 or 800 m) —, Cue on the
   watch; Duplicate and Remove at the bottom right; for a repeat its count and Remove repeat). Steps are added by clicking (after the selected one) or dragging onto the canvas,
-  and moved by dragging. **Undo** at the bottom left (also Ctrl+Z outside a text field) takes
+  and moved by dragging. **Delete** (outside a field) removes the selected step, or the
+  selected repeat with its steps. **Undo** at the bottom left (also Ctrl+Z outside a text field) takes
   back the last change of the steps, repeats, sport or target, one at a time (up to 100).
   Cancel / Save at the bottom right.
 - **Only what reliably reaches the watch**: lengths in time or distance (no lap button),

@@ -660,8 +660,7 @@ async function renderFitness(params) {
   // Activities of the period for the icon strip under the x axis.
   const acts = (await api("calendar?" + new URLSearchParams({ from: s[0].date, to: s[s.length - 1].date, ...personParam() })).catch(() => null))?.activities || [];
   const marks = acts.map((a) => ({
-    x: Date.parse(a.day + "T00:00:00Z") / 1000, icon: typeIcon(a.activity_type, 16), href: `#/activity/${a.id}`,
-    tip: [a.name || typeLabel(a.activity_type), `${typeLabel(a.activity_type)} · ${a.day}`, [shortDur(a.time_s), a.distance_m >= 50 ? km(a.distance_m) : ""].filter(Boolean).join(" · ")].join("\n"),
+    x: Date.parse(a.day + "T00:00:00Z") / 1000, icon: typeIcon(a.activity_type, 16), href: `#/activity/${a.id}`, act: a,
   })).sort((p, q) => p.x - q.x);
   const all = fitnessSeries(s, { marks, opt });
   const order = UI.data["fitness-chart-order"] || [];
@@ -708,7 +707,7 @@ function fitnessSeries(s, { marks = [], opt = FITNESS_OPTIONS } = {}) {
   return [
     { key: "fitness", label: "Fitness", title: opt.fatigue === "off" ? "Fitness" : "Fitness and fatigue", yTitle: "Training load per day", unit: "", dec: 0, height: 396,
       color: COLORS.ctl, iconHtml: ICON_FITNESS, values: ctl, lines: opt.fatigue === "off" ? [] : [{ label: "Fatigue", color: COLORS.atl, values: atl }],
-      fill: opt.fill === "fill", marks, marksHidden: opt.activities === "off",
+      fill: opt.fill === "fill", marks, marksHidden: opt.activities === "off", marksTip, onMarks: marksPopup, markSpan: 86400,
       tip: "Fitness: 42-day average of the daily training load. Fatigue: the same over 7 days.",
       tags: [tag("Fitness", ctl, last, COLORS.ctl, 0, false), ...(opt.fatigue === "off" ? [] : [tag("Fatigue", atl, last, COLORS.atl, 0, false)])] },
     { key: "form", label: "Form", title: "Form", yTitle: "Form", unit: "", dec: 0, height: 259, color: COLORS.neutral, iconHtml: ICON_FORM,
@@ -716,6 +715,50 @@ function fitnessSeries(s, { marks = [], opt = FITNESS_OPTIONS } = {}) {
       tip: "Yesterday's fitness minus fatigue: higher = fresher, lower = more tired. Training builds fitness in the optimal zone below the grey zone.",
       tags: [tag("Form", tsb, last, zc(FORM_ZONES, tsb[last])), tag("Freshest", tsb, fresh, zc(FORM_ZONES, tsb[fresh])), tag("Most tired", tsb, tired, zc(FORM_ZONES, tsb[tired]))] },
   ];
+}
+
+// Activity icons under the fitness chart. Tooltip: the days, then one line per sport (count and
+// load), the total load when there are several; a click lists the activities (marksPopup).
+const markSport = (a) => groupLabel(typeOf(a.activity_type)?.group || a.category);
+const markDays = (items) => {
+  const a = items[0].act.day, b = items[items.length - 1].act.day;
+  return a === b ? a : `${a} – ${b}`;
+};
+function marksTip(items) {
+  const by = new Map();
+  for (const { act } of items) {
+    const k = markSport(act), x = by.get(k) || { n: 0, load: 0 };
+    x.n += 1; x.load += act.load || 0;
+    by.set(k, x);
+  }
+  const total = items.reduce((t, m) => t + (m.act.load || 0), 0);
+  const lines = [...by].sort((p, q) => q[1].n - p[1].n || q[1].load - p[1].load)
+    .map(([k, x]) => `${k}: ${num(x.n)} · load ${num(x.load)}`);
+  return [markDays(items), ...lines, ...(by.size > 1 ? [`Total load ${num(total)}`] : [])].join("\n");
+}
+// The activities of an icon in a small window under it: type icon, name, day and load; a row
+// opens the activity. Closes on a click outside, Escape or leaving the page.
+function marksPopup(items, anchor) {
+  document.querySelector(".mark-pop")?.remove();
+  const total = items.reduce((t, m) => t + (m.act.load || 0), 0);
+  const pop = document.createElement("div");
+  pop.className = "mark-pop";
+  pop.innerHTML = `<div class="mark-pop-head"><b>${esc(markDays(items))}</b><span>load ${num(total)}</span></div>
+    ${items.map(({ act: a, href }) => `<a class="mark-pop-row" href="${href}">${typeIcon(a.activity_type, 16)}
+      <span class="mark-pop-name">${esc(a.name || typeLabel(a.activity_type))}<small>${esc(a.day)} · ${esc([shortDur(a.time_s), a.distance_m >= 50 ? km(a.distance_m) : ""].filter(Boolean).join(" · "))}</small></span>
+      <span class="mark-pop-load">${a.load != null ? num(a.load) : "–"}</span></a>`).join("")}`;
+  document.body.append(pop);
+  const r = anchor.getBoundingClientRect();
+  pop.style.top = `${r.bottom + 6}px`;
+  pop.style.left = `${Math.max(8, Math.min(innerWidth - pop.offsetWidth - 8, r.left + r.width / 2 - pop.offsetWidth / 2))}px`;
+  if (r.bottom + 6 + pop.offsetHeight > innerHeight - 8) pop.style.top = `${Math.max(8, r.top - 6 - pop.offsetHeight)}px`;
+  const close = () => { pop.remove(); document.removeEventListener("pointerdown", outside, true); document.removeEventListener("keydown", esc_); window.removeEventListener("hashchange", close); window.removeEventListener("scroll", close); };
+  const outside = (e) => { if (!pop.contains(e.target) && !anchor.contains(e.target)) close(); };
+  const esc_ = (e) => { if (e.key === "Escape") close(); };
+  document.addEventListener("pointerdown", outside, true);
+  document.addEventListener("keydown", esc_);
+  window.addEventListener("hashchange", close);
+  window.addEventListener("scroll", close, { passive: true });
 }
 
 const ICON_WARN = svg(`<path d="M12 3l9.5 17h-19z"/><path d="M12 10v4M12 17.5v.01"/>`);

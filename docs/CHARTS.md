@@ -170,8 +170,11 @@ equally); hovering one marks its point. A pinned value shows every series of the
 - **Fitness and fatigue** (396 px) — fitness (muted steel blue `#6f8fbf`) filled (or a plain line, Options), fatigue a
   line; pills: Fitness and Fatigue at the end of the period. No daily load. Under its x axis
   a strip of **activity icons** (type icon on its day; icons closer than ~35 px share one spot (about three a month over a year; more when zoomed in)
-  with a count; hovering shows name, type, date, time and distance of each, a single
-  one opens the activity).
+  with a count; hovering shades the days the icon stands for on the chart (first to last day)
+  and the tooltip sums them up: the days, one line per sport — count and load —, the total
+  load with several sports; a click opens a small window under the icon listing its
+  activities (type icon, name, day, time, distance, load; a row opens the activity; closes on
+  a click outside, Escape or scrolling).
 - **Options** badge (page header, like Map › Options; saved per person, `ui_settings` key
   `fitness-options`): Activities Shown | Hidden, Fitness Filled | Line, Fatigue Shown |
   Hidden (hidden: the card is titled "Fitness"), Form zones Shown | Hidden (hidden: no bands

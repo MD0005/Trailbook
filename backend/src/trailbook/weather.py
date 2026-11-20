@@ -16,6 +16,7 @@ Hourly and area values: an estimate for the hour and the area, not the exact str
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 import time
 import urllib.error
@@ -106,6 +107,7 @@ def compute(conn: sqlite3.Connection, activity_id: int) -> dict | None:
                 if got and got.get("temperature_2m") is not None:
                     hours.append(got)
         except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+            logging.getLogger("trailbook.weather").warning("Weather server not available: %s", exc)
             raise OSError(f"weather server: {exc}") from exc
         if hours:
             temps = [x["temperature_2m"] for x in hours]
@@ -158,6 +160,7 @@ def forecast(lat: float, lon: float, now: float | None = None) -> list[dict]:
         with urllib.request.urlopen(req, timeout=TIMEOUT_S) as resp:  # noqa: S310 (fixed host)
             data = json.loads(resp.read())
     except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+        logging.getLogger("trailbook.weather").warning("Forecast not available: %s", exc)
         raise OSError(f"weather server: {exc}") from exc
     d = data.get("daily") or {}
     names = {

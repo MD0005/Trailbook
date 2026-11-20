@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import re
 import sqlite3
 import urllib.error
@@ -345,6 +346,10 @@ def sync_due(conn: sqlite3.Connection, transport: Transport | None = None) -> in
             )
             done += 1
         except IcuError as exc:
+            logging.getLogger("trailbook.intervals").log(
+                logging.WARNING if exc.retry else logging.ERROR,
+                "Planned workout %s of %s not sent to intervals.icu: %s", r["id"], pid, exc,
+            )  # fmt: skip
             if exc.auth:
                 conn.execute(
                     "UPDATE icu_accounts SET status = 'auth_error', last_error = ? "

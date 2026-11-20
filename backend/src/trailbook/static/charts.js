@@ -240,7 +240,10 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, onHov
 
   // Value pills on the right: each at the height of its value, pushed apart (no overlap).
   // Icons along the x axis (e.g. activities on a date axis): one per ~35 px, the others of the
-  // same spot are counted on it and listed in its tooltip; a single one links to its page.
+  // same spot are counted on it. Tooltip: `s.marksTip(items)` (else their tips listed); hovering
+  // shades the stretch of the axis the icon stands for (`s.markSpan` seconds after the last
+  // one); a click calls `s.onMarks(items, el)` (else a single one links to its page). The
+  // strip is rewritten only when it changes, so the hovered icon stays.
   function placeMarks(u, s) {
     const box = u._tb?.marks;
     if (!box || !s.marks || box.hidden) return;
@@ -251,11 +254,36 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, onHov
       const g0 = groups[groups.length - 1];
       if (g0 && px - g0.px < 35) g0.items.push(m); else groups.push({ px, items: [m] });
     }
-    box.innerHTML = groups.map(({ px, items }) => {
-      const tip = items.slice(0, 8).map((m) => m.tip).join("\n\n") + (items.length > 8 ? `\n\n+${items.length - 8} more` : "");
-      const tag = items.length === 1 && items[0].href ? "a" : "span";
-      return `<${tag} class="chart-mark" style="left:${left + px}px" data-tip="${esc(tip)}"${tag === "a" ? ` href="${items[0].href}"` : ""}>${items[0].icon}${items.length > 1 ? `<b>${items.length}</b>` : ""}</${tag}>`;
+    u._tb.markGroups = groups;
+    const html = groups.map(({ px, items }, k) => {
+      const tip = s.marksTip ? s.marksTip(items)
+        : items.slice(0, 8).map((m) => m.tip).join("\n\n") + (items.length > 8 ? `\n\n+${items.length - 8} more` : "");
+      const tag = !s.onMarks && items.length === 1 && items[0].href ? "a" : "span";
+      return `<${tag} class="chart-mark${s.onMarks ? " click" : ""}" data-mark-group="${k}" style="left:${left + px}px" data-tip="${esc(tip)}"${tag === "a" ? ` href="${items[0].href}"` : ""}>${items[0].icon}${items.length > 1 ? `<b>${items.length}</b>` : ""}</${tag}>`;
     }).join("");
+    if (html !== box._html) { box.innerHTML = html; box._html = html; }
+  }
+  function bindMarks(u, s) {
+    const box = u._tb?.marks;
+    if (!box) return;
+    const groupOf = (e) => { const el = e.target.closest?.("[data-mark-group]"); return el ? [el, u._tb.markGroups?.[+el.dataset.markGroup]] : [null, null]; };
+    box.addEventListener("mouseover", (e) => {
+      const [, grp] = groupOf(e);
+      if (!grp) return;
+      const xs = grp.items.map((m) => m.x);
+      g.mark = { band: [Math.min(...xs), Math.max(...xs) + (s.markSpan || 0)], u };
+      u.redraw(false);
+    });
+    box.addEventListener("mouseout", (e) => {
+      if (!e.target.closest?.("[data-mark-group]") || e.relatedTarget?.closest?.("[data-mark-group]")) return;
+      if (g.mark?.band) { g.mark = null; u.redraw(false); }
+    });
+    box.addEventListener("click", (e) => {
+      const [el, grp] = groupOf(e);
+      if (!grp || !s.onMarks) return;
+      e.preventDefault();
+      s.onMarks(grp.items, el);
+    });
   }
 
   function placeTags(u, s) {
@@ -586,7 +614,16 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, onHov
     ctx.save();
     ctx.beginPath(); ctx.rect(left, top, width, height); ctx.clip();
     ctx.strokeStyle = ctx.fillStyle = s.color;
-    if (m.ranges) {
+    if (m.band) { // a stretch of the x axis (the days an activity icon stands for)
+      const c = cssVar("--accent") || s.color;
+      const x0 = u.valToPos(m.band[0], "x", true), x1 = Math.max(x0 + 2 * dpr, u.valToPos(m.band[1], "x", true));
+      ctx.fillStyle = withAlpha(c, 0.14);
+      ctx.fillRect(x0, top, x1 - x0, height);
+      ctx.fillStyle = withAlpha(c, 0.6);
+      ctx.fillRect(x0, top, dpr, height);
+      ctx.fillRect(x1 - dpr, top, dpr, height);
+    }
+    else if (m.ranges) {
       const c = m.color || s.color;
       for (const [a, b] of m.ranges) {
         ctx.fillStyle = withAlpha(c, 0.2);
@@ -738,6 +775,7 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, onHov
       u.over.appendChild(tip);
       u.root.appendChild(xflag); u.root.appendChild(pins);
       u._tb = { tip, xflag, pins, tags: s.tags ? el.querySelector(".chart-tags") : null, marks: el.querySelector(".chart-marks") };
+      if (s.marks) bindMarks(u, s);
       if (hasSec(s)) { bindSections(u, el, secOf(s)); placeSections(u, s); }
       if (s.climbs) { bindClimbs(u, s); placeClimbs(u, s); }
       // Reset: a refresh pictogram in the plot's top right corner, only when needed.

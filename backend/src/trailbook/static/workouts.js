@@ -29,12 +29,16 @@ const WO_SETS = {
     ["3 × 10 min", 3, [["active", "time", 600, [4, 4]], ["recovery", "time", 120, [1, 1]]]],
     ["8 × 400 m", 8, [["active", "distance", 400, [5, 5]], ["recovery", "time", 90, [1, 1]]]],
     ["4 × 4 min", 4, [["active", "time", 240, [5, 5]], ["recovery", "time", 180, [1, 1]]]],
+    ["6 × 800 m", 6, [["active", "distance", 800, [5, 5]], ["recovery", "time", 120, [1, 1]]]],
+    ["2 × 15 min", 2, [["active", "time", 900, [4, 4]], ["recovery", "time", 180, [1, 1]]]],
   ],
   ride: [
     ["2 × 20 min", 2, [["active", "time", 1200, [4, 4]], ["recovery", "time", 300, [1, 1]]]],
     ["5 × 3 min", 5, [["active", "time", 180, [5, 5]], ["recovery", "time", 180, [1, 1]]]],
     ["3 × 12 min", 3, [["active", "time", 720, [3, 4]], ["recovery", "time", 240, [1, 1]]]],
     ["10 × 1 min", 10, [["active", "time", 60, [6, 6]], ["recovery", "time", 60, [1, 1]]]],
+    ["4 × 8 min", 4, [["active", "time", 480, [5, 5]], ["recovery", "time", 240, [1, 1]]]],
+    ["2 × 30 min", 2, [["active", "time", 1800, [3, 3]], ["recovery", "time", 300, [1, 1]]]],
   ],
 };
 
@@ -312,7 +316,10 @@ function bindPlanDrops(weeks, refresh) {
 
 // Editing works on a flat list of steps; a repeat is a run of neighbouring steps with the same
 // `group` (its count in `groups`). Saved as the nested form of planner.py. Each step has a
-// `uid`, so the canvas moves its blocks (animated) instead of drawing them anew.
+// `uid`, so the canvas moves its blocks (animated) instead of drawing them anew. An empty
+// repeat holds one placeholder (`ph`): an empty frame that takes the first step dropped in it;
+// placeholders are never saved.
+const woPlaceholder = (group) => ({ ph: true, group, uid: ++WO_UID, type: "rest", length: { kind: "time", value: 0 }, target: null, cue: "" });
 let WO_UID = 0;
 function woToFlat(w) {
   const items = [], groups = {};
@@ -331,10 +338,10 @@ function woToTree(items, groups) {
   const strip = ({ group, uid, ...s }) => s;
   for (let i = 0; i < items.length;) {
     const g = items[i].group;
-    if (g == null) { steps.push(strip(items[i])); i += 1; continue; }
+    if (g == null) { if (!items[i].ph) steps.push(strip(items[i])); i += 1; continue; }
     const run = [];
-    while (i < items.length && items[i].group === g) run.push(strip(items[i++]));
-    steps.push({ repeat: groups[g] || 2, steps: run });
+    while (i < items.length && items[i].group === g) { if (!items[i].ph) run.push(strip(items[i])); i += 1; }
+    if (run.length) steps.push({ repeat: groups[g] || 2, steps: run });
   }
   return steps;
 }
@@ -436,7 +443,7 @@ function openWorkoutCreator(workout, ctx, onSaved, { save = null } = {}) {
   const tree = () => ({ name: w.name, sport: w.sport, target: w.target, steps: woToTree(items, groups) });
   const refresh = async () => {
     const my = ++seq;
-    const r = items.length ? await api("workouts/estimate?" + new URLSearchParams({ person: CURRENT }), { method: "POST", body: JSON.stringify(tree()) }) : { estimate: null };
+    const r = items.some((s) => !s.ph) ? await api("workouts/estimate?" + new URLSearchParams({ person: CURRENT }), { method: "POST", body: JSON.stringify(tree()) }) : { estimate: null };
     if (my !== seq) return;
     est = r.estimate;
     drawCanvas();
@@ -497,7 +504,11 @@ function openWorkoutCreator(workout, ctx, onSaved, { save = null } = {}) {
     });
     bindStepCommon(s, box);
   };
-  const tidyGroups = () => { for (const g of Object.keys(groups)) if (!items.some((s) => s.group === +g)) delete groups[g]; };
+  // repeats without steps go; a placeholder goes once its repeat has a step (or is outside one)
+  const tidyGroups = () => {
+    items = items.filter((s) => !s.ph || (s.group != null && !items.some((x) => !x.ph && x.group === s.group)));
+    for (const g of Object.keys(groups)) if (!items.some((s) => s.group === +g)) delete groups[g];
+  };
 
   // ---- canvas: one block per step, repeats unrolled (the copies lighter, behind the frame).
   // The steps take a share of the width that grows with their number, centred.
@@ -522,14 +533,21 @@ function openWorkoutCreator(workout, ctx, onSaved, { save = null } = {}) {
       const g = items[i].group;
       const run = [];
       while (i < items.length && (g == null ? run.length === 0 : items[i].group === g)) run.push(i++);
-      for (let r = 0; r < (g == null ? 1 : groups[g]); r++) for (const idx of run) {
+      const empty = run.every((idx) => items[idx].ph); // an empty repeat: its frame once
+      for (let r = 0; r < (g == null || empty ? 1 : groups[g]); r++) for (const idx of run) {
         const s = items[idx];
+        if (s.ph) { rows.push({ idx, r, group: g, ph: true, sec: 0 }); continue; }
         rows.push({ idx, r, group: g, sec: secs[k] ?? (s.length.kind === "time" ? s.length.value : s.length.value / sp) });
         k += 1;
       }
     }
+    const real = rows.reduce((a, r) => a + r.sec, 0);
+    for (const r of rows) if (r.ph) r.sec = real ? Math.max(real * 0.1, 120) : 600; // room to drop into
     const total = rows.reduce((a, r) => a + r.sec, 0) || 1;
-    const share = Math.min(0.96, 0.3 + 0.08 * items.length), off = (1 - share) / 2 * 100;
+    // The steps take a share of the width: more for a longer workout and for more steps, so a
+    // short one with few steps stands in the middle and a long one fills the width.
+    const share = Math.min(0.96, 0.3 + 0.05 * items.length + 0.6 * (1 - Math.exp(-real / 5400)));
+    const off = (1 - share) / 2 * 100;
     const n = zonesN(), cw = c.clientWidth || 800;
     let x = 0;
     const want = new Map(), frames = {};
@@ -542,6 +560,10 @@ function openWorkoutCreator(workout, ctx, onSaved, { save = null } = {}) {
       if (r.group != null && r.r === 0) {
         const f = frames[r.group] ||= { left, right: left };
         f.right = left + width;
+      }
+      if (r.ph) { // an empty repeat: only its frame and a hint inside
+        want.set(`p${s.uid}`, { ph: true, left, width, group: r.group, ghost: previewing && s.uid < 0, sel: sel?.group === r.group });
+        continue;
       }
       const [lo, hi] = woSpan(s, w.target, bounds(), sp);
       const b = woBars(lo, hi, n, WO_HEAD);
@@ -564,7 +586,8 @@ function openWorkoutCreator(workout, ctx, onSaved, { save = null } = {}) {
         if (v.frame) {
           el.className = "wo-frame";
           el.innerHTML = `<span class="wo-frame-tag" draggable="true"></span><span class="wo-handle l" data-handle="l"></span><span class="wo-handle r" data-handle="r"></span>`;
-        } else el.innerHTML = `<i class="band"></i><i class="core"></i><span class="wo-blk-labs"><span class="wo-blk-z"></span><span class="wo-blk-len"></span></span>`;
+        } else if (v.ph) el.innerHTML = `<span class="wo-ph-text">Drop a step</span>`;
+        else el.innerHTML = `<i class="band"></i><i class="core"></i><span class="wo-blk-labs"><span class="wo-blk-z"></span><span class="wo-blk-len"></span></span>`;
         el.style.left = `${v.left}%`;
         el.style.width = `${v.width}%`;
         el.dataset.fresh = "1";
@@ -579,6 +602,12 @@ function openWorkoutCreator(workout, ctx, onSaved, { save = null } = {}) {
         const tag = el.querySelector(".wo-frame-tag");
         tag.dataset.frameTag = v.g;
         tag.textContent = `×${num(groups[v.g])}`;
+        continue;
+      }
+      if (v.ph) {
+        el.className = `wo-ph ${v.sel ? "sel" : ""} ${v.ghost ? "ghost" : ""}`;
+        delete el.dataset.fresh;
+        el.dataset.ph = v.group;
         continue;
       }
       el.className = `wo-blk ${v.copy ? "copy" : ""} ${v.sel ? "sel" : ""} ${el.dataset.fresh ? "new" : ""} ${v.ghost ? "ghost" : ""} ${v.lift ? "lift" : ""}`;
@@ -617,6 +646,7 @@ function openWorkoutCreator(workout, ctx, onSaved, { save = null } = {}) {
       box.querySelector("[data-rep-remove]").onclick = () => {
         items.forEach((s) => { if (s.group === g) s.group = null; });
         delete groups[g];
+        tidyGroups();
         sel = null;
         changed();
       };
@@ -712,13 +742,13 @@ function openWorkoutCreator(workout, ctx, onSaved, { save = null } = {}) {
   };
 
   // ---- adding and moving steps
-  const insertAt = (at, newItems) => {
-    // inside a repeat when both neighbours are in it
-    const g = at > 0 && at < items.length && items[at - 1].group != null && items[at - 1].group === items[at].group ? items[at].group : null;
-    newItems.forEach((s) => { if (s.group === undefined) s.group = g; });
-    items.splice(at, 0, ...newItems);
-    sel = { step: at };
-    changed();
+  // inside a repeat when both neighbours are in it
+  const groupAt = (at) => (at > 0 && at < items.length && items[at - 1].group != null && items[at - 1].group === items[at].group ? items[at].group : null);
+  // after a change: the selection by its step (indices move when placeholders go)
+  const selOf = (r) => {
+    tidyGroups();
+    if (r?.uid != null) { const i = items.findIndex((s) => s.uid === r.uid); return i >= 0 ? { step: i } : null; }
+    return r?.group != null && groups[r.group] ? { group: r.group } : null;
   };
   const toolItems = (tool) => {
     const mk = (s, group) => { const x = { ...s, group, uid: ++WO_UID }; woFitTarget(x, w.target, ctx?.[w.sport]?.speed || 3); return x; };
@@ -728,41 +758,72 @@ function openWorkoutCreator(workout, ctx, onSaved, { save = null } = {}) {
       groups[g] = times;
       return steps.map(([type, kind, value, zone]) => mk({ type, length: { kind, value }, target: { zone: [...zone] }, cue: "" }, g));
     }
-    if (tool === "repeat") {
-      const g = next++;
-      groups[g] = 4;
-      return [mk(woDefaultStep("active", w.sport), g), mk(woDefaultStep("recovery", w.sport), g)];
-    }
     return [mk(woDefaultStep(tool, w.sport), undefined)];
   };
   const groupRange = (g) => { const idx = items.map((s, i) => (s.group === g ? i : -1)).filter((i) => i >= 0); return [idx[0], idx[idx.length - 1]]; };
   const afterSel = () => (sel?.step != null ? sel.step + 1 : sel?.group != null ? groupRange(sel.group)[1] + 1 : items.length);
-  // the place in the list at a pointer x: before a block (after it on its right half); over
-  // the copies of a repeat: after the repeat
-  const indexAt = (clientX) => {
+  // What is under a pointer x: `at` the place in the list (before a block, after it on its
+  // right half; over the copies of a repeat: after the repeat), `on` the step block under it
+  // (not a copy), `into` the repeat of an empty frame under it.
+  const hitAt = (clientX) => {
     const cr = dlg.querySelector("[data-wo-canvas]").getBoundingClientRect();
     const p = ((clientX - cr.left) / cr.width) * 100;
     for (const r of layout) {
       if (p >= r.right) continue;
-      if (r.r > 0) return groupRange(r.group)[1] + 1;
-      return p < (r.left + r.right) / 2 ? r.idx : r.idx + 1;
+      if (p < r.left) return { at: r.idx, on: null, into: null }; // the margin before the first
+      if (r.ph) return { at: r.idx, on: null, into: r.group };
+      if (r.r > 0) return { at: groupRange(r.group)[1] + 1, on: null, into: null };
+      return { at: p < (r.left + r.right) / 2 ? r.idx : r.idx + 1, on: r.idx, into: null };
     }
-    return items.length;
+    return { at: items.length, on: null, into: null };
   };
+  const indexAt = (clientX) => hitAt(clientX).at;
   // ---- what a drag does, shared by its live preview and the drop (null = nothing changes)
-  // a new step or repeat from the columns at `at` (`temp`: preview ids, stable while dragging)
-  const placeTool = (at, tool, temp = false) => {
+  // A repeat from the columns: dropped on a step it frames that step (not one already in a
+  // repeat: one level only); dropped on empty space it is an empty frame to drop steps in.
+  const placeRepeat = (hit, temp) => {
+    if (hit.on != null) {
+      const s = items[hit.on];
+      if (s.group != null) return null;
+      const g = next++;
+      groups[g] = 4;
+      s.group = g;
+      return { group: g };
+    }
+    let at = hit.into != null ? groupRange(hit.into)[1] + 1 : hit.at;
+    while (groupAt(at) != null) at += 1; // never inside another repeat
+    const g = next++;
+    groups[g] = 4;
+    const ph = woPlaceholder(g);
+    if (temp) ph.uid = -1;
+    items.splice(at, 0, ph);
+    return { group: g };
+  };
+  // a new step or a ready set from the columns (`temp`: preview ids, stable while dragging);
+  // into an empty frame it fills it (a ready set brings its count)
+  const placeTool = (hit, tool, temp = false) => {
+    if (tool === "repeat") return placeRepeat(hit, temp);
     const added = toolItems(tool);
     if (temp) added.forEach((s, i) => { s.uid = -1 - i; });
-    const g = at > 0 && at < items.length && items[at - 1].group != null && items[at - 1].group === items[at].group ? items[at].group : null;
+    if (hit.into != null) {
+      const own = added[0].group;
+      if (own != null) { groups[hit.into] = groups[own]; delete groups[own]; }
+      added.forEach((s) => { s.group = hit.into; });
+      const i = items.findIndex((s) => s.ph && s.group === hit.into);
+      items.splice(i, 1, ...added);
+      return own != null ? { group: hit.into } : { uid: added[0].uid };
+    }
+    const g = groupAt(hit.at);
     added.forEach((s) => { if (s.group === undefined) s.group = g; });
-    items.splice(at, 0, ...added);
-    return { step: at };
+    items.splice(hit.at, 0, ...added);
+    return added[0].group != null && added[0].group !== g ? { group: added[0].group } : { uid: added[0].uid };
   };
-  // a step (it joins a repeat when put between two of its steps) or a whole repeat (outside
-  // any other repeat) moved to `at`
-  const placeMove = (at, mv) => {
+  // a step (it joins a repeat when put between two of its steps, or into an empty frame) or a
+  // whole repeat (outside any other repeat) moved to `hit`
+  const placeMove = (hit, mv) => {
+    const at = hit.at;
     if (mv.group != null) {
+      if (hit.into === mv.group) return null;
       const [a, z] = groupRange(mv.group);
       if (at >= a && at <= z + 1) return null;
       const part = items.splice(a, z - a + 1);
@@ -771,18 +832,46 @@ function openWorkoutCreator(workout, ctx, onSaved, { save = null } = {}) {
       items.splice(to, 0, ...part);
       return { group: mv.group };
     }
+    const s = items[mv.step];
+    if (hit.into != null) {
+      items.splice(mv.step, 1);
+      s.group = hit.into;
+      items.splice(items.findIndex((x) => x.ph && x.group === hit.into), 1, s);
+      return { uid: s.uid };
+    }
     if (at === mv.step || at === mv.step + 1) {
-      const s = items[mv.step], prev = items[mv.step - 1], nxt = items[mv.step + 1];
+      const prev = items[mv.step - 1], nxt = items[mv.step + 1];
       const g = prev && nxt && prev.group != null && prev.group === nxt.group ? prev.group : s.group;
       if (g === s.group) return null; // the same place
     }
-    const [s] = items.splice(mv.step, 1);
+    items.splice(mv.step, 1);
     const to = at > mv.step ? at - 1 : at;
     const prev = items[to - 1], nxt = items[to];
     s.group = prev && nxt && prev.group != null && prev.group === nxt.group ? prev.group : null;
     items.splice(to, 0, s);
+    return { uid: s.uid };
+  };
+  // a click on a step or set in the columns: after the selection; Repeat frames the selected
+  // step (or adds an empty frame after the selection)
+  const clickTool = (tool) => {
+    const hit = tool === "repeat" && sel?.step != null && !items[sel.step]?.ph
+      ? { at: sel.step, on: sel.step, into: null }
+      : { at: afterSel(), on: null, into: null };
+    if (tool !== "repeat" && sel?.group != null && items.some((s) => s.ph && s.group === sel.group)) hit.into = sel.group;
+    const r = placeTool(hit, tool);
+    if (!r) return;
+    sel = selOf(r);
+    changed();
+  };
+  // Delete: the selected step, or the selected repeat with its steps
+  const deleteSel = () => {
+    if (sel?.step != null) items.splice(sel.step, 1);
+    else if (sel?.group != null) { items = items.filter((s) => s.group !== sel.group); delete groups[sel.group]; }
+    else return false;
     tidyGroups();
-    return { step: to };
+    sel = null;
+    changed();
+    return true;
   };
   // the left or right edge of repeat `g` dragged to `at`: neighbouring steps join or leave it
   // (never into another repeat)
@@ -809,7 +898,7 @@ function openWorkoutCreator(workout, ctx, onSaved, { save = null } = {}) {
     items = items.map((s) => ({ ...s }));
     groups = { ...groups };
     const r = apply();
-    if (r) drawCanvas(true);
+    if (r) { tidyGroups(); drawCanvas(true); }
     ({ items, groups, next, sel, layout } = keep);
     if (!r) drawCanvas();
   };
@@ -833,7 +922,7 @@ function openWorkoutCreator(workout, ctx, onSaved, { save = null } = {}) {
       <div class="wo-cols">
         <div class="wo-col"><div class="panel-title">Steps</div>
           ${WO_TYPES.map(([k, l]) => { const d = woDefaultStep(k, w.sport); return woToolHtml(k, l, woLength(d.length), [[1, d.target?.zone]]); }).join("")}
-          ${woToolHtml("repeat", "Repeat", "× 4", [[2, [4, 4]], [1, [1, 1]], [2, [4, 4]], [1, [1, 1]]], true)}</div>
+          ${woToolHtml("repeat", "Repeat", "frames a step", [], true)}</div>
         <div class="wo-col"><div class="panel-title">Ready steps</div>${WO_SETS[w.sport].map(([name, times, steps]) =>
           woToolHtml(`set:${name}`, name, "", [...Array(Math.min(times, 4))].flatMap(() => steps.map(([, kind, value, zone]) => [kind === "time" ? value : value / 4, zone])))).join("")}</div>
         <div class="wo-col wo-settings"><div class="panel-title">Step settings</div><div data-wo-settings></div></div>
@@ -856,7 +945,7 @@ function openWorkoutCreator(workout, ctx, onSaved, { save = null } = {}) {
     });
     bindCanvas();
     dlg.querySelectorAll("[data-tool]").forEach((t) => {
-      t.onclick = () => insertAt(afterSel(), toolItems(t.dataset.tool));
+      t.onclick = () => clickTool(t.dataset.tool);
       t.ondragstart = (e) => {
         e.dataTransfer.setData("text/trailbook-step", t.dataset.tool);
         e.dataTransfer.effectAllowed = "copy";
@@ -888,8 +977,8 @@ function openWorkoutCreator(workout, ctx, onSaved, { save = null } = {}) {
   const bindCanvas = () => {
     const c = dlg.querySelector("[data-wo-canvas]"), line = c.querySelector("[data-wo-drop]");
     c.addEventListener("click", (e) => {
-      const tag = e.target.closest("[data-frame-tag]"), b = e.target.closest("[data-step]"), copy = e.target.closest("[data-copy]");
-      sel = tag ? { group: +tag.dataset.frameTag } : b ? { step: +b.dataset.step } : copy ? { group: +copy.dataset.copy } : null;
+      const tag = e.target.closest("[data-frame-tag]"), b = e.target.closest("[data-step]"), copy = e.target.closest("[data-copy]"), ph = e.target.closest("[data-ph]");
+      sel = tag ? { group: +tag.dataset.frameTag } : b ? { step: +b.dataset.step } : copy ? { group: +copy.dataset.copy } : ph ? { group: +ph.dataset.ph } : null;
       drawCanvas();
       drawSettings();
     });
@@ -906,11 +995,12 @@ function openWorkoutCreator(workout, ctx, onSaved, { save = null } = {}) {
       e.dataTransfer.setData("text/trailbook-move", "1");
       e.dataTransfer.effectAllowed = "move";
     });
-    const show = (at) => {
-      if (at === dragAt) return;
-      dragAt = at;
+    const show = (hit) => {
+      const key = `${hit.at}|${hit.on}|${hit.into}`;
+      if (key === dragAt) return;
+      dragAt = key;
       const d = dragging;
-      preview(() => (d.tool ? placeTool(at, d.tool, true) : placeMove(at, d)));
+      preview(() => (d.tool ? placeTool(hit, d.tool, true) : placeMove(hit, d)));
     };
     const stop = () => { dragging = dragAt = liftUid = null; line.hidden = true; c.classList.remove("over"); };
     c.addEventListener("dragend", () => { if (dragging) { stop(); drawCanvas(); } });
@@ -918,7 +1008,7 @@ function openWorkoutCreator(workout, ctx, onSaved, { save = null } = {}) {
       if (!dragging) return;
       e.preventDefault();
       c.classList.add("over");
-      show(indexAt(e.clientX));
+      show(hitAt(e.clientX));
     });
     c.addEventListener("dragleave", (e) => {
       if (c.contains(e.relatedTarget) || !dragging) return;
@@ -928,12 +1018,12 @@ function openWorkoutCreator(workout, ctx, onSaved, { save = null } = {}) {
     });
     c.addEventListener("drop", (e) => {
       e.preventDefault();
-      const d = dragging, at = indexAt(e.clientX);
+      const d = dragging, hit = hitAt(e.clientX);
       stop();
       if (!d) return;
-      const r = d.tool ? placeTool(at, d.tool) : placeMove(at, d);
+      const r = d.tool ? placeTool(hit, d.tool) : placeMove(hit, d);
       if (!r) { drawCanvas(); return; }
-      sel = r;
+      sel = selOf(r);
       changed();
     });
     // the edges of a repeat frame: drag over neighbouring steps to take them in or leave them
@@ -967,7 +1057,12 @@ function openWorkoutCreator(workout, ctx, onSaved, { save = null } = {}) {
     if (!e.target.closest(".badge-wrap")) dlg.querySelectorAll(".badge-panel").forEach((p) => { p.hidden = true; });
   });
   // Ctrl+Z (Cmd+Z) undoes the last change, except while typing in a text field (its own undo)
+  // Delete removes the selected step or repeat; both keys never while typing in a field
   dlg.addEventListener("keydown", (e) => {
+    if (e.key === "Delete" && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      if (!e.target.matches?.("input, textarea, select") && deleteSel()) e.preventDefault();
+      return;
+    }
     if (!(e.ctrlKey || e.metaKey) || e.shiftKey || e.key.toLowerCase() !== "z") return;
     if (e.target.matches?.('input[type="text"], input:not([type]), textarea')) return;
     e.preventDefault();
