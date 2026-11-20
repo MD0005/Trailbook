@@ -79,3 +79,22 @@ jobs:
             ghcr.io/md0005/trailbook-${{ matrix.arch }}:latest
           cache-from: type=gha,scope=${{ matrix.arch }}
           cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
+
+  # One name for both architectures, for plain Docker (docker-compose.yml). Home Assistant keeps
+  # pulling trailbook-{arch}; this only points at the images pushed above.
+  manifest:
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          docker buildx imagetools create \
+            -t "ghcr.io/md0005/trailbook:$VERSION" -t ghcr.io/md0005/trailbook:latest \
+            "ghcr.io/md0005/trailbook-aarch64:$VERSION" "ghcr.io/md0005/trailbook-amd64:$VERSION"

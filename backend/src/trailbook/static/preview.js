@@ -33,6 +33,7 @@ const api = async (path, opts = {}) => {
   });
   if (res.status === 204) return null;
   const body = await res.json().catch(() => ({}));
+  if (res.status === 401 && body.login) location.reload();  // outside HA: back to the login page
   if (!res.ok) throw new Error(body.error || res.statusText);
   return body;
 };

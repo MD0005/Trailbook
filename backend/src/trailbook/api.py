@@ -30,6 +30,7 @@ from starlette.staticfiles import StaticFiles
 from . import (
     __version__,
     analysis,
+    auth,
     backup,
     basemap,
     db,
@@ -2411,11 +2412,16 @@ def create_app(db_path: str | Path) -> Starlette:
             ha_task.cancel()
         await sched.stop()
 
+    middleware = [Middleware(GZipMiddleware, minimum_size=1024)]
+    # Own login only outside Home Assistant (TRAILBOOK_PASSWORD); in the add-on Ingress logs in.
+    if pw := auth.password():
+        data_dir = Path(db_path).resolve().parent
+        middleware.insert(0, Middleware(auth.PasswordMiddleware, pw=pw, data_dir=data_dir))
     app = Starlette(
         routes=routes,
         exception_handlers={HTTPException: http_error},
         lifespan=lifespan,
-        middleware=[Middleware(GZipMiddleware, minimum_size=1024)],
+        middleware=middleware,
     )
     app.state.import_job = job
     app.state.scheduler = sched

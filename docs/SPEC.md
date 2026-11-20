@@ -41,10 +41,10 @@ small ARM boards such as the Home Assistant Yellow (Raspberry Pi CM4).
 | Item | Decision |
 |---|---|
 | Architectures | `aarch64` (HA Yellow, Raspberry Pi 4/5) and `amd64`. Both images built in CI. |
-| Base image | Debian-based (glibc) HA base image, because prebuilt Python wheels exist for ARM on glibc, not on Alpine/musl. |
+| Base image | HA `base-python` (Alpine). Possible because every dependency is pure Python; a native dependency would need musl wheels or a move to a Debian base. |
 | Rule for dependencies | Every dependency must ship prebuilt `aarch64` wheels or be pure Python. Nothing is compiled on the device. |
 | Excluded | pandas, pyarrow, vegafusion, GDAL and other heavy native stacks. |
-| Distribution | Public GitHub repository usable as an HA add-on repository; images published to GHCR. |
+| Distribution | Public GitHub repository usable as an HA add-on repository; images published to GHCR (`trailbook-{arch}` for HA, multi-arch `trailbook` for plain Docker). |
 
 ---
 
@@ -1056,6 +1056,16 @@ workouts* on. Code: `planner.py` (workouts, estimates, text), `icu.py` (key, syn
 - Database changes ship by themselves: migrations (`db.MIGRATIONS`) run on start. They only go
   forward — an older version refuses a newer database — so a rollback is an HA backup of the
   add-on taken before the update.
+- **Without Home Assistant (plain Docker):** the same image runs with `docker run` /
+  `docker-compose.yml` (repository root): port 8099, volumes `/data` and `/share`. CI also
+  pushes `ghcr.io/md0005/trailbook:{version|latest}`, a manifest list over the two arch images
+  (HA keeps using `trailbook-{arch}`). Outside HA there is no Ingress login, so
+  `TRAILBOOK_PASSWORD` turns on Trailbook's own login (`auth.py`, middleware installed only when
+  the variable is set — never in the add-on): login page on any unauthenticated page, `401
+  {"error", "login": true}` from the API (the UI reloads to the login page), `POST /login`,
+  `GET /logout`. Session cookie = HMAC-SHA256 of the password under a random key in
+  `<data>/session.key` (HttpOnly, SameSite=Lax, Secure behind HTTPS, 400 days); a new password
+  ends all sessions; a wrong one waits 1 s. Notifications to HA are off (no `SUPERVISOR_TOKEN`).
 - To do: `hassio.addon_stdin` trigger (5.1), add-on icon/logo.
 - Local development: backend and frontend run on a PC against a sample folder; no HA needed.
 

@@ -1,0 +1,16 @@
+# Trailbook without Home Assistant. Put TRAILBOOK_PASSWORD=... in a `.env` file next to this
+# one, run `docker compose up -d`, then open http://<this machine>:8099.
+services:
+  trailbook:
+    image: ghcr.io/md0005/trailbook:latest  # amd64 and arm64; pin a version (e.g. 0.1.5) if you like
+    container_name: trailbook
+    restart: unless-stopped
+    init: true  # reaps the import and export subprocesses
+    ports:
+      - "8099:8099"
+    environment:
+      # Login page. Without it anyone who can reach the port sees everything.
+      TRAILBOOK_PASSWORD: ${TRAILBOOK_PASSWORD:?set TRAILBOOK_PASSWORD in .env}
+    volumes:
+      - ./data:/data    # database, uploads, map tile cache
+      - ./share:/share  # FIT folder (e.g. share/trailbook) and exports (share/trailbook-exports)

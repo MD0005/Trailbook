@@ -104,6 +104,22 @@ Or by hand:
 3. Find **Trailbook** in the store and click **Install**.
 4. Click **Start**, then **Open web UI** (or turn on *Show in sidebar*).
 
+### Without Home Assistant (Docker)
+
+The same image runs on any machine with Docker (amd64 or arm64, e.g. a Raspberry Pi or a NAS).
+Download [`docker-compose.yml`](docker-compose.yml), put a password next to it and start:
+
+```bash
+echo "TRAILBOOK_PASSWORD=pick-a-password" > .env
+docker compose up -d                       # then open http://<this machine>:8099
+```
+
+The database lives in `./data`; put FIT files in `./share/trailbook` and choose
+`/share/trailbook` as the watched folder. Exports land in `./share/trailbook-exports`.
+Update with `docker compose pull && docker compose up -d`. Log out at `/logout`.
+The compose file does not start without `TRAILBOOK_PASSWORD`; with a plain `docker run` and no
+password there is no login at all, so leave it out only if nobody else can reach the port. Home Assistant notifications are not available outside Home Assistant.
+
 ## First steps
 
 1. **Settings › People** — add the people whose training you keep.

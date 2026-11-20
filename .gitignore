@@ -20,6 +20,9 @@ dist/
 *.db-shm
 sample-data/
 data/
+# docker-compose.yml run from the repository root
+share/
+.env
 
 # Editors / OS
 .vscode/
