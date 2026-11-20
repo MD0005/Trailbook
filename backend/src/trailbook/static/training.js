@@ -26,7 +26,8 @@ const personParam = () => (CURRENT && CURRENT !== "all" ? { person: CURRENT } : 
 
 const ICON_CAL_MONTH = svg(`<rect x="3" y="4" width="18" height="17" rx="2"/><path d="M3 9h18M8 2v4M16 2v4"/><path d="M7 13h2M11 13h2M15 13h2M7 17h2M11 17h2"/>`);
 const ICON_CAL_YEAR = svg(`<rect x="3" y="3" width="5" height="5" rx="1"/><rect x="10" y="3" width="5" height="5" rx="1"/><rect x="17" y="3" width="4" height="5" rx="1"/><rect x="3" y="10" width="5" height="5" rx="1"/><rect x="10" y="10" width="5" height="5" rx="1"/><rect x="17" y="10" width="4" height="5" rx="1"/><rect x="3" y="17" width="5" height="4" rx="1"/><rect x="10" y="17" width="5" height="4" rx="1"/>`);
-const ICON_TOTALS = svg(`<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>`);
+const ICON_YEARS = svg(`<path d="M3 19h18"/><path d="M4 16c3-5 6-7 9-7s5 2 7 3"/><path d="M4 12c3-4 6-6 9-6s5 1 7 2" opacity=".5"/>`);
+const ICON_TIMELINE = svg(`<path d="M3 19h18"/><path d="M4 17l4-5 4 2 4-6 4 3"/>`);
 const ICON_RECORDS = svg(`<path d="M8 21h8M12 17v4M7 4h10v5a5 5 0 0 1-10 0z"/><path d="M17 5h3a3 3 0 0 1-3 4M7 5H4a3 3 0 0 0 3 4"/>`);
 
 // ---- Calendar ---------------------------------------------------------------------------
@@ -821,67 +822,170 @@ const parsePace = (txt) => {
 };
 
 // ---- Statistics -------------------------------------------------------------------------
+// Three views (docs/SPEC.md › Statistics): Years (each year one series over its weeks or months;
+// every metric as a chart and its running total side by side), Timeline (the whole period on
+// one axis) and Records. Header: Time, Type and X axis (Weeks / Months / Years; Months on every
+// visit; Years has no Years).
 
-const STAT_METRICS = [["time_s", "Time"], ["distance_m", "Distance"], ["ascent_m", "Elevation gain"], ["load", "Training load"], ["count", "Activities"]];
-const fmtMetric = (k, v) => (k === "time_s" ? hours(v) : k === "distance_m" ? km(v) : k === "ascent_m" ? meters(v) : k === "load" ? loadUnit(v) : num(v || 0));
+const STAT_X = [["week", "Weeks"], ["month", "Months"], ["year", "Years"]];
 const RECORD_LABELS = {
   pace: { 400: "400 m", 1000: "1 km", 1609.344: "1 mile", 5000: "5 km", 10000: "10 km", 21097.5: "Half marathon", 42195: "Marathon" },
   power: { 5: "5 s", 15: "15 s", 30: "30 s", 60: "1 min", 300: "5 min", 600: "10 min", 1200: "20 min", 3600: "60 min" },
   hr: { 60: "1 min", 300: "5 min", 1200: "20 min", 3600: "60 min" },
 };
+// Series colours (pastel, distinct): years newest first, tile sizes large to small.
+const SERIES_COLORS = ["#5b8def", "#e0879f", "#5fb48a", "#d9a441", "#9a86d6", "#4fb0b8", "#c98a68", "#8d99ae", "#b5a33b", "#d77fc1"];
+// The metrics of Years: [key, title, unit, value from the totals, decimals]
+const STAT_METRICS = [
+  ["distance_m", "Distance", "km", (v) => v / 1000, 1],
+  ["count", "Activities", "", (v) => v, 0],
+  ["ascent_m", "Elevation gain", "m", (v) => v, 0],
+  ["time_s", "Time", "h", (v) => v / 3600, 1],
+];
+let STAT_CHARTS = null; // chart group of the page (destroyed on the next draw)
 
 async function renderStats(params) {
-  const tab = params.tab === "records" ? "records" : "totals";
-  const sw = switchHtml("stab", [["totals", `${ICON_TOTALS}<span>Totals</span>`], ["records", `${ICON_RECORDS}<span>Records</span>`]], tab);
+  const tab = ["timeline", "records"].includes(params.tab) ? params.tab : "years";
+  const sw = switchHtml("stab", [["years", `${ICON_YEARS}<span>Years</span>`], ["timeline", `${ICON_TIMELINE}<span>Timeline</span>`],
+    ["records", `${ICON_RECORDS}<span>Records</span>`]], tab);
   if (tab === "records") await renderRecords(params, sw);
-  else await renderTotals(params, sw);
-  view.querySelectorAll("[data-switch=stab]").forEach((b) => b.onclick = () => { location.hash = "#/stats?tab=" + b.dataset.value; });
+  else await renderStatCharts(params, sw, tab);
+  view.querySelectorAll("[data-switch=stab]").forEach((b) => b.onclick = () => {
+    location.hash = "#/stats?" + new URLSearchParams({ ...filterQuery(params), tab: b.dataset.value });
+  });
 }
 
-async function renderTotals(params, sw) {
-  const oneYear = (params.from && params.to && params.from.slice(0, 4) === params.to.slice(0, 4)) || yearList(params).length === 1
-    || ["1m", "3m", "6m", "ytd"].includes(params.last);
-  const by = ["year", "month", "week"].includes(params.by) ? params.by : (oneYear ? "month" : "year");
-  const metric = STAT_METRICS.some(([k]) => k === params.metric) ? params.metric : "time_s";
-  const q = { person: CURRENT, by, ...filterQuery(params) };
-  const data = await api("stats/totals?" + new URLSearchParams(q));
-  const route = "#/stats";
-  const optionsPanel = `<div class="panel-grid">
-      ${section("Group by", `<select data-pfilter="by">${[["year", "Year"], ["month", "Month"], ["week", "Week"]].map(([v, l]) => `<option value="${v}" ${v === by ? "selected" : ""}>${l}</option>`).join("")}</select>`)}
-      ${section("Chart", `<select data-pfilter="metric">${STAT_METRICS.map(([v, l]) => `<option value="${v}" ${v === metric ? "selected" : ""}>${l}</option>`).join("")}</select>`)}
-    </div><div class="panel-actions"><button class="primary small" data-apply>Apply</button></div>`;
-  const badges = timeBadge(params) + typeBadge(params) + badgeHtml("options", "Options", "", { panel: optionsPanel });
-  const rows = data.rows;
-  const t = (k) => rows.reduce((s, r) => s + (r[k] || 0), 0);
-  const strip = statStrip([
-    ["Activities", num(t("count")), `${num(t("active_days"))} active days`],
-    ["Distance", km(t("distance_m"))],
-    ["Time", hours(t("time_s"))],
-    ["Elevation gain", meters(t("ascent_m"))],
-    ["Training load", loadUnit(t("load"))],
-    ["Calories", kcal(t("calories"))],
-  ]);
-  const max = Math.max(1, ...rows.map((r) => r[metric] || 0));
-  const periodLabel = (p) => (by === "month" ? `${MONTHS[+p.slice(5, 7) - 1].slice(0, 3)} ${p.slice(2, 4)}` : by === "week" ? p.replace("-W", " W") : p);
-  const chart = rows.length ? `<div class="bars-v">${rows.map((r) => `<div class="bar-v" title="${esc(periodLabel(r.period))}: ${fmtMetric(metric, r[metric])}">
-      <span class="bar-v-val">${fmtMetric(metric, r[metric])}</span>
-      <span class="bar-v-fill" style="height:${((r[metric] || 0) / max) * 100}%"></span>
-      <span class="bar-v-label">${esc(periodLabel(r.period))}</span></div>`).join("")}</div>` : hint("No activities match the filters.");
-  const gmax = Math.max(1, ...data.groups.map((g) => g.time_s || 0));
-  view.innerHTML = `${pageHead("Statistics", badges, sw)}${strip}
-    <div class="card"><h3>${STAT_METRICS.find(([k]) => k === metric)[1]} per ${by}</h3>${chart}</div>
-    <div class="two-col wide-first">
-      <div class="card"><h3>Totals per ${by}</h3><div class="scroll"><table class="data">
-        <thead><tr><th>${by[0].toUpperCase() + by.slice(1)}</th><th class="num">Activities</th><th class="num">Active days</th><th class="num">Distance</th><th class="num">Time</th><th class="num">Elevation gain</th><th class="num">Load</th></tr></thead>
-        <tbody>${[...rows].reverse().map((r) => `<tr><td>${by === "year" ? `<a href="#/stats?${new URLSearchParams({ ...filterQuery(params), from: "", to: "", last: "", years: r.period, by: "month", metric })}">${r.period}</a>` : esc(periodLabel(r.period))}</td>
-          <td class="num">${num(r.count)}</td><td class="num">${num(r.active_days)}</td><td class="num">${km(r.distance_m)}</td><td class="num">${hours(r.time_s)}</td><td class="num">${meters(r.ascent_m)}</td><td class="num">${loadUnit(r.load)}</td></tr>`).join("")}</tbody></table></div></div>
-      <div class="card"><h3>By activity group</h3>${hint("Time")}
-        ${data.groups.map((g) => `<div class="bar-row"><span class="bar-label tb-activity-name">${groupIcon(g.category)}<span>${esc(groupLabel(g.category))}</span></span><span class="bar"><span style="width:${((g.time_s || 0) / gmax) * 100}%;background:var(--accent)"></span></span><span class="bar-value">${hours(g.time_s)}</span></div>`).join("") || hint("–")}
-      </div>
-    </div>`;
-  bindBadges(view.querySelector(".page-head"));
-  bindStagedFilter(view.querySelector(".page-head"), route, { tab: "totals", ...params });
-  bindFilterBadges(view.querySelector(".page-head"), route, { tab: "totals", ...params }, { drop: ["by"] });
+async function renderStatCharts(params, sw, tab) {
+  const choices = tab === "years" ? STAT_X.slice(0, 2) : STAT_X;
+  let x = choices.some(([k]) => k === TAB.statsX) ? TAB.statsX : "month"; // kept while on the tab
+  const xBadge = badgeHtml("stat-x", "X axis", choices.find(([k]) => k === x)[1], { panel: `<div class="opt-panel">${pickList("stat-x", choices, x)}</div>` });
+  view.innerHTML = `${pageHead("Statistics", timeBadge(params) + typeBadge(params) + xBadge, sw)}
+    <div class="charts${tab === "years" ? " pairs" : ""}" data-scharts><div class="card">${loaderHtml()}</div></div>`;
+  const head = view.querySelector(".page-head");
+  bindBadges(head);
+  bindFilterBadges(head, "#/stats", { ...params, tab });
+  const box = view.querySelector("[data-scharts]");
+  const draw = async () => {
+    const built = tab === "years" ? await yearCharts(params, x) : await timelineCharts(params, x);
+    STAT_CHARTS?.destroy?.();
+    if (!box.isConnected) return;
+    if (!built) { box.innerHTML = `<div class="card">${hint("No activities match the filters.")}</div>`; STAT_CHARTS = null; return; }
+    box.innerHTML = "";
+    STAT_CHARTS = chartGroup(box, built);
+  };
+  head.querySelectorAll('[data-pick="stat-x"]').forEach((b) => b.onclick = () => {
+    head.querySelectorAll('[data-pick="stat-x"]').forEach((o) => { o.classList.toggle("on", o === b); o.setAttribute("aria-checked", o === b); });
+    x = TAB.statsX = b.dataset.value;
+    head.querySelector('[data-badge-value="stat-x"]').textContent = choices.find(([k]) => k === x)[1];
+    document.onclick?.();
+    draw();
+  });
+  await draw();
+}
+
+// The days the filter covers: [first, last] (the first activity … today without one).
+function statWindow(params) {
+  const today = todayDay(), ys = yearList(params);
+  const lo = params.from || (params.last && params.last !== "all" ? lastSince(params.last) : null)
+    || (ys.length ? `${ys[0]}-01-01` : null) || TIME_RANGE.first || today;
+  const hi = params.to && params.to < today ? params.to : ys.length && `${ys[ys.length - 1]}-12-31` < today ? `${ys[ys.length - 1]}-12-31` : today;
+  return [lo, hi];
+}
+const dayMs = (d) => Date.parse(d + "T00:00:00Z");
+// Week k of year y as the server counts it (%W: weeks start on Monday, days before the first
+// Monday are week 0 - here part of week 1): [first day, last day].
+function weekSpan(y, k) {
+  const jan1 = dayMs(`${y}-01-01`), mon = jan1 + ((8 - new Date(jan1).getUTCDay()) % 7) * 86400000;
+  const a = k <= 1 ? jan1 : mon + (k - 1) * 7 * 86400000;
+  const b = Math.min(mon + k * 7 * 86400000 - 86400000, dayMs(`${y}-12-31`));
+  return [isoDay(new Date(a)), isoDay(new Date(b))];
+}
+function monthSpan(y, m) {
+  const mm = String(m).padStart(2, "0");
+  return [`${y}-${mm}-01`, isoDay(new Date(Date.UTC(y, m, 0)))];
+}
+
+// Years: one series per year over its weeks or months, for each metric the values and their
+// running total; a year's series covers only the filtered days (the current year ends today).
+async function yearCharts(params, by) {
+  const data = await api("stats/totals?" + new URLSearchParams({ person: CURRENT, by, ...filterQuery(params) }));
+  if (!data.rows.length) return null;
+  const n = by === "month" ? 12 : 53;
+  const xs = [...Array(n)].map((_, i) => i + 1);
+  const [lo, hi] = statWindow(params);
+  const posOf = (p) => (by === "month" ? +p.slice(5, 7) : Math.max(1, Math.min(53, +p.slice(6))));
+  const years = [...new Set(data.rows.map((r) => r.period.slice(0, 4)))].sort().reverse();
+  const color = (k) => SERIES_COLORS[k % SERIES_COLORS.length];
+  const sums = Object.fromEntries(years.map((y) => [y, xs.map(() => ({}))]));
+  for (const r of data.rows) {
+    const cell = sums[r.period.slice(0, 4)][posOf(r.period) - 1];
+    for (const [k] of STAT_METRICS) cell[k] = (cell[k] || 0) + (r[k] || 0);
+  }
+  // inside the filter: a value (0 without activities), outside: no point
+  const inside = (y, k) => { const [a, b] = by === "month" ? monthSpan(+y, k) : weekSpan(+y, k); return b >= lo && a <= hi; };
+  const charts = [];
+  for (const [key, title, unit, conv, dec] of STAT_METRICS) {
+    const fmt = (v) => `${num(v, v >= 100 ? 0 : dec)}${unit ? ` ${unit}` : ""}`;
+    for (const cumulative of [false, true]) {
+      const lines = years.map((y, k) => {
+        let run = 0;
+        const values = xs.map((p) => {
+          if (!inside(y, p)) return null;
+          const v = conv(sums[y][p - 1][key] || 0);
+          run += v;
+          return cumulative ? run : v;
+        });
+        return { label: y, values, color: color(k) };
+      });
+      const tags = lines.map((l) => {
+        const i = l.values.findLastIndex((v) => v != null);
+        return { label: l.label, value: i >= 0 ? l.values[i] : null, i, color: l.color, text: i >= 0 ? fmt(l.values[i]) : "–" };
+      });
+      charts.push({ key: `${key}${cumulative ? "-cum" : ""}`, label: title, title: cumulative ? `${title}, cumulative` : `${title} per ${by}`,
+        yTitle: title, unit, dec, multi: true, points: true, tagsInside: true, lines, tags, yMin: 0, height: 260, color: color(0) });
+    }
+  }
+  return { x: { [by]: xs }, kind: by, series: charts };
+}
+
+// Timeline: the whole filtered period on one axis. Explorer tiles: for each tile size (as in
+// Map › Options) the tiles visited by the end of each period (the Type filter applies; tiles
+// first visited before the Time filter count from its start). Computed in the browser from the
+// routes, as on the map.
+const TILE_SHORT = { 13: "Large", 14: "Explorer", 16: "Medium", 17: "Small" };
+async function timelineCharts(params, by) {
+  const q = { person: CURRENT };
+  const types = filterQuery(params).types;
+  if (types) q.types = types;
+  const key = JSON.stringify(q);
+  if (TAB.tileTracks?.key !== key) {
+    const d = await api("heatmap/tracks?" + new URLSearchParams(q));
+    TAB.tileTracks = { key, tracks: d.items.map((t) => ({ day: t.day, coords: lonLat(t.polyline) })), firsts: {} };
+  }
+  const T = TAB.tileTracks;
+  if (!T.tracks.length) return null;
+  const [lo0, hi] = statWindow(params);
+  const lo = lo0 < T.tracks[0].day ? T.tracks[0].day : lo0;
+  // period starts from the one holding `lo` to the one holding `hi`
+  const starts = [];
+  if (by === "week") for (let d = mondayOf(lo); d <= hi; d = addDays(d, 7)) starts.push(d);
+  else if (by === "month") for (let y = +lo.slice(0, 4), m = +lo.slice(5, 7); `${y}-${String(m).padStart(2, "0")}-01` <= hi; m === 12 ? (y++, m = 1) : m++) starts.push(`${y}-${String(m).padStart(2, "0")}-01`);
+  else for (let y = +lo.slice(0, 4); `${y}-01-01` <= hi; y++) starts.push(`${y}-01-01`);
+  const ends = starts.map((s, k) => (k + 1 < starts.length ? addDays(starts[k + 1], -1) : hi));
+  const lines = TILE_SIZES.map(([z], k) => {
+    T.firsts[z] ??= [...computeTiles(T.tracks, z).values()].map((t) => t.first).sort();
+    const f = T.firsts[z];
+    let j = 0;
+    const values = ends.map((e) => { while (j < f.length && f[j] <= e) j++; return j; });
+    return { label: TILE_SHORT[z], values, color: SERIES_COLORS[k] };
+  });
+  const tags = lines.map((l) => ({ label: l.label, value: l.values[l.values.length - 1], i: l.values.length - 1, color: l.color, text: num(l.values[l.values.length - 1]) }));
+  return {
+    x: { date: starts.map((d) => dayMs(d) / 1000) }, kind: "date",
+    series: [{ key: "tiles", label: "Explorer tiles", title: "Explorer tiles", yTitle: "Tiles visited", unit: "", dec: 0,
+      tip: "Map tiles visited by the end of each period, for each tile size of Map › Options.",
+      multi: true, points: true, tagsInside: true, lines, tags, yMin: 0, height: 360, color: SERIES_COLORS[0] }],
+  };
 }
 
 async function renderRecords(params, sw) {

@@ -152,6 +152,23 @@ performance condition, stamina and potential stamina. Streams without data are n
 - Hovering a chart shows that moment on the map (a dot on the route); hovering the route
   moves the charts' cursor there.
 
+## Statistics page
+
+- The same charts (frame, axes, grid, crosshair, drag to zoom, pins, card resize and order) with
+  several series in one chart (`multi`): no fill, a dot (5 px) per value, gaps where a series
+  has no value. Series colours: a fixed pastel list (newest year first; tile sizes large to
+  small).
+- **Pills** on the right at the height of each series' last value, smaller than elsewhere
+  (20 px), label and value inside ("2026 5 664 km"); pushed apart like the Fitness pills.
+  Hovering one lights its last dot; a click hides the series on every chart of the page (the
+  pill stays, grey) and shows it again.
+- **Hover**: the dot nearest to the cursor (in height) is lit (halo and white rim) with a value
+  flag beside it; the same series' dot at the same x is lit on every other chart of the page
+  (e.g. the cumulative pair), with its flag.
+- X axis: months (Jan … Dec, every month) or weeks (W1 … W53, every 1, 2, 4 or 8 weeks as they
+  fit) with half a period of room at both ends; Timeline: the date axis.
+- Years: four pairs of charts (per period | cumulative), two columns from 1100 px.
+
 ## Fitness page
 
 One chart group over the days of the Time filter. **Date axis**: even steps chosen by what

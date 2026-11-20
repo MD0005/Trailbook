@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.9
+
+### Added
+- Statistics: **Years** compares years — distance, activities, elevation and time per week or
+  month, each with its running total; hovering a dot lights the same one on its pair.
+- Statistics: **Timeline** with explorer tiles of every size (large, explorer, medium, small)
+  visited over time.
+- Statistics: Time, Type and X axis (weeks, months, years) in the header; a click on a series
+  pill hides that series.
+
+### Changed
+- Statistics: the old Totals view is replaced by Years and Timeline.
+
 ## 0.1.8
 
 ### Added

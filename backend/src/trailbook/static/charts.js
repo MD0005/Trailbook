@@ -36,6 +36,12 @@ const fillAlpha = (a) => (dark() ? a * 0.65 : a);
 //              fmt: (v) => text (values on the y axis, the flag, pins), points: true (a dot per value),
 //              tags: [{ label, value, color, mark }]  value pills on the right at the height of their
 //              value (instead of stats / legend), pushed apart so they never overlap }]
+//   kind "month" (x = 1…12) or "week" (x = week of the year): periods of a year (Statistics)
+//   multi: true - every series is in `lines` (no main one): a dot per value (points), the
+//              hovered dot (nearest line) gets the value flag and the same line's dot is lit on
+//              every multi chart of the group; tagsInside: the pills carry label and value
+//              inside (smaller); a click on a pill hides / shows that series (by its label)
+//              on every chart of the group, the pill stays grey
 //   marks: [{ x, icon, tip, href }] icons in a strip under the x axis (marksHidden: start hidden)
 //   hidden: [key] charts built but not shown (api.show(key, on) toggles one without a rebuild)
 //   mark: what hovering the stat highlights - "max" | "min" (a point), "up" | "down" (the climbs or
@@ -95,7 +101,18 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, onHov
     const prev = k ? new Date(vals[k - 1] * 1000).getUTCFullYear() : null;
     return k === 0 || prev !== y ? `${head}\n${y}` : head;
   });
-  const fmtX = (v, exact = false, incr = 1) => (v == null ? "" : g.kind === "date" ? fmtDate(v) : g.kind === "distance" ? (exact ? `${num(v, 2)} km` : num(v, stepDec(incr)))
+  // periods of a year: every month; weeks every 1, 2, 4 or 8 as they fit (~34 px each)
+  const periodSplits = (u, ai, min, max) => {
+    const fit = Math.max(2, Math.floor(u.bbox.width / (devicePixelRatio || 1) / 34));
+    const step = g.kind === "month" ? 1 : [1, 2, 4, 8].find((k) => (max - min) / k <= fit) || 13;
+    const out = [];
+    for (let v = Math.ceil(min / step) * step || step; v <= max; v += step) if (v >= min) out.push(v);
+    if (g.kind === "week" && step > 1 && min <= 1) out.unshift(1);
+    return out;
+  };
+  const fmtPeriod = (v, exact) => (g.kind === "month" ? (exact ? MONTHS_FULL[v - 1] : MONTHS_3[v - 1]) : `${exact ? "Week " : "W"}${v}`);
+  const MONTHS_FULL = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+  const fmtX = (v, exact = false, incr = 1) => (v == null ? "" : g.kind === "month" || g.kind === "week" ? fmtPeriod(Math.round(v), exact) : g.kind === "date" ? fmtDate(v) : g.kind === "distance" ? (exact ? `${num(v, 2)} km` : num(v, stepDec(incr)))
     : g.kind === "percent" ? `${num(v, exact ? 1 : 0)}${exact ? " %" : ""}` : fmtTime(v, exact));
   const fmtY = (s, v) => (v == null ? "–" : s.fmt ? s.fmt(v) : `${num(v, s.dec)}${s.unit ? " " + s.unit : ""}`);
   const zoneOf = (s, v) => (v == null ? null : s.zones?.find((z) => v >= z.lo && v < z.hi) || null);
@@ -106,7 +123,9 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, onHov
     el.className = "card chart-block";
     el.dataset.key = s.key;
     const xt = X_TITLE[g.kind];
-    const side = s.tags ? s.tags.map((t, k) => `<div class="chart-stat chart-tag" data-tag="${k}"${t.tip ? ` data-tip="${esc(t.tip)}"` : ""}><span class="chart-stat-label">${t.label}</span><span class="chart-ribbon" style="--c:${t.color}">${t.text}</span></div>`).join("")
+    const side = s.tags ? s.tags.map((t, k) => (s.tagsInside
+      ? `<div class="chart-stat chart-tag inside${t.off ? " off" : ""}" data-tag="${k}" data-tip="${esc(t.tip || `${t.label}: ${t.text} · click to ${t.off ? "show" : "hide"}`)}"><span class="chart-ribbon" style="--c:${t.color}"><span class="chart-ribbon-label">${t.label}</span>${t.text}</span></div>`
+      : `<div class="chart-stat chart-tag" data-tag="${k}"${t.tip ? ` data-tip="${esc(t.tip)}"` : ""}><span class="chart-stat-label">${t.label}</span><span class="chart-ribbon" style="--c:${t.color}">${t.text}</span></div>`)).join("")
       : (s.lines?.length && s.legend !== false ? [{ label: s.label, color: s.color }, ...s.lines].map((l) => `<div class="chart-legend-item"><i style="background:${l.color}${l.dash ? ";opacity:.9" : ""}" class="${l.dash ? "dash" : ""}"></i>${l.label}</div>`).join("") : "")
       + (s.stats || []).map(([l, v, , tip], k) => (v == null || v === "–" ? "" :
         `<div class="chart-stat" data-stat="${k}" data-tip="${esc(tip || statTip(l, s))}"><span class="chart-stat-label">${l}</span><span class="chart-ribbon" style="--c:${s.color}">${v}</span></div>`)).join("");
@@ -146,7 +165,9 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, onHov
       return stops.length ? c : s.color;
     };
     const multi = Boolean(s.lines?.length);
-    const extra = (s.lines || []).map((l) => ({ label: l.label, stroke: l.color, width: 2, dash: l.dash, points: { show: false }, spanGaps: true }));
+    const extra = (s.lines || []).map((l) => ({ label: l.label, stroke: l.color, width: 2, dash: l.dash, show: !l.hidden, spanGaps: !s.multi,
+      points: s.multi && s.points ? { show: true, size: 5, width: 0, fill: l.color } : { show: false } }));
+    const period = g.kind === "month" || g.kind === "week";
     const yRange = (u, mn, mx) => {
       const lo = Math.min(mn ?? 0, s.yMin ?? Infinity), hi = Math.max(mx ?? 1, s.yMax ?? -Infinity);
       const pad = (hi - lo) * 0.06 || 1;
@@ -163,21 +184,21 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, onHov
     const date = g.kind === "date";
     return {
       width, height: s.height || CHART_H, padding: [8, 2, 0, 0],
-      scales: { x: { time: g.kind === "date", range: (u, mn, mx) => (g.range || [mn, mx]) },
+      scales: { x: { time: g.kind === "date", range: (u, mn, mx) => (g.range || (period ? [mn - 0.5, mx + 0.5] : [mn, mx])) },
                 y: { dir: s.invert ? -1 : 1,
                      range: (u, mn, mx) => liftForSurface(u, s.yMin != null || s.yMax != null ? yRange(u, mn, mx) : uPlot.rangeNum(mn ?? 0, mx ?? 1, 0.1, true)) } },
       legend: { show: false },
       cursor: {
         sync: { key: syncKey, scales: ["x", null] },
         drag: { x: true, y: false, setScale: false },
-        points: { size: 10, width: 2, stroke: cssVar("--surface") || "#fff",
+        points: { ...(s.multi ? { show: false } : {}), size: 10, width: 2, stroke: cssVar("--surface") || "#fff",
                   fill: (u, si) => (si === 1 ? colorAt(s, s.values[u.cursor.idx]) : s.lines[si - 2].color) },
       },
-      series: [{}, { label: s.label, stroke: s.zones ? zoneStroke : s.color, width: s.zones ? 2.4 : 2, fill: (s.fill ?? !(multi || s.zones)) ? grad : undefined, points: s.points ? { show: true, size: 6, width: 0, fill: s.color } : { show: false }, spanGaps: true }, ...extra],
+      series: [{}, { label: s.label, stroke: s.multi ? "transparent" : s.zones ? zoneStroke : s.color, width: s.zones ? 2.4 : 2, fill: (s.fill ?? !(multi || s.zones)) ? grad : undefined, points: s.points ? { show: true, size: 6, width: 0, fill: s.color } : { show: false }, spanGaps: true }, ...extra],
       axes: [
         { font: CHART_FONT, stroke: muted, space: 46, size: date ? 32 : 18, gap: 2, border: { show: true, stroke: axis, width: 1 },
           grid: { show: false }, ticks: { stroke: axis, size: 3, width: 1 },
-          ...(date ? { splits: dateSplits, values: dateLabels } : { values: (u, vals, ax, space, incr) => vals.map((v) => fmtX(v, false, incr)) }) },
+          ...(date ? { splits: dateSplits, values: dateLabels } : period ? { splits: periodSplits, values: (u, vals) => vals.map((v) => fmtX(v)) } : { values: (u, vals, ax, space, incr) => vals.map((v) => fmtX(v, false, incr)) }) },
         { font: CHART_FONT, stroke: muted, space: 22, gap: 2, border: { show: true, stroke: axis, width: 1 },
           ...(s.ySplits ? { splits: (u) => s.ySplits.filter((v) => v >= u.scales.y.min && v <= u.scales.y.max) } : {}),
           // one width for the y axis of every chart in the group: the plots start at the same x,
@@ -193,7 +214,7 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, onHov
         // soft shadow under the series line
         drawClear: [(u) => drawZones(u, s)],
         drawAxes: [(u) => { u.ctx.save(); u.ctx.shadowColor = s.zones ? "rgba(0,0,0,.18)" : withAlpha(s.color, 0.55); u.ctx.shadowBlur = 6; u.ctx.shadowOffsetY = 2; }],
-        draw: [(u) => { u.ctx.restore(); drawSurface(u, s); drawTargets(u, s); drawClimbs(u, s); drawExt(u, s); drawSections(u, s); drawMark(u, s); drawFrame(u, axis); placeSections(u, s); placeClimbs(u, s); drawPins(u); placeTags(u, s); placeMarks(u, s); }],
+        draw: [(u) => { u.ctx.restore(); drawSurface(u, s); drawTargets(u, s); drawClimbs(u, s); drawExt(u, s); drawSections(u, s); drawMark(u, s); drawFocus(u, s); drawFrame(u, axis); placeSections(u, s); placeClimbs(u, s); drawPins(u); placeTags(u, s); placeMarks(u, s); }],
         setCursor: [(u) => cursorMoved(u, s)],
         setSelect: [(u) => {
           if (u.select.width < 4) return;
@@ -293,10 +314,11 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, onHov
     // the column is as wide as the widest pill (no empty strip on the right)
     box.style.width = `${Math.ceil(Math.max(0, ...items.map((el) => el.offsetWidth)))}px`;
     const off = u.over.getBoundingClientRect().top - box.getBoundingClientRect().top;
-    const h = 32, step = h + 3, lo = 0, hi = box.clientHeight - h;
+    // pills with the label inside are lower; a hidden series' pill keeps its height (grey)
+    const h = s.tagsInside ? 20 : 32, step = h + (s.tagsInside ? 2 : 3), lo = 0, hi = box.clientHeight - h;
     const want = items.map((el, k) => {
       const v = s.tags[k].value;
-      const y = v == null ? 0 : off + u.valToPos(Math.min(u.scales.y.max, Math.max(u.scales.y.min, v)), "y") - h + 8; // ribbon centre on the value
+      const y = v == null ? 0 : off + u.valToPos(Math.min(u.scales.y.max, Math.max(u.scales.y.min, v)), "y") - (s.tagsInside ? h / 2 : h - 8); // ribbon centre on the value
       return { el, y };
     }).sort((p, q) => p.y - q.y);
     // Pills that would overlap form a cluster centred on their wanted heights: each gives
@@ -604,6 +626,66 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, onHov
     ctx.globalAlpha = 1;
     ctx.restore();
   }
+  // Multi charts: the hovered dot (g.focus: a line's label and the sample) - the same line's dot
+  // on every multi chart of the group, lit like a hovered stat point.
+  function drawFocus(u, s) {
+    const f = g.focus;
+    if (!s.multi || !f) return;
+    const k = s.lines.findIndex((l) => l.label === f.label && !l.hidden);
+    const v = k < 0 ? null : s.lines[k].values[f.i];
+    if (v == null) return;
+    const ctx = u.ctx, dpr = devicePixelRatio || 1, c = s.lines[k].color;
+    const x = u.valToPos(xs()[f.i], "x", true), y = u.valToPos(v, "y", true);
+    ctx.save();
+    ctx.beginPath(); ctx.arc(x, y, 11 * dpr, 0, 2 * Math.PI); ctx.fillStyle = withAlpha(c, 0.25); ctx.fill();
+    ctx.beginPath(); ctx.arc(x, y, 5.5 * dpr, 0, 2 * Math.PI);
+    ctx.fillStyle = c; ctx.fill(); ctx.lineWidth = 2.5 * dpr; ctx.strokeStyle = cssVar("--surface") || "#fff"; ctx.stroke();
+    ctx.restore();
+  }
+  // the visible line of a multi chart nearest to the cursor at sample i (by height)
+  function nearestLine(u, s, i) {
+    let best = null;
+    s.lines.forEach((l) => {
+      const v = l.values[i];
+      if (l.hidden || v == null) return;
+      const d = Math.abs(u.valToPos(v, "y") - u.cursor.top);
+      if (!best || d < best.d) best = { d, label: l.label };
+    });
+    return best?.label ?? null;
+  }
+  // the value flag of a multi chart: the focused line's value at sample i, beside its dot
+  function multiTip(u, s, i) {
+    const b = u._tb, l = g.focus && s.lines.find((x) => x.label === g.focus.label && !x.hidden);
+    const v = l ? l.values[i] : null;
+    if (v == null) { b.tip.hidden = true; return; }
+    b.tip.hidden = false;
+    b.tip.innerHTML = `<span class="chart-tip-name">${l.label}</span> <b style="color:${l.color}">${fmtY(s, v)}</b>`;
+    const left = u.valToPos(xs()[i], "x"), top = u.valToPos(v, "y"), w = u.over.clientWidth;
+    b.tip.style.transform = `translate(${left + 14 + 150 > w ? left - 14 - b.tip.offsetWidth : left + 14}px, ${Math.max(0, top - 22)}px)`;
+  }
+  // Show or hide one series (by label) on every multi chart of the group; its pills turn grey.
+  function toggleLine(label) {
+    const off = !g.plots.some(({ s }) => s.multi && s.lines.some((l) => l.label === label && l.hidden));
+    for (const { u, s, el } of g.plots) {
+      if (!s.multi) continue;
+      s.lines.forEach((l, k) => {
+        if (l.label !== label) return;
+        l.hidden = off;
+        u.setSeries(k + 2, { show: !off });
+      });
+      (s.tags || []).forEach((t, k) => {
+        if (t.label !== label) return;
+        t.off = off;
+        const pill = el.querySelector(`[data-tag="${k}"]`);
+        pill?.classList.toggle("off", off);
+        pill?.setAttribute("data-tip", t.tip || `${t.label}: ${t.text} · click to ${off ? "show" : "hide"}`);
+      });
+      placeTags(u, s);
+    }
+    if (g.focus?.label === label) g.focus = null;
+    g.plots.forEach(({ u }) => u.redraw(false));
+  }
+
   // Hovered stat: the point (max/min), the climbs/descents, or a line at the value (average).
   function drawMark(u, s) {
     const m = g.mark;
@@ -693,6 +775,25 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, onHov
     if (!show && u._tgt) { u._tgt = null; u.redraw(false); }
     if (!show) {
       if (u === g.plots[0]?.u) { g.hoverIdx = null; onHover(null); }
+      if (s.multi && g.focus && !g.plots.some(({ u: p }) => p.root.parentElement?.classList.contains("hot"))) {
+        g.focus = null;
+        g.plots.forEach(({ u: p }) => p.redraw(false));
+      }
+      return;
+    }
+    if (s.multi) {
+      // the hovered chart picks the dot; the other multi charts of the group follow it
+      if (u.root.parentElement?.classList.contains("hot")) {
+        const label = nearestLine(u, s, i);
+        if (label !== g.focus?.label || i !== g.focus?.i) {
+          g.focus = label == null ? null : { label, i };
+          g.plots.forEach(({ u: p, s: ps }) => { if (ps.multi && p !== u) multiTip(p, ps, i); p.redraw(false); });
+        }
+      }
+      multiTip(u, s, i);
+      b.xflag.textContent = fmtX(xs()[i], true);
+      b.xflag.style.left = `${u.over.offsetLeft + u.cursor.left}px`;
+      b.xflag.style.top = `${u.over.offsetTop + u.over.offsetHeight + 1}px`;
       return;
     }
     const v = s.values[i];
@@ -765,6 +866,7 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, onHov
       s._color ??= s.color; s.color = muteDark(s._color);
       (s.lines || []).forEach((l) => { l._color ??= l.color; l.color = muteDark(l._color); });
       (s.zones || []).forEach((z) => { z._color ??= z.color; z.color = muteDark(z._color); });
+      if (s.multi) { s.values = xs().map(() => null); (s.tags || []).forEach((t) => { t._color ??= t.color; t.color = muteDark(t._color); }); }
       const el = block(s);
       root.appendChild(el);
       const holder = el.querySelector(".chart-plot");
@@ -788,7 +890,13 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, onHov
       cardResize(el, () => u.height, (h) => { s.height = h; u.setSize({ width: u.width, height: h }); renderPins(); placeTags(u, s); }, 120, 640);
       // The horizontal crosshair line only in the hovered chart.
       u.over.addEventListener("mouseenter", () => holder.classList.add("hot"));
-      u.over.addEventListener("mouseleave", () => holder.classList.remove("hot"));
+      u.over.addEventListener("mouseleave", () => {
+        holder.classList.remove("hot");
+        if (s.multi && g.focus) {
+          g.focus = null;
+          g.plots.forEach(({ u: p }) => { p._tb.tip.hidden = true; p.redraw(false); });
+        }
+      });
       u.over.addEventListener("click", () => { if (g.dragged) { g.dragged = false; return; } addPin(u.cursor.idx); });
       reset.onclick = () => api.reset();
       el.querySelectorAll("[data-stat]").forEach((st) => {
@@ -806,6 +914,16 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, onHov
       // A value pill highlights its point (current value, max, min) in its own colour.
       el.querySelectorAll("[data-tag]").forEach((st) => {
         const t = s.tags[st.dataset.tag];
+        if (s.multi) { // a series pill: hovering lights its last dot, a click hides / shows it
+          st.onclick = () => toggleLine(t.label);
+          st.onmouseenter = () => {
+            if (t.off || t.i == null) return;
+            g.focus = { label: t.label, i: t.i }; st.classList.add("on");
+            g.plots.forEach(({ u: p }) => p.redraw(false));
+          };
+          st.onmouseleave = () => { st.classList.remove("on"); g.focus = null; g.plots.forEach(({ u: p }) => p.redraw(false)); };
+          return;
+        }
         st.onmouseenter = () => {
           if (t.i == null || t.mark === false) return; // a latest value: its point is the line's end, next to the pill
           const vals = t.values || s.values;

@@ -56,7 +56,8 @@ export, FIT/GPX/TCX files) are there to bring in older history or a second devic
 ### Fitness and statistics
 - Training load of every activity, and fitness, fatigue and form over time.
 - Records and best efforts (fastest 5 km, best 20 min power…) with their curves.
-- Totals per week, month and year and per sport; a calendar of your training.
+- Years compared: distance, activities, elevation and time per week or month, each year a
+  line, with running totals; explorer tiles of every size over time; a calendar of your training.
 - Compare people side by side.
 
 ![Fitness](docs/screenshots/fitness.png)
