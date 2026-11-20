@@ -1056,7 +1056,7 @@ workouts* on. Code: `planner.py` (workouts, estimates, text), `icu.py` (key, syn
   /data/trailbook.db`, `TRAILBOOK_ALLOWED_ROOTS=/share:/media:/config`, `TRAILBOOK_EXPORT_DIR=
   /share/trailbook-exports`, `TRAILBOOK_VERSION` (= add-on version, shown in the UI).
 - The UI works under Ingress because every URL is relative and routing uses `#`; static files
-  are sent with `Cache-Control: no-cache`, so an update never shows a stale UI.
+  are sent with `Cache-Control: no-cache`, and `index.html` (`no-store`, built once per start) names every local script and stylesheet as `file?v=<first 10 hex of its SHA-1>`: an update gives changed files new addresses, so no cache on the way (browser, Ingress, the companion app, a proxy) keeps an old UI.
 - **Shipping a change:** commit to `main` with a bumped `version` in `trailbook/config.yaml`.
   GitHub Actions (`.github/workflows/addon.yml`) runs lint + tests on every push and builds both
   images only when that version is not on GHCR yet. When the run is green: HA › Settings ›

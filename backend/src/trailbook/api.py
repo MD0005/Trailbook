@@ -7,6 +7,7 @@ All URLs used by the frontend are relative, so the app works behind HA Ingress.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -67,6 +68,25 @@ class _RevalidatedStatic(StaticFiles):
         response = await super().get_response(path, scope)
         response.headers["Cache-Control"] = "no-cache"
         return response
+
+
+# index.html with every local script and stylesheet as `name?v=<hash of its content>`: a new
+# version of a file is a new address, so no cache on the way (the browser, Home Assistant's
+# Ingress, the companion app, a proxy) can keep showing an old UI after an update.
+_ASSET_RE = re.compile(r'(<(?:script|link)[^>]*?\s(?:src|href)=")([^":?#]+\.(?:js|css))(")')
+
+
+def _versioned_index() -> str:
+    html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+
+    def stamp(m: re.Match) -> str:
+        try:
+            digest = hashlib.sha1((STATIC_DIR / m[2]).read_bytes()).hexdigest()[:10]
+        except OSError:
+            return m[0]
+        return f"{m[1]}{m[2]}?v={digest}{m[3]}"
+
+    return _ASSET_RE.sub(stamp, html)
 
 
 ACTIVITY_LIST_FIELDS = (
@@ -877,6 +897,11 @@ def create_app(db_path: str | Path) -> Starlette:
         except OSError as exc:
             return JSONResponse({"error": str(exc)}, status_code=503)
         return JSONResponse(result)
+
+    index_html = _versioned_index()  # once per start: the files change only with an update
+
+    async def app_index(request: Request):
+        return Response(index_html, media_type="text/html", headers={"Cache-Control": "no-store"})
 
     # Settings › Log: the app log (applog), newest first.
     async def app_log(request: Request):
@@ -2340,6 +2365,8 @@ def create_app(db_path: str | Path) -> Starlette:
         Route("/api/import/files/{id:int}", import_file_forget, methods=["DELETE"]),
         Route("/api/import/files/{id:int}/dismiss", import_file_dismiss, methods=["POST"]),
         Route("/api/import/files/{id:int}/retry", import_file_retry, methods=["POST"]),
+        Route("/", app_index),
+        Route("/index.html", app_index),
         Mount("/", _RevalidatedStatic(directory=STATIC_DIR, html=True), name="static"),
     ]
 

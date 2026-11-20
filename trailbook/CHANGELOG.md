@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.10
+
+### Fixed
+- After an update the browser or the Home Assistant app could keep showing the old pages
+  (e.g. no Settings › Log, the old Statistics); every update now loads the new ones.
+
 ## 0.1.9
 
 ### Added

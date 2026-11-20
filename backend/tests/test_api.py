@@ -1,3 +1,4 @@
+import re
 import shutil
 
 import pytest
@@ -206,3 +207,13 @@ def test_time_filter_last_and_years(setup):
     assert ids("years=2023,2025") == [1, 3]  # years with a gap
     assert ids("years=2024") == [2]
     assert client.get("/api/activities?years=24").status_code == 400
+
+
+def test_index_versions_its_files(setup):
+    client, _, _ = setup
+    r = client.get("/")
+    assert r.headers["cache-control"] == "no-store"
+    assert re.search(r'src="preview\.js\?v=[0-9a-f]{10}"', r.text)
+    assert re.search(r'href="preview\.css\?v=[0-9a-f]{10}"', r.text)
+    assert client.get("/index.html").text == r.text
+    assert client.get("/preview.js?v=abc").status_code == 200  # the query does not matter
