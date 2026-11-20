@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import bisect
 import json
+import logging
 import re
 import sqlite3
 import time
@@ -36,6 +37,8 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 from . import __version__, analysis, db, homeassistant, importer, streams
+
+log = logging.getLogger("trailbook.garmin")
 
 BASE_URL = "https://personal.connectapi.garmin.com"
 TOKEN_PATH = "/personalapitoken-service/personal-api/personal-api-key/token"
@@ -398,7 +401,11 @@ def store_details(conn: sqlite3.Connection, local_id: int, details: dict) -> lis
     rows = [m.get("metrics") or [] for m in details.get("activityDetailMetrics") or []]
     if ts_i is None or not rows:
         return []
-    pts = sorted((r[ts_i] / 1000 - start, r) for r in rows if len(r) > ts_i and r[ts_i] is not None)
+    # By time only: two points can share a timestamp, and their rows hold None next to numbers.
+    pts = sorted(
+        ((r[ts_i] / 1000 - start, r) for r in rows if len(r) > ts_i and r[ts_i] is not None),
+        key=lambda p: p[0],
+    )
     keys = [p[0] for p in pts]
     stored = []
     for key, channel in DETAIL_CHANNELS.items():
@@ -635,6 +642,8 @@ def _fetch_details(conn: sqlite3.Connection, client: Client, pid: str, budget: i
         except GarminError as exc:
             if exc.stop_run:
                 raise
+        except Exception:  # unexpected details: skip this activity, never stop the run
+            log.exception("Garmin details of activity %s could not be stored", gid)
         conn.execute(
             "UPDATE garmin_activities SET details_at = ? WHERE person_id = ? AND activity_id = ?",
             (importer.now_iso(), pid, gid),

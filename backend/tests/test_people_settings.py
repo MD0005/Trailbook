@@ -5,7 +5,7 @@ import pytest
 from conftest import make_fit
 from starlette.testclient import TestClient
 
-from trailbook import db, importer, scheduler
+from trailbook import db, importer, jobs, scheduler
 from trailbook.api import create_app
 
 T0 = 1_100_000_000  # FIT time
@@ -63,6 +63,12 @@ def test_next_scan_time(conn, tmp_path):
     )
     db.set_setting(conn, "scan_interval_min", "30")
     assert scheduler.next_scan_at(conn) == finished + timedelta(minutes=30)
+    # a failed run (no import_runs row) counts too, so it is not retried at once
+    jobs.write_progress(
+        conn, state="failed", error="TypeError", started_at="2026-01-01T12:59:00Z",
+        finished_at="2026-01-01T13:00:00Z",
+    )  # fmt: skip
+    assert scheduler.next_scan_at(conn) == finished + timedelta(minutes=90)
     db.set_setting(conn, "scan_interval_min", "0")
     assert scheduler.next_scan_at(conn) is None
 

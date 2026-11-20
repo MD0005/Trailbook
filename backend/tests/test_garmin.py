@@ -9,7 +9,7 @@ import zipfile
 
 from conftest import make_fit
 
-from trailbook import garmin, importer
+from trailbook import garmin, importer, streams
 
 
 class FakeGarmin:
@@ -383,3 +383,33 @@ def test_strava_copy_does_not_block_the_garmin_download(conn, tmp_path, monkeypa
     conn.execute("UPDATE activities SET name = NULL, name_source = NULL")
     importer.apply_connect_title(conn, copy)
     assert conn.execute("SELECT name FROM activities").fetchone()[0] == "Run 0"
+
+
+def test_details_with_repeated_timestamp(conn):
+    """Two detail points at the same time, one with a gap (None), must not break sorting."""
+    conn.execute("INSERT INTO persons (id, label) VALUES ('anna', 'Anna')")
+    aid = conn.execute(
+        """INSERT INTO activities (person_id, fit_uid, start_time_utc, category, activity_type,
+                                   importer_version)
+           VALUES ('anna', 'a-1', '2026-01-01T08:00:00Z', 'run', 'run', 1)"""
+    ).lastrowid
+    enc, blob = streams.encode([0.0, 1.0, 2.0], "f64")
+    conn.execute(
+        "INSERT INTO streams (activity_id, channel, encoding, length, data) VALUES (?,?,?,?,?)",
+        (aid, "time", enc, 3, blob),
+    )
+    t0 = 1767254400000  # 2026-01-01T08:00:00Z in ms
+    details = {
+        "metricDescriptors": [
+            {"key": "directTimestamp", "metricsIndex": 0},
+            {"key": "directBodyBattery", "metricsIndex": 1},
+            {"key": "directGradeAdjustedSpeed", "metricsIndex": 2},
+        ],
+        "activityDetailMetrics": [
+            {"metrics": [t0, 80.0, None]},
+            {"metrics": [t0 + 1000, 80.0, 3.1]},
+            {"metrics": [t0 + 1000, 80.0, None]},
+            {"metrics": [t0 + 2000, 79.0, 3.2]},
+        ],
+    }
+    assert garmin.store_details(conn, aid, details) == ["body_battery", "gap_speed"]

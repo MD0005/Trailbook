@@ -250,7 +250,8 @@ assigned by their watch. Two people sharing one watch need folder mode.
 2. **API** → `POST /api/import/scan`.
 3. **Button** in the Import page.
 4. **Automatic scan** every N minutes (setting `scan_interval_min`, default 60, 0 = off),
-   counted from the end of the last run. One sleeping asyncio task in the API process; no
+   counted from the end of the last run — a failed run counts too, so a run that fails is
+   not restarted in a loop. One sleeping asyncio task in the API process; no
    CPU while waiting. The Import page shows the next scheduled scan and a *Scan folder now*
    button.
 

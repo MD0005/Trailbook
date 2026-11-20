@@ -43,10 +43,20 @@ def next_scan_at(conn) -> datetime | None:
     row = conn.execute(
         "SELECT finished_at FROM import_runs WHERE finished_at IS NOT NULL ORDER BY id DESC LIMIT 1"
     ).fetchone()
-    if row is None:
+    ends = [row["finished_at"]] if row else []
+    # A failed run leaves no import_runs row; count it too, or the run would be due again
+    # right away and fail in a loop.
+    progress = jobs.read_progress(conn)
+    if progress.get("state") == "failed" and progress.get("finished_at"):
+        ends.append(progress["finished_at"])
+    if not ends:
         return datetime.now(UTC)
-    last = datetime.strptime(row["finished_at"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
+    last = max(_parse(t) for t in ends)
     return last + timedelta(minutes=minutes)
+
+
+def _parse(t: str) -> datetime:
+    return datetime.strptime(t, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
 
 
 class Scheduler:
@@ -56,6 +66,7 @@ class Scheduler:
         self._wake = asyncio.Event()
         self._task: asyncio.Task | None = None
         self._notify_retry_at = datetime.min.replace(tzinfo=UTC)
+        self._last_run_end = datetime.min.replace(tzinfo=UTC)
 
     def start(self) -> None:
         self._task = asyncio.create_task(self._run(), name="trailbook-scheduler")
@@ -76,6 +87,9 @@ class Scheduler:
         while True:
             with closing(db.connect(self.db_path, apply_migrations=False)) as c:
                 due = next_scan_at(c)
+                if due is not None:
+                    # Also when a run died without a trace: never more often than the interval.
+                    due = max(due, self._last_run_end + timedelta(minutes=interval_min(c)))
                 notify_at = garmin.next_ha_notification_at(c)
             if notify_at is not None and notify_at < self._notify_retry_at:
                 notify_at = self._notify_retry_at  # Home Assistant did not answer: wait a bit
@@ -106,6 +120,7 @@ class Scheduler:
             # Wait for the run to finish so the next due time is based on it.
             while self.job.running():
                 await asyncio.sleep(5)
+            self._last_run_end = datetime.now(UTC)
             await asyncio.sleep(1)
 
     def _notify(self) -> None:
