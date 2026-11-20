@@ -166,11 +166,11 @@ function manualTypes() {
         ${mRows([
           ["Commute", "Walks and hikes, always."],
           ["Intervals", `Repeated hard bouts with real recoveries (${mLink("intervals", "Intervals in detail")}). The same climb repeated ${num(R.hill_repeats)}+ times is Hills.`],
-          ["Race", `≥ ${mPct(R.race_share)} of the time at ≥ ${mPct(R.race_hr)} of threshold HR, in every sport (no heart rate: never a race); rides with power also an intensity factor (NP ÷ FTP) of ${num(R.race_if, 2)}+. And ≥ ${mPct(R.race_best)} of your best intensity for a similar duration (±${mPct(R.race_peer_range)}, last ${num(R.race_days)} days), and ${mX(R.race_typical)} your typical, with few stops (elapsed at most ${mX(R.race_stops)} the timer time). A hot treadmill run has the heart rate of a race, not the performance.`],
+          ["Race", `≥ ${mPct(R.race_share)} of the time at ≥ ${mPct(R.race_hr)} of threshold HR, in every sport (no heart rate: never a race); rides with power also an intensity (weighted power ÷ FTP) of ${num(R.race_if, 2)}+. And ≥ ${mPct(R.race_best)} of your best intensity for a similar duration (±${mPct(R.race_peer_range)}, last ${num(R.race_days)} days), and ${mX(R.race_typical)} your typical, with few stops (elapsed at most ${mX(R.race_stops)} the timer time). A hot treadmill run has the heart rate of a race, not the performance.`],
           ["Hills", "As much climbing per kilometre as the sport's Hilly from."],
           ["Long", `${mX(R.long_median)} your median time of the sport and at least its Long from.`],
           ["Tempo", `≥ ${mPct(R.tempo_share)} of the time at ≥ ${mPct(R.tempo_hr)} of threshold HR with one ${num(R.tempo_block_min)}+ min stretch (dips up to a minute), or ≥ ${mPct(R.tempo_share_any)} in any stretches. Rides with power also: 30 s power at ≥ ${mPct(R.tempo_ftp)} of FTP for ${mPct(R.tempo_ftp_share)} of the time with a ${num(R.tempo_ftp_block_min)}+ min stretch.`],
-          ["Commute", `Easy rides and skates — under ${mPct(R.commute_hr_share)} of the time at tempo or harder, intensity factor under ${num(R.commute_if, 2)} — shorter than ${num(R.commute_min)} min or ending ${num(R.commute_ab_m / 1000)}+ km from the start.`],
+          ["Commute", `Easy rides and skates — under ${mPct(R.commute_hr_share)} of the time at tempo or harder, intensity under ${num(R.commute_if, 2)} — shorter than ${num(R.commute_min)} min or ending ${num(R.commute_ab_m / 1000)}+ km from the start.`],
           ["Easy", "Everything else."],
         ], ["Type", "Endurance sports — the first that fits"])}
         ${mRows([
@@ -214,11 +214,11 @@ function manualTypes() {
       body: `<p>Edit › Training type: Automatic (the detected type is named next to it) or one of the types of the sport; team and racket sports start as Not set. Your choice is kept through a new import and through detection running again. Detection runs after each import for new activities, and when the activity's type, its FTP or your thresholds change.</p>`,
     },
     {
-      id: "terms", title: "Terms", sum: "LTHR, FTP, NP, IF and more",
+      id: "terms", title: "Terms", sum: "LTHR, FTP, weighted power and more",
       body: mTerms([
         ["Threshold heart rate (LTHR)", "The heart rate you can hold for about an hour of hard effort."],
         ["FTP", "Functional threshold power: the power you can hold for about an hour."],
-        ["NP, IF", "Normalized power: the steady power that would cost the same as the actual, varying power. Intensity factor = NP ÷ FTP."],
+        ["Weighted power, intensity", "Weighted power: the steady power that would cost the same as the actual, varying power (4th-power mean of the 30 s average). Intensity = weighted power ÷ FTP."],
         ["Grade-adjusted speed", "Running speed corrected for the slope by the energy cost of running up and down (Minetti)."],
         ["Estimated power", "Cycling power from speed, slope and acceleration with a typical rider and bike; no wind, no drafting. Used for the shape of a session only, never against FTP."],
         ["Bout, recovery", "A hard stretch of an interval session and the easier stretch after it."],
@@ -377,11 +377,11 @@ function manualFitness() {
   const n = (v) => `${v < 0 ? "−" : ""}${num(Math.abs(v))}`; // real minus
   const range = (lo, hi) => (lo === -Infinity ? `below ${n(hi)}` : hi === Infinity ? `above ${n(lo)}` : `${n(lo)} to ${n(hi)}`);
   const FORM_TEXT = {
-    Transition: "Long rest: fitness is falling.",
+    Detraining: "Long rest: fitness is falling.",
     Fresh: "Rested. The zone to race in.",
-    "Grey zone": "Little stimulus: fitness is kept, not built.",
-    Optimal: "Training load that builds fitness.",
-    "High risk": "More than you recover from. Plan easy days.",
+    Neutral: "Little stimulus: fitness is kept, not built.",
+    Productive: "Training load that builds fitness.",
+    Overreaching: "More than you recover from. Plan easy days.",
   };
   const RAMP_TEXT = { "Too fast": "Risk of overload and injury.", Building: "Sustainable growth.", "Losing fitness": "Less training than before." };
   const zone = (name, color) => `<span class="man-zone"><i style="background:${color}"></i><b>${name}</b></span>`;
@@ -389,7 +389,7 @@ function manualFitness() {
     {
       id: "what", title: "What the charts show", sum: "Load, fitness, fatigue, form",
       body: mTiles([
-        ["Load", "Per activity, in TSS: one hour at your threshold = 100. An easy hour is about 50, a hard race hour 100+."],
+        ["Load", "Per activity, no unit: one hour at your threshold = 100. An easy hour is about 50, a hard race hour 100+."],
         ["Fitness (CTL)", `Average of the daily load over ~${num(ctl)} days. Grows slowly with steady training.`],
         ["Fatigue (ATL)", `Average of the daily load over ~${num(atl)} days. Jumps after every hard day.`],
         ["Form (TSB)", "Yesterday's fitness − fatigue. Positive = rested, negative = tired."],
@@ -399,8 +399,8 @@ function manualFitness() {
       id: "load", title: "Load per activity", sum: "Power, running pace or heart rate",
       body: `<p>Every sport counts. Each activity uses the first method from the top it has the data for; hours = the timer time.</p>
         ${mTable(["Method", "Load", "Activities"], [
-          ["<b>Power</b>", "TSS = hours × IF² × 100, IF = NP ÷ FTP", "A power stream and an FTP: rides (cycling FTP) and runs with running power (running FTP) from the watch; any sport with your FTP."],
-          ["<b>Running pace</b>", "The same, IF = average speed ÷ threshold speed", "Outdoor runs, with a threshold pace set by you."],
+          ["<b>Power</b>", "Load = hours × intensity² × 100, intensity = weighted power ÷ FTP", "A power stream and an FTP: rides (cycling FTP) and runs with running power (running FTP) from the watch; any sport with your FTP."],
+          ["<b>Running pace</b>", "The same, intensity = average speed ÷ threshold speed", "Outdoor runs, with a threshold pace set by you."],
           ["<b>Heart rate</b>", "TRIMP per second, 1 hour at threshold HR = 100", "Any sport with heart rate; without a stream, the average HR over the timer time."],
           ["<b>No load</b>", "–", "No power and no heart rate (e.g. strength without a strap): in totals, not in fitness."],
         ], ["fit", "fit", "*"])}
@@ -435,11 +435,11 @@ function manualFitness() {
         <p>Only when the load can really be off: resting HR is the default or HR max comes from your recordings, not the watch; or a year uses watch values more than ${num(Math.round((R.stale_days ?? 365) / 365))} year away. <i>Use estimate</i> in the editor stops the warning for that value.</p>`,
     },
     {
-      id: "terms", title: "Terms", sum: "TSS, CTL, ATL, TSB, NP, IF",
+      id: "terms", title: "Terms", sum: "Load, CTL, ATL, TSB, weighted power",
       body: mTerms([
-        ["TSS", "Training stress score: load of a session; one hour at threshold = 100."],
-        ["CTL, ATL, TSB", "Chronic and acute training load and training stress balance — the usual names of fitness, fatigue and form."],
-        ["NP, IF", "Normalized power: the steady power that would cost the same as the actual one. Intensity factor = NP ÷ FTP."],
+        ["Load", "The training load of a session; one hour at threshold = 100."],
+        ["CTL, ATL, TSB", "Chronic and acute training load and the balance of the two — the usual abbreviations of fitness, fatigue and form."],
+        ["Weighted power, intensity", "Weighted power: the steady power that would cost the same as the actual one. Intensity = weighted power ÷ FTP."],
         ["Threshold HR, FTP", "The heart rate and the power you can hold for about an hour."],
         ["HR max, resting HR", "Your highest and your lowest heart rate; the range the heart rate load is measured in."],
         ["TRIMP", "Training impulse: time weighted by how high the heart rate is."],

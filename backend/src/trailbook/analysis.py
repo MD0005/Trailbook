@@ -6,9 +6,9 @@ stored streams. Changing a person's thresholds resets the version of that person
 activities, so the next run recomputes their load.
 
 Training load, first method that has the data (SPEC §7.3):
-  1. power TSS   — power stream + FTP
-  2. pace rTSS   — running types, speed + threshold pace
-  3. hrTSS       — heart rate + threshold HR (TRIMP-based, Banister)
+  1. power       — power stream + FTP
+  2. pace        — running types, speed + threshold pace
+  3. heart rate  — heart rate + threshold HR (TRIMP-based, Banister)
   4. none
 Thresholds, per field (SPEC §7.3): a value the person set in Settings (`person_thresholds`,
 latest row valid on the activity day) replaces the one from the watch; the watch value
@@ -285,7 +285,7 @@ def best_time_for_distance_at(
 
 
 def normalized_power(power_1hz: list[float | None]) -> float | None:
-    """Coggan NP: 4th-power mean of the 30 s rolling average (missing samples = 0 W)."""
+    """Weighted power: 4th-power mean of the 30 s rolling average (missing samples = 0 W)."""
     p = [v or 0.0 for v in power_1hz]
     if len(p) < 30:
         return None
@@ -559,18 +559,6 @@ def daily_loads(conn: sqlite3.Connection, person_id: str) -> dict[str, float]:
             (person_id,),
         )
     }
-
-
-def fatigue_on(conn: sqlite3.Connection, activity: sqlite3.Row) -> dict | None:
-    """Fatigue (ATL) at the end of the activity's local day, and how much that day's load
-    raised it (from the day before). None when the person has no load."""
-    day = _local_day(activity)
-    series = fitness_series(daily_loads(conn, activity["person_id"]), date.fromisoformat(day))
-    k = next((i for i, d in enumerate(series) if d["date"] == day), None)
-    if k is None:
-        return None
-    before = series[k - 1]["atl"] if k else 0.0
-    return {"atl": series[k]["atl"], "change": round(series[k]["atl"] - before, 1)}
 
 
 def fitness_series(loads: dict[str, float], until: date | None = None) -> list[dict]:

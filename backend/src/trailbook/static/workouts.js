@@ -80,7 +80,7 @@ function planChart(est) {
 const PLAN_ITEMS = new Map(); // planned workouts drawn in the calendar, by id (to edit one)
 function planCardHtml(w, { extra = "", badge = "", attrs = "", cls = "" } = {}) {
   const e = w.estimate;
-  const facts = [dur(e.duration_s), e.distance_m ? `≈ ${km(e.distance_m)}` : "", `≈ ${num(e.load)} TSS`].filter(Boolean).join(" · ");
+  const facts = [dur(e.duration_s), e.distance_m ? `≈ ${km(e.distance_m)}` : "", `load ≈ ${num(e.load)}`].filter(Boolean).join(" · ");
   return `<div class="cal-act plan ${cls}" ${attrs}>
     <span class="cal-act-head" title="${esc(facts)}">${groupIcon(w.sport, 16)}<span class="cal-act-text">${esc(shortDur(e.duration_s))}</span>${badge}
       <span class="cal-kind">${esc(workoutLabel(e.kind))}</span>${extra}</span>
@@ -97,6 +97,28 @@ function planSummary(w) {
     return `${it.repeat} × ${step(work)}`;
   });
   return parts.join(" + ");
+}
+// A name for a workout nobody named: its kind and its main part — "Intervals 5 × 1 km",
+// "Tempo 2 × 15:00" — or, without repeats, the kind and the whole length — "Easy 45 min",
+// "Long 16 km". Without a kind yet the sport stands for it.
+function woSuggestName(w, est) {
+  const steps = w.steps || [];
+  if (!steps.length) return "";
+  const kind = est?.kind ? workoutLabel(est.kind) : WO_SPORTS.find(([k]) => k === w.sport)?.[1] || "";
+  const reps = steps.filter((it) => it.repeat);
+  let core = "";
+  if (reps.length) {
+    core = reps.map((it) => {
+      const work = it.steps.find((s) => s.type === "active") || it.steps[0];
+      return `${it.repeat} × ${woLength(work.length)}`;
+    }).join(" + ");
+  } else {
+    const all = steps.filter((s) => s.length);
+    const byDistance = all.length && all.every((s) => s.length.kind === "distance");
+    if (byDistance) core = shortDist(all.reduce((m, s) => m + s.length.value, 0));
+    else if (est?.duration_s) core = shortDur(est.duration_s);
+  }
+  return [kind, core].filter(Boolean).join(" ").slice(0, 60);
 }
 const planSyncIcon = (p) => (p.sync ? `<span class="cal-sync-off" title="${esc(p.sync)}">${ICON_SYNC_OFF}</span>` : "");
 const plannedFlag = (p) => `<span class="cal-planned" title="Planned: ${esc(p.name)} · ${esc(dur(p.estimate.duration_s))} · ${esc(workoutLabel(p.estimate.kind))}">${ICON_PLANNED}</span>`;
@@ -170,13 +192,18 @@ async function renderWorkoutTray(box, onPlaced) {
   const pid = CURRENT;
   const data = await api("workouts?" + new URLSearchParams({ person: pid }));
   const list = data.workouts;
-  box.innerHTML = `<div class="wo-tray" data-wotray>${list.map((w) => planCardHtml(w, {
+  box.innerHTML = `<div class="wo-panel"><h3 class="tile-title wo-panel-title">${ICON_WORKOUTS}<span>Workouts</span></h3>
+    <div class="wo-tray" data-wotray>${list.map((w) => planCardHtml(w, {
       cls: "wo-tile", attrs: `draggable="true" data-wo="${w.id}"`,
       extra: `<span class="wo-tools">
         <button class="icon" data-wo-edit="${w.id}" title="Edit workout" aria-label="Edit workout">${ICON.pencil}</button>
         <button class="icon delete" data-wo-del="${w.id}" title="Delete workout" aria-label="Delete workout">${ICON.trash}</button></span>` })).join("")}
-    <button class="wo-add" data-wo-add>Add new</button></div>`;
+    <button class="wo-add" data-wo-add>Add new</button></div></div>`;
   const tray = box.querySelector("[data-wotray]");
+  // a scrollbar takes the space under the tiles; without one the tray keeps an equal margin
+  const fit = () => tray.classList.toggle("scrolls", tray.scrollWidth > tray.clientWidth + 1);
+  fit();
+  new ResizeObserver(fit).observe(tray);
   const reload = () => renderWorkoutTray(box, onPlaced);
   box.querySelector("[data-wo-add]").onclick = () => openWorkoutCreator(null, data.context, reload);
   tray.querySelectorAll("[data-wo-edit]").forEach((b) => b.onclick = (e) => {
@@ -413,8 +440,42 @@ function openWorkoutCreator(workout, ctx, onSaved, { save = null } = {}) {
     if (my !== seq) return;
     est = r.estimate;
     drawCanvas();
+    showSuggestion();
   };
-  const changed = () => { est = null; drawCanvas(); refresh(); drawSettings(); };
+  // Undo: the state before each change (steps, repeats, sport, target), the last 100; the
+  // name has its own undo in its field.
+  const snap = () => JSON.stringify({ items, groups, next, sport: w.sport, target: w.target });
+  const history = [];
+  let last = snap();
+  const record = () => {
+    const now = snap();
+    if (now !== last) {
+      history.push(last);
+      if (history.length > 100) history.shift();
+      last = now;
+    }
+    const b = dlg.querySelector("[data-wo-undo]");
+    if (b) b.disabled = !history.length;
+  };
+  const undo = () => {
+    if (!history.length) return;
+    const prev = JSON.parse(history.pop());
+    ({ items, groups, next } = prev);
+    w.sport = prev.sport;
+    w.target = prev.target;
+    last = snap();
+    sel = null;
+    est = null;
+    draw();
+    refresh();
+  };
+  // without a name of its own the workout gets a suggested one (shown in the empty field)
+  const suggestion = () => woSuggestName(tree(), est);
+  const showSuggestion = () => {
+    const inp = dlg.querySelector("[data-wo-name]");
+    if (inp) inp.placeholder = suggestion() || "New workout name";
+  };
+  const changed = () => { est = null; drawCanvas(); refresh(); drawSettings(); record(); };
   const drawPaceSettings = (s, box) => {
     const usual = ctx?.[w.sport]?.speed || 3;
     const pace = s.target?.pace || woPaceOfZone(woDefaultStep(s.type, w.sport).target?.zone || [2, 2], usual);
@@ -440,16 +501,20 @@ function openWorkoutCreator(workout, ctx, onSaved, { save = null } = {}) {
 
   // ---- canvas: one block per step, repeats unrolled (the copies lighter, behind the frame).
   // The steps take a share of the width that grows with their number, centred.
-  const drawCanvas = () => {
+  // `previewing`: a drag shows its result (see preview); the estimate does not fit it yet
+  let liftUid = null; // the step being moved, marked in a preview
+  let dragging = null, dragAt = null; // { tool } | { step } | { group }, and where it would go
+  const drawCanvas = (previewing = false) => {
     const c = dlg.querySelector("[data-wo-canvas]"), track = c.querySelector("[data-wo-track]");
     c.classList.toggle("empty", !items.length);
+    c.classList.toggle("previewing", previewing);
     if (!items.length) {
       track.innerHTML = "";
       layout = [];
       dlg.querySelector("[data-wo-kpis]").innerHTML = "";
       return;
     }
-    const secs = est?.seconds || [];
+    const secs = (!previewing && est?.seconds) || [];
     const sp = ctx?.[w.sport]?.speed || 3;
     const rows = [];
     let k = 0;
@@ -483,6 +548,7 @@ function openWorkoutCreator(workout, ctx, onSaved, { save = null } = {}) {
       const key = r.r ? `c${s.uid}-${r.r}` : `s${s.uid}`;
       const wide = (width / 100) * cw > 34;
       want.set(key, { left, width, b, copy: r.r > 0, idx: r.idx, group: r.group,
+        ghost: previewing && s.uid < 0, lift: previewing && s.uid === liftUid,
         lab: wide && !r.r ? woTargetLabel(s, w.target) : "", len: wide && !r.r ? woLength(s.length) : "",
         sel: !r.r && sel?.step === r.idx, title: `${woTypeLabel(s.type)} · ${woLength(s.length)}${s.target ? ` · ${woTargetLabel(s, w.target)}` : ""}` });
     }
@@ -515,7 +581,7 @@ function openWorkoutCreator(workout, ctx, onSaved, { save = null } = {}) {
         tag.textContent = `×${num(groups[v.g])}`;
         continue;
       }
-      el.className = `wo-blk ${v.copy ? "copy" : ""} ${v.sel ? "sel" : ""} ${el.dataset.fresh ? "new" : ""}`;
+      el.className = `wo-blk ${v.copy ? "copy" : ""} ${v.sel ? "sel" : ""} ${el.dataset.fresh ? "new" : ""} ${v.ghost ? "ghost" : ""} ${v.lift ? "lift" : ""}`;
       delete el.dataset.fresh;
       el.title = v.title;
       delete el.dataset.step; delete el.dataset.copy;
@@ -530,9 +596,9 @@ function openWorkoutCreator(workout, ctx, onSaved, { save = null } = {}) {
       el.querySelector(".wo-blk-z").textContent = v.lab;
       el.querySelector(".wo-blk-len").textContent = v.len;
     }
-    const e = est;
+    const e = previewing ? null : est;
     if (e) dlg.querySelector("[data-wo-kpis]").innerHTML = [["Time", durMin(e.duration_s)], ["Distance", e.distance_m ? `≈ ${km(e.distance_m)}` : ""],
-      ["Load", `≈ ${num(e.load)} TSS`], ["Kind", workoutLabel(e.kind)], ["Watch steps", num(e.steps)]]
+      ["Load", `≈ ${num(e.load)}`], ["Kind", workoutLabel(e.kind)], ["Watch steps", num(e.steps)]]
       .filter(([, v]) => v).map(([l, v]) => `<span class="wo-kpi"><span>${l}</span><b>${esc(v)}</b></span>`).join("");
   };
 
@@ -546,7 +612,7 @@ function openWorkoutCreator(workout, ctx, onSaved, { save = null } = {}) {
         + `<div class="wo-actions"><span class="spacer"></span><button class="badge danger" data-rep-remove>Remove repeat</button></div>`;
       box.querySelector("[data-rep-count]").oninput = (e) => {
         const v = Math.round(+e.target.value);
-        if (v >= 1 && v <= 50) { groups[g] = v; est = null; drawCanvas(); refresh(); }
+        if (v >= 1 && v <= 50) { groups[g] = v; est = null; drawCanvas(); refresh(); record(); }
       };
       box.querySelector("[data-rep-remove]").onclick = () => {
         items.forEach((s) => { if (s.group === g) s.group = null; });
@@ -630,7 +696,8 @@ function openWorkoutCreator(workout, ctx, onSaved, { save = null } = {}) {
       clearTimeout(slideTimer);
       slideTimer = setTimeout(refresh, 250);
     };
-    box.querySelector("[data-cue]").onchange = (e) => { s.cue = e.target.value.trim(); };
+    box.querySelector("[data-lslide]").onchange = record; // one undo step per slide
+    box.querySelector("[data-cue]").onchange = (e) => { s.cue = e.target.value.trim(); record(); };
     box.querySelector("[data-dup]").onclick = () => {
       items.splice(sel.step + 1, 0, { ...structuredClone(s), uid: ++WO_UID });
       sel = { step: sel.step + 1 };
@@ -682,12 +749,69 @@ function openWorkoutCreator(workout, ctx, onSaved, { save = null } = {}) {
     }
     return items.length;
   };
-  // x of the place `at` (for the insert line)
-  const xOf = (at) => {
-    if (!layout.length) return 50;
-    const first = layout.find((r) => r.idx === at && r.r === 0);
-    if (first) return first.left;
-    return layout[layout.length - 1].right;
+  // ---- what a drag does, shared by its live preview and the drop (null = nothing changes)
+  // a new step or repeat from the columns at `at` (`temp`: preview ids, stable while dragging)
+  const placeTool = (at, tool, temp = false) => {
+    const added = toolItems(tool);
+    if (temp) added.forEach((s, i) => { s.uid = -1 - i; });
+    const g = at > 0 && at < items.length && items[at - 1].group != null && items[at - 1].group === items[at].group ? items[at].group : null;
+    added.forEach((s) => { if (s.group === undefined) s.group = g; });
+    items.splice(at, 0, ...added);
+    return { step: at };
+  };
+  // a step (it joins a repeat when put between two of its steps) or a whole repeat (outside
+  // any other repeat) moved to `at`
+  const placeMove = (at, mv) => {
+    if (mv.group != null) {
+      const [a, z] = groupRange(mv.group);
+      if (at >= a && at <= z + 1) return null;
+      const part = items.splice(a, z - a + 1);
+      let to = at > z ? at - part.length : at;
+      while (to > 0 && to < items.length && items[to - 1].group != null && items[to - 1].group === items[to].group) to += 1;
+      items.splice(to, 0, ...part);
+      return { group: mv.group };
+    }
+    if (at === mv.step || at === mv.step + 1) {
+      const s = items[mv.step], prev = items[mv.step - 1], nxt = items[mv.step + 1];
+      const g = prev && nxt && prev.group != null && prev.group === nxt.group ? prev.group : s.group;
+      if (g === s.group) return null; // the same place
+    }
+    const [s] = items.splice(mv.step, 1);
+    const to = at > mv.step ? at - 1 : at;
+    const prev = items[to - 1], nxt = items[to];
+    s.group = prev && nxt && prev.group != null && prev.group === nxt.group ? prev.group : null;
+    items.splice(to, 0, s);
+    tidyGroups();
+    return { step: to };
+  };
+  // the left or right edge of repeat `g` dragged to `at`: neighbouring steps join or leave it
+  // (never into another repeat)
+  const placeEdge = (g, side, at) => {
+    const [first, last] = groupRange(g);
+    if (side === "l") {
+      let f = Math.min(at, last);
+      while (f < first && items[f].group != null && items[f].group !== g) f += 1;
+      for (let i = f; i < first; i++) if (items[i].group == null) items[i].group = g;
+      for (let i = first; i < f; i++) items[i].group = null;
+    } else {
+      let t = Math.max(at - 1, first);
+      while (t > last && items[t]?.group != null && items[t].group !== g) t -= 1;
+      for (let i = last + 1; i <= t && i < items.length; i++) if (items[i].group == null) items[i].group = g;
+      for (let i = t + 1; i <= last; i++) items[i].group = null;
+    }
+    tidyGroups();
+    return groups[g] ? { group: g } : null;
+  };
+  // the canvas with a change applied to a copy of the steps; the steps themselves, the
+  // selection and the layout used for pointer positions stay as they are
+  const preview = (apply) => {
+    const keep = { items, groups, next, sel, layout };
+    items = items.map((s) => ({ ...s }));
+    groups = { ...groups };
+    const r = apply();
+    if (r) drawCanvas(true);
+    ({ items, groups, next, sel, layout } = keep);
+    if (!r) drawCanvas();
   };
 
   const draw = () => {
@@ -714,7 +838,8 @@ function openWorkoutCreator(workout, ctx, onSaved, { save = null } = {}) {
           woToolHtml(`set:${name}`, name, "", [...Array(Math.min(times, 4))].flatMap(() => steps.map(([, kind, value, zone]) => [kind === "time" ? value : value / 4, zone])))).join("")}</div>
         <div class="wo-col wo-settings"><div class="panel-title">Step settings</div><div data-wo-settings></div></div>
       </div>
-      <div class="wo-foot"><span data-wo-msg></span><span class="spacer"></span>
+      <div class="wo-foot"><button type="button" class="badge" data-wo-undo title="Undo the last change (Ctrl+Z)" ${history.length ? "" : "disabled"}>Undo</button>
+        <span data-wo-msg></span><span class="spacer"></span>
         <button type="button" class="badge" data-wo-cancel>Cancel</button>
         <button type="button" class="badge on" data-wo-save>Save</button></div>`;
     dlg.querySelector("[data-wo-name]").oninput = (e) => { w.name = e.target.value; };
@@ -727,17 +852,27 @@ function openWorkoutCreator(workout, ctx, onSaved, { save = null } = {}) {
       items.forEach((s) => woFitTarget(s, w.target, ctx?.[w.sport]?.speed || 3));
       draw();
       refresh();
+      record();
     });
     bindCanvas();
     dlg.querySelectorAll("[data-tool]").forEach((t) => {
       t.onclick = () => insertAt(afterSel(), toolItems(t.dataset.tool));
-      t.ondragstart = (e) => { e.dataTransfer.setData("text/trailbook-step", t.dataset.tool); e.dataTransfer.effectAllowed = "copy"; };
+      t.ondragstart = (e) => {
+        e.dataTransfer.setData("text/trailbook-step", t.dataset.tool);
+        e.dataTransfer.effectAllowed = "copy";
+        dragging = { tool: t.dataset.tool };
+        dragAt = null;
+      };
+      t.ondragend = () => { if (dragging) { dragging = dragAt = null; drawCanvas(); } };
     });
     drawCanvas();
     drawSettings();
+    showSuggestion();
+    dlg.querySelector("[data-wo-undo]").onclick = undo;
     dlg.querySelector("[data-wo-cancel]").onclick = () => dlg.close();
     dlg.querySelector("[data-wo-save]").onclick = async () => {
       const msg = dlg.querySelector("[data-wo-msg]");
+      if (!w.name.trim()) w.name = suggestion(); // the suggested name, unless one was typed
       if (!w.name.trim()) { msg.innerHTML = state("Enter a name", "bad"); dlg.querySelector("[data-wo-name]").focus(); return; }
       try {
         const q = new URLSearchParams({ person: CURRENT });
@@ -759,55 +894,50 @@ function openWorkoutCreator(workout, ctx, onSaved, { save = null } = {}) {
       drawSettings();
     });
     // dragging: a step (its block), a whole repeat (its ×N tag), or a new one from the columns;
-    // a line shows where it goes
-    let moving = null; // { step } | { group }
+    // the canvas shows the result while dragging (the blocks make room, the new one sits in
+    // its place) and nothing changes until it is dropped
     c.addEventListener("dragstart", (e) => {
       const tag = e.target.closest?.("[data-frame-tag]"), b = e.target.closest?.("[data-step]");
-      if (tag) moving = { group: +tag.dataset.frameTag };
-      else if (b) moving = { step: +b.dataset.step };
+      if (tag) dragging = { group: +tag.dataset.frameTag };
+      else if (b) dragging = { step: +b.dataset.step };
       else return;
+      dragAt = null;
+      liftUid = dragging.step != null ? items[dragging.step].uid : null;
       e.dataTransfer.setData("text/trailbook-move", "1");
       e.dataTransfer.effectAllowed = "move";
     });
-    const stop = () => { moving = null; line.hidden = true; c.classList.remove("over"); };
-    c.addEventListener("dragend", stop);
+    const show = (at) => {
+      if (at === dragAt) return;
+      dragAt = at;
+      const d = dragging;
+      preview(() => (d.tool ? placeTool(at, d.tool, true) : placeMove(at, d)));
+    };
+    const stop = () => { dragging = dragAt = liftUid = null; line.hidden = true; c.classList.remove("over"); };
+    c.addEventListener("dragend", () => { if (dragging) { stop(); drawCanvas(); } });
     c.addEventListener("dragover", (e) => {
-      if (!e.dataTransfer.types.includes("text/trailbook-step") && !moving) return;
+      if (!dragging) return;
       e.preventDefault();
       c.classList.add("over");
-      line.hidden = false;
-      line.style.left = `${xOf(indexAt(e.clientX))}%`;
+      show(indexAt(e.clientX));
     });
-    c.addEventListener("dragleave", (e) => { if (!c.contains(e.relatedTarget)) { line.hidden = true; c.classList.remove("over"); } });
+    c.addEventListener("dragleave", (e) => {
+      if (c.contains(e.relatedTarget) || !dragging) return;
+      dragAt = null;
+      c.classList.remove("over");
+      drawCanvas(); // left the canvas: as it was
+    });
     c.addEventListener("drop", (e) => {
       e.preventDefault();
-      const at = indexAt(e.clientX);
-      const tool = e.dataTransfer.getData("text/trailbook-step");
-      const mv = moving;
+      const d = dragging, at = indexAt(e.clientX);
       stop();
-      if (tool) { insertAt(at, toolItems(tool)); return; }
-      if (!mv) return;
-      if (mv.group != null) { // the whole repeat, outside any other repeat
-        const [a, z] = groupRange(mv.group);
-        if (at >= a && at <= z + 1) return;
-        const part = items.splice(a, z - a + 1);
-        let to = at > z ? at - part.length : at;
-        while (to > 0 && to < items.length && items[to - 1].group != null && items[to - 1].group === items[to].group) to += 1;
-        items.splice(to, 0, ...part);
-        sel = { group: mv.group };
-        changed();
-        return;
-      }
-      const [s] = items.splice(mv.step, 1);
-      const to = at > mv.step ? at - 1 : at;
-      const prev = items[to - 1], nxt = items[to]; // joins a repeat when dropped between two of its steps
-      s.group = prev && nxt && prev.group != null && prev.group === nxt.group ? prev.group : null;
-      items.splice(to, 0, s);
-      tidyGroups();
-      sel = { step: to };
+      if (!d) return;
+      const r = d.tool ? placeTool(at, d.tool) : placeMove(at, d);
+      if (!r) { drawCanvas(); return; }
+      sel = r;
       changed();
     });
-    // the edges of a repeat frame: drag over neighbouring steps to take them in or leave them out
+    // the edges of a repeat frame: drag over neighbouring steps to take them in or leave them
+    // out; the frame shows which steps it would take while dragging, the change comes on release
     c.addEventListener("pointerdown", (e) => {
       const h = e.target.closest("[data-handle]");
       if (!h) return;
@@ -815,31 +945,18 @@ function openWorkoutCreator(workout, ctx, onSaved, { save = null } = {}) {
       const g = +h.dataset.g, side = h.dataset.handle, frame = h.closest(".wo-frame");
       h.setPointerCapture(e.pointerId);
       frame.classList.add("resizing");
-      const cr = c.getBoundingClientRect();
+      let at = null;
       h.onpointermove = (ev) => {
-        const pct = ((ev.clientX - cr.left) / cr.width) * 100;
-        const l = parseFloat(frame.style.left), wd = parseFloat(frame.style.width);
-        if (side === "l") { const nl = Math.min(pct, l + wd - 1); frame.style.left = `${nl}%`; frame.style.width = `${l + wd - nl}%`; }
-        else frame.style.width = `${Math.max(1, pct - l)}%`;
+        const now = indexAt(ev.clientX);
+        if (now === at) return;
+        at = now;
+        preview(() => placeEdge(g, side, now));
       };
       h.onpointerup = (ev) => {
         h.onpointermove = h.onpointerup = null;
         frame.classList.remove("resizing");
-        let [first, last] = groupRange(g);
-        const at = indexAt(ev.clientX);
-        if (side === "l") {
-          let f = Math.min(at, last);
-          while (f < first && items[f].group != null && items[f].group !== g) f += 1; // never into another repeat
-          for (let i = f; i < first; i++) if (items[i].group == null) items[i].group = g;
-          for (let i = first; i < f; i++) items[i].group = null;
-        } else {
-          let t = Math.max(at - 1, first);
-          while (t > last && items[t]?.group != null && items[t].group !== g) t -= 1;
-          for (let i = last + 1; i <= t && i < items.length; i++) if (items[i].group == null) items[i].group = g;
-          for (let i = t + 1; i <= last; i++) items[i].group = null;
-        }
-        tidyGroups();
-        sel = groups[g] ? { group: g } : null;
+        const r = placeEdge(g, side, indexAt(ev.clientX));
+        sel = r;
         changed();
       };
     });
@@ -848,6 +965,13 @@ function openWorkoutCreator(workout, ctx, onSaved, { save = null } = {}) {
   dlg.addEventListener("click", (e) => {
     e.stopPropagation();
     if (!e.target.closest(".badge-wrap")) dlg.querySelectorAll(".badge-panel").forEach((p) => { p.hidden = true; });
+  });
+  // Ctrl+Z (Cmd+Z) undoes the last change, except while typing in a text field (its own undo)
+  dlg.addEventListener("keydown", (e) => {
+    if (!(e.ctrlKey || e.metaKey) || e.shiftKey || e.key.toLowerCase() !== "z") return;
+    if (e.target.matches?.('input[type="text"], input:not([type]), textarea')) return;
+    e.preventDefault();
+    undo();
   });
   dlg.addEventListener("close", () => dlg.remove());
   draw();

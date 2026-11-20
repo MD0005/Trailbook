@@ -189,7 +189,7 @@ Checked after Intervals, before Hills, Long, Tempo. All conditions must hold:
 | Long enough | time | ≥ 10 min |
 | Few pauses | elapsed ÷ time | ≤ 1,25 |
 | Heart rate at threshold (every sport) | share of the time with HR ≥ 95 % of the sport's threshold HR | ≥ 60 % |
-| Rides with power: race intensity | IF = NP ÷ FTP | ≥ 0,90 |
+| Rides with power: race intensity | weighted power ÷ FTP | ≥ 0,90 |
 | Close to your best | intensity ÷ your best intensity in activities of the family ±25 % as long, within 365 days | ≥ 95 % |
 | Above your typical | intensity ÷ your median of the family | ≥ 1,03 |
 
@@ -351,7 +351,7 @@ Code: `planner.py` (`estimate`, `icu_text`, `RULES`), `icu.py`.
   middle, a rest step stands still.
 - **Time and distance**: a time step's distance = time × speed; a distance step's time =
   distance ÷ speed. Repeats count every time.
-- **Load** (TSS-like): per step hours × IF² × 100, IF by zone — heart rate 0,55 / 0,70 / 0,82 /
+- **Load** (as for an activity): per step hours × intensity² × 100, intensity by zone — heart rate 0,55 / 0,70 / 0,82 /
   0,92 / 1,02; power 0,50 / 0,65 / 0,82 / 0,97 / 1,12 / 1,30 / 1,50.
 - **Kind**: Intervals — a repeat with an interval step in zone 4 or higher; Tempo — an interval
   step of at least 10 min in zone 3 or higher; Long — at least 90 min; else Easy.
@@ -375,15 +375,15 @@ Code: `planner.py` (`estimate`, `icu_text`, `RULES`), `icu.py`.
 Shown in Manual › Fitness; the constants come from `/api/types` (`fitness_rules`), the zones
 from `FORM_ZONES` / `RAMP_ZONES` in `training.js`. Code: `analysis.py`.
 
-### Load per activity (TSS, one hour at threshold = 100)
+### Load per activity (no unit, one hour at threshold = 100)
 
 Every sport. The first method the activity has data for; duration = the timer time.
 
-1. **Power** — TSS = h × IF² × 100, IF = NP ÷ FTP (NP: 4th-power mean of the 30 s rolling
-   power, stops = 0 W). Needs a power stream and an FTP: the watch's per sport (cycling FTP
+1. **Power** — h × intensity² × 100, intensity = weighted power ÷ FTP (weighted power: 4th-power
+   mean of the 30 s rolling power, stops = 0 W). Needs a power stream and an FTP: the watch's per sport (cycling FTP
    for rides, running FTP for runs with running power), or the person's own for any sport,
    or the activity's corrected FTP.
-2. **Running pace** — h × IF² × 100, IF = average speed ÷ threshold speed. Outdoor runs, only
+2. **Running pace** — h × intensity² × 100, intensity = average speed ÷ threshold speed. Outdoor runs, only
    with a threshold pace set by the person.
 3. **Heart rate** — TRIMP per second: HRr = (HR − rest) ÷ (max − rest), weight =
    HRr × 0,64 × e^(1,92 × HRr), summed per minute and divided by 60 min × the weight at
@@ -397,13 +397,13 @@ Every sport. The first method the activity has data for; duration = the timer ti
 - Fitness (CTL) += (load − CTL) × (1 − e^(−1/42)) ≈ 2,35 %; Fatigue (ATL) the same with 7 days
   ≈ 13,31 %. Both start at 0 on the first day with a load.
 - Form (TSB) = yesterday's CTL − yesterday's ATL. Ramp rate = CTL − CTL 7 days ago.
-- The activity page's **Load** tile shows Fatigue (ATL) at the end of the activity's day and
-  how much that day raised it (ATL − the day before's ATL), next to Garmin's training load and
+- The activity page's **Load** tile shows the activity's own load (the one the calendar adds up
+  and fitness and fatigue are built from), next to Garmin's training load (its own scale) and
   the Body Battery change (both from Garmin Connect, not computed here).
 - The model is Banister's impulse-response model (fitness and fatigue as decaying sums of
   training load), in the 42 / 7-day form used by performance-management charts.
-- Form zones: Transition > 25, Fresh 5 to 25, Grey zone −10 to 5, Optimal −30 to −10,
-  High risk < −30. Ramp: Too fast > 8, Building 0 to 8, Losing fitness < 0.
+- Form zones: Detraining > 25, Fresh 5 to 25, Neutral −10 to 5, Productive −30 to −10,
+  Overreaching < −30 (limits after Joe Friel). Ramp: Too fast > 8, Building 0 to 8, Losing fitness < 0.
 
 ### Thresholds, per value
 
@@ -452,11 +452,12 @@ off. The time can be corrected only by editing the file today.
 
 ## Record notifications (Home Assistant)
 
-- Lists: per person, per category (run, ride, …) and best effort (pace over a distance, ride
-  time over a distance, power and heart rate over a duration, the longest distance), and per
-  segment; each with its 3 best results of all time and of this calendar year (UTC year of
-  the start, like the other year filters). Times: lower is better; power, heart rate and
-  distance: higher is better; a tie goes to the earlier activity.
+- Only runs and rides. Lists: per person and group, run time over a distance (400 m, 1 km,
+  1 mi, 5 km, 10 km, half and full marathon), ride time over a distance (5–100 km), power over
+  a duration (all time: 5 s to 5 h; this year: 20 min and 1 h only), the longest distance, and
+  per segment; each with its 3 best results of all time and of this calendar year (UTC year
+  of the start, like the other year filters). Heart rate is no record. Times: lower is better;
+  power and distance: higher is better; a tie goes to the earlier activity.
 - A record needs a result that beat one already on the list: with 2 results on a list a new
   third is no record, a new first or second is. The difference is to the result it pushed down
   at that place; for first place that is the old record.

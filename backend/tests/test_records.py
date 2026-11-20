@@ -103,13 +103,25 @@ def test_each_record_is_an_event_pushed_once(conn, monkeypatch):
     assert [e["kind"] for e in events] == ["pace", "power"]
     assert events[1]["title"] == "ALL-TIME 2ND BEST"
     assert events[1]["icon"] == "mdi:trophy-variant-outline"
-    sent, ok = [], [True]
+    # a fake Home Assistant: the states it has, and whether it answers
+    ha = {"up": False, "states": {}}
+    sent = []
+
+    def set_state(entity, state, attrs):
+        if ha["up"]:
+            ha["states"][entity] = state
+            sent.append(state)
+        return ha["up"]
+
     monkeypatch.setattr(homeassistant, "available", lambda: True)
-    monkeypatch.setattr(homeassistant, "set_state", lambda e, s, a: ok[0] and not sent.append(s))
-    ok[0] = False  # Home Assistant away: nothing is marked sent
-    assert records.publish(conn, NOW) == 0 and records.unpushed(conn)
-    ok[0] = True
-    assert records.publish(conn, NOW) == 2 and sent == [str(e["id"]) for e in events]
+    monkeypatch.setattr(homeassistant, "set_state", set_state)
+    monkeypatch.setattr(
+        homeassistant, "has_state", lambda e: (e in ha["states"]) if ha["up"] else None
+    )
+    assert records.publish(conn, NOW) == 0 and records.unpushed(conn)  # HA away: nothing sent
+    ha["up"] = True  # back after a restart: no sensor yet, so 0 comes first
+    assert records.publish(conn, NOW) == 2
+    assert sent == ["0", *(str(e["id"]) for e in events)]
     assert records.publish(conn, NOW) == 0 and not records.unpushed(conn)
 
 
@@ -233,3 +245,44 @@ def test_endpoint(tmp_path):
     with TestClient(create_app(tmp_path / "t.db")) as client:
         body = client.get("/api/ha/records").json()
     assert body["state"] == "0"
+
+
+def test_only_runs_and_rides_no_heart_rate(conn):
+    _person(conn)
+    for i, v in enumerate([300, 280, 250]):
+        _effort(conn, _activity(conn, 100 + i, seen=1, category="walk"), v, "power", 1200)
+    _effort(conn, _activity(conn, 1, category="walk"), 310, kind="power", key=1200)
+    _history(conn, [170, 165, 160], kind="hr", key=300, days_ago=200)
+    _effort(conn, _activity(conn, 2), 175, kind="hr", key=300)
+    assert records.refresh(conn, NOW) == []  # a walk's power, a run's heart rate: no records
+
+
+def test_year_power_only_20_min_and_1_h(conn):
+    _person(conn)
+    for n, key in enumerate((5, 1200)):
+        _history(conn, [700, 690, 680], kind="power", key=key, days_ago=400 + 10 * n)  # 2025
+        _history(conn, [400, 390, 380], kind="power", key=key, days_ago=100 + 10 * n)  # 2026
+    aid = _activity(conn, 1)
+    _effort(conn, aid, 395, kind="power", key=5)  # 2nd this year: not a record for 5 s
+    _effort(conn, aid, 395, kind="power", key=1200)
+    (ev,) = records.refresh(conn, NOW)
+    assert ev["key"] == 1200 and ev["title"] == "2026 2ND BEST"
+    # all time: every duration
+    aid = _activity(conn, 2)
+    _effort(conn, aid, 710, kind="power", key=5)
+    (ev,) = records.refresh(conn, NOW)
+    assert ev["key"] == 5 and ev["title"] == "ALL-TIME RECORD"
+
+
+def test_sensor_is_put_back_with_state_0(monkeypatch):
+    from trailbook import homeassistant
+
+    sent = []
+    monkeypatch.setattr(homeassistant, "available", lambda: True)
+    monkeypatch.setattr(homeassistant, "set_state", lambda e, s, a: not sent.append((e, s)))
+    monkeypatch.setattr(homeassistant, "has_state", lambda e: True)
+    assert not records.ensure_sensor() and sent == []
+    monkeypatch.setattr(homeassistant, "has_state", lambda e: None)  # HA not answering
+    assert not records.ensure_sensor() and sent == []
+    monkeypatch.setattr(homeassistant, "has_state", lambda e: False)  # restarted: gone
+    assert records.ensure_sensor() and sent == [(records.ENTITY_ID, "0")]

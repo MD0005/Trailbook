@@ -43,7 +43,7 @@ SPEED_SHARE = {
     "power": (0.8, 0.9, 0.97, 1.03, 1.08, 1.12, 1.15),
 }
 DEFAULT_SPEED = {"run": 2.8, "ride": 7.0}  # m/s without recent activities
-# Intensity factor at each zone: load per hour = IF² × 100 (as TSS).
+# Intensity at each zone: load per hour = intensity² × 100 (as for an activity).
 INTENSITY = {"hr": (0.55, 0.7, 0.82, 0.92, 1.02), "power": (0.5, 0.65, 0.82, 0.97, 1.12, 1.3, 1.5)}
 REST_ZONE = 1.0  # a step without a target counts as zone 1
 RECENT = 10  # activities for the usual speed

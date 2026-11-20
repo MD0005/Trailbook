@@ -673,7 +673,7 @@ tr.filters-row .tpick { min-width: 150px; }
 /* the first frame 14 px under the header, as on Activities (the sticky block itself starts 6 px
    under it; its padding keeps the frame's margin from collapsing into the header's fade) */
 .cal-sticky { padding-top: 8px; }
-.cal-sticky [data-csummary] .stat-strip, .cal-sticky .wo-tray { margin: 0 -10px 8px; border-radius: 8px;
+.cal-sticky [data-csummary] .stat-strip, .cal-sticky .wo-panel { margin: 0 -10px 8px; border-radius: 8px;
   background: var(--surface); border: 1px solid var(--line); box-shadow: none; }
 .cal-mstat { justify-content: center; }
 .cal-mname { font-size: 16px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
@@ -1662,7 +1662,12 @@ svg.tile-chart { width: 100%; height: 100%; display: block; }
 .wo-dragging .cal-day:not(.future):not(.today) { opacity: .55; }
 
 /* tray: tiles as wide as the calendar's, edit and delete at the top right on hover */
-.wo-tray { display: flex; gap: 6px; overflow-x: auto; padding: 8px 8px 3px; }
+/* the tray's frame: a header like the cards of an activity, then the tiles */
+.wo-panel { padding-top: 10px; }
+.wo-panel-title { margin: 0 12px 2px; font-size: 14px; }
+.wo-panel-title svg { width: 16px; height: 16px; color: var(--plan); }
+.wo-tray { display: flex; gap: 6px; overflow-x: auto; padding: 8px 10px 10px; }
+.wo-tray.scrolls { padding-bottom: 3px; } /* the scrollbar fills the space under the tiles */
 /* a slightly thicker bar, a little off the bottom edge and clear of the rounded corners */
 .wo-tray::-webkit-scrollbar { height: 13px; }
 .wo-tray::-webkit-scrollbar-track { margin: 0 10px; }
@@ -1715,6 +1720,12 @@ svg.tile-chart { width: 100%; height: 100%; display: block; }
 .wo-blk.new i { animation: wo-grow .28s ease-out; }
 .wo-blk:hover i { filter: brightness(1.06); }
 .wo-blk.copy { opacity: .45; cursor: pointer; }
+/* while dragging: the new step(s) where they would go, the moved step lifted */
+.wo-blk.ghost { opacity: .6; }
+.wo-blk.ghost i.core { outline: 2px dashed var(--accent); outline-offset: -2px; }
+.wo-blk.lift i.core { box-shadow: 0 0 0 2px var(--accent), 0 6px 14px rgba(0, 0, 0, .18); }
+.wo-canvas.previewing .wo-blk:not(.ghost):not(.lift) { opacity: .85; }
+.wo-canvas.previewing .wo-blk.copy { opacity: .4; }
 .wo-blk.sel i.band { opacity: .45; }
 .wo-blk.sel::after { content: ""; position: absolute; left: 1px; right: 1px; bottom: -4px; height: 3px; border-radius: 2px; background: var(--accent); }
 .wo-blk-labs { position: absolute; left: 0; right: 0; bottom: 0; display: flex; flex-direction: column; align-items: center;
@@ -1725,7 +1736,7 @@ svg.tile-chart { width: 100%; height: 100%; display: block; }
 .wo-blk-len { font-size: 11px; font-weight: 600; opacity: .9; }
 .wo-frame { position: absolute; top: 0; bottom: 0; border: 1.5px dashed color-mix(in srgb, var(--accent) 55%, var(--line)); border-bottom: 0;
             border-radius: 8px 8px 0 0; pointer-events: none; transition: left .25s ease, width .25s ease; }
-.wo-frame.resizing { transition: none; }
+.wo-frame.resizing { border-style: solid; border-color: var(--accent); } /* it snaps to the steps it would take */
 .wo-frame.sel { border-style: solid; border-color: var(--accent); }
 .wo-frame-tag { position: absolute; top: 4px; left: 4px; pointer-events: auto; cursor: grab; font-size: 11px; font-weight: 700;
                 height: 20px; display: inline-flex; align-items: center; padding: 0 7px; border-radius: 6px;
@@ -1733,7 +1744,9 @@ svg.tile-chart { width: 100%; height: 100%; display: block; }
 .wo-frame.sel .wo-frame-tag { border-color: var(--accent); }
 .wo-handle { position: absolute; top: 0; bottom: 0; width: 12px; pointer-events: auto; cursor: ew-resize; touch-action: none; }
 .wo-handle.l { left: -7px; } .wo-handle.r { right: -7px; }
-.wo-frame:hover .wo-handle, .wo-frame.sel .wo-handle { background: linear-gradient(90deg, transparent 5px, var(--accent) 5px 7px, transparent 7px); }
+/* the bar starts where the frame's rounded corner ends (the grip stays full height) */
+.wo-frame:hover .wo-handle, .wo-frame.sel .wo-handle { background: linear-gradient(90deg, transparent 5px, var(--accent) 5px 7px, transparent 7px)
+  0 8px / 100% calc(100% - 8px) no-repeat; }
 .wo-drop { position: absolute; top: -4px; bottom: -4px; width: 3px; margin-left: -1.5px; border-radius: 2px; background: var(--accent);
            box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); pointer-events: none; transition: left .08s; }
 .wo-cols { display: grid; grid-template-columns: minmax(150px, 1fr) minmax(150px, 1fr) minmax(0, 2.4fr); gap: 12px;

@@ -56,6 +56,12 @@ def set_state(entity_id: str, state: str, attributes: dict) -> bool:
     return status is not None and 200 <= status < 300
 
 
+def has_state(entity_id: str) -> bool | None:
+    """Whether Home Assistant knows the entity now (None: no answer)."""
+    status = _request(f"states/{entity_id}")
+    return None if status is None else status == 200
+
+
 def notify(notification_id: str, title: str, message: str) -> bool:
     """Create (or replace) a persistent notification. True when Home Assistant accepted it."""
     return _call("create", {"notification_id": notification_id, "title": title, "message": message})

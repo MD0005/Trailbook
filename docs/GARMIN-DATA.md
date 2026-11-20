@@ -107,7 +107,7 @@ Training effect and load
 - Aerobic training effect (0–5), anaerobic training effect (0–5)
 - Training effect label / primary benefit (base, tempo, threshold, VO2 max, anaerobic,
   sprint, recovery) **[API only]** (*undocumented* in newer FIT)
-- Activity training load (Garmin's EPOC load, not TSS) **[API only]** (*undocumented* in
+- Activity training load (Garmin's EPOC load, not Trailbook's load) **[API only]** (*undocumented* in
   newer FIT)
 - VO2 max estimate after this activity **[API only]**
 - Body Battery impact of the activity (e.g. −12) **[API only]**

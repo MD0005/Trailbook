@@ -9,6 +9,10 @@ never leaves it.
 Trailbook gets the most out of a Garmin watch or bike computer. Other sources (a Strava
 export, FIT/GPX/TCX files) are there to bring in older history or a second device.
 
+> Trailbook is an independent open-source project, not affiliated with or endorsed by Garmin.
+> Data marked as Garmin's (training effect, Body Battery, stamina…) comes from Garmin devices
+> and Garmin Connect. See [Trademarks](#trademarks).
+
 ![Supports aarch64](https://img.shields.io/badge/aarch64-yes-green.svg)
 ![Supports amd64](https://img.shields.io/badge/amd64-yes-green.svg)
 ![Stage](https://img.shields.io/badge/stage-experimental-orange.svg)
@@ -149,6 +153,13 @@ python -m venv .venv
 
 Tests: `cd backend && ../.venv/Scripts/python -m pytest`. How it is built:
 [specification](docs/SPEC.md); how the numbers are calculated: [manual](docs/MANUAL.md).
+
+## Trademarks
+
+Garmin, Garmin Connect, Body Battery and Training Effect are trademarks of Garmin Ltd. or its
+subsidiaries. Strava, Home Assistant, OpenStreetMap and other names are trademarks of their
+owners. They are used here only to say what Trailbook works with; Trailbook is not affiliated
+with, sponsored or endorsed by any of them.
 
 ## License
 

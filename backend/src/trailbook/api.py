@@ -789,7 +789,6 @@ def create_app(db_path: str | Path) -> Starlette:
                 (aid, aid),
             ).fetchone()
             a["connect"] = json.loads(g["summary"]) if g else None
-            a["fatigue"] = analysis.fatigue_on(c, row) if row["load"] is not None else None
             # Previous / next activity in time, within the activities page filters (from, to,
             # types, workouts; person in the All view): same person, everyone with
             # ?neighbours=all.
@@ -2377,20 +2376,23 @@ def create_app(db_path: str | Path) -> Starlette:
             except TimeoutError:
                 pass
 
-    # Record events Home Assistant did not get (it was restarting or away): sent again.
+    # Record events Home Assistant did not get (it was restarting or away) are sent again, and
+    # the sensor is put back (state 0) when HA lost it: a pushed state does not survive an HA
+    # restart, and before the first record there would be no entity at all.
     async def ha_records_loop():
         while True:
-            await asyncio.sleep(HA_RECORDS_RETRY_S)
 
             def work():
                 with closing(conn()) as c:
                     if records.unpushed(c):
                         records.publish(c)
+                    records.ensure_sensor()
 
             try:
                 await run_in_threadpool(work)
             except Exception:  # noqa: BLE001 - keep the loop alive
                 pass
+            await asyncio.sleep(HA_RECORDS_RETRY_S)
 
     @asynccontextmanager
     async def lifespan(app):

@@ -951,7 +951,7 @@ async function renderActivity(id) {
       case "speed": return [[onFoot ? "Avg pace" : "Avg", onFoot ? pace(a.avg_speed) : f(a.avg_speed * 3.6), a.avg_speed != null ? a.avg_speed * 3.6 : avgOf(values), onFoot ? "Average pace" : "Average speed"],
         ["Max", f(a.max_speed != null ? a.max_speed * 3.6 : mx), "max"],
         ...windows(values, (v) => (onFoot ? pace(v / 3.6) : f(v)), onFoot ? "pace" : "speed")];
-      case "power": return [["Avg", watts(a.avg_power), a.avg_power ?? avgOf(values)], ["NP", a.np_power ? watts(a.np_power) : null, a.np_power, "Normalized power: the steady power that would have cost the same effort (Coggan)."], ["Max", watts(a.max_power ?? mx), "max"], ...powerWindows(values)];
+      case "power": return [["Avg", watts(a.avg_power), a.avg_power ?? avgOf(values)], ["Weighted", a.np_power ? watts(a.np_power) : null, a.np_power, "Weighted power: the steady power that would have cost the same effort (4th-power mean of the 30 s average)."], ["Max", watts(a.max_power ?? mx), "max"], ...powerWindows(values)];
       case "cadence": return [["Avg", cadence(a.avg_cadence, a.category), avgOf(values)], ["Max", cadence(a.max_cadence ?? mx, a.category), "max"], ...totalTurns(values)];
       case "altitude": return [["Ascent", meters(a.ascent_m), "up", "Total ascent"], ["Descent", meters(a.descent_m), "down", "Total descent"], ["Max", f(mx), "max", "Highest altitude"], ["Min", f(mn), "min", "Lowest altitude"], ...climbStats(values)];
       default: return [["Avg", f(avgOf(values)), avgOf(values)], ["Max", f(mx), "max"], ["Min", f(mn), "min"]];
@@ -1165,14 +1165,15 @@ async function renderActivity(id) {
     const effect = te != null || an != null ? stat("Effect", "x", `<span class="effect-lines" data-tip-html="${esc(effectTip)}">
         <b>${label ? esc(label[0].toUpperCase() + label.slice(1)) : teWord(Math.max(te ?? 0, an ?? 0))}</b>
         <span class="kv-lines">${kv("aerobic", te != null ? num(te, 1) : "–")}${kv("anaerobic", an != null ? num(an, 1) : "–")}</span></span>`, "aerobic_effect") : "";
-    // Load: Garmin's training load of the activity, our fatigue (ATL) after the day and how much
-    // the day added to it, and the Body Battery change
+    // Load: this app's load of the activity (the one the calendar sums and fitness is built
+    // from), Garmin's training load (its own scale) and the Body Battery change
     const sign = (v) => `${v > 0 ? "+" : ""}${num(v)}`;
-    const gl = c.activityTrainingLoad, fat = a.fatigue;
+    const gl = c.activityTrainingLoad;
+    const method = METHOD_LABELS[a.load_method];
     const loadLines = [
-      kv("Garmin", gl != null ? num(gl) : null, "Training load of the activity (Garmin)"),
-      fat ? kv("Fatigue", `${num(fat.atl)}${fat.change ? ` <small>${sign(fat.change)}</small>` : ""}`,
-        `Fatigue (ATL) after this day, from this app's load${a.load != null ? ` (this activity ${num(a.load)})` : ""}; 7-day average (Manual › Fitness)`) : "",
+      kv("Trailbook", a.load != null ? num(a.load) : null,
+        `Training load of the activity${method ? `, from ${method.toLowerCase()}` : ""}: one hour at your threshold = 100. The calendar adds these up; fitness and fatigue are built from them (Manual › Fitness)`),
+      kv("Garmin", gl != null ? num(gl) : null, "Training load of the activity (Garmin, its own scale)"),
       kv("Body Battery", bb != null ? sign(bb) : null, "Change of Body Battery during the activity (Garmin)"),
     ].join("");
     const colB = [
@@ -1181,7 +1182,7 @@ async function renderActivity(id) {
       loadLines ? stat("Load", "x", `<span class="kv-lines">${loadLines}</span>`, "training_load") : "",
       on.has("speed") ? "" : stat("Average pace", a.distance_m && a.avg_speed, pace(a.avg_speed), "avg_pace"),
       on.has("hr") ? "" : stat("Average heart rate", a.avg_hr, bpm(a.avg_hr), "avg_heart_rate") + stat("Maximum heart rate", a.max_hr, bpm(a.max_hr), "max_heart_rate"),
-      on.has("power") ? "" : stat("Average power", a.avg_power, watts(a.avg_power), "avg_power") + stat("Normalized power", a.np_power, watts(a.np_power), "normalized_power"),
+      on.has("power") ? "" : stat("Average power", a.avg_power, watts(a.avg_power), "avg_power") + stat("Weighted power", a.np_power, watts(a.np_power), "normalized_power"),
       on.has("cadence") ? "" : stat("Average cadence", a.avg_cadence, cadence(a.avg_cadence, a.category), "avg_cadence"),
       on.has("altitude") ? "" : stat("Total ascent", a.ascent_m, meters(a.ascent_m), "total_ascent") + stat("Total descent", a.descent_m, meters(a.descent_m), "total_descent"),
     ].join("");

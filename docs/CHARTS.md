@@ -19,7 +19,7 @@ served locally. Local variations are allowed; the base stays the same.
    series. A single-series chart shows its stats there instead (Avg, Max…): a small label
    above a ribbon in the series colour with the value in white, always in one narrow column
    (never two rows or columns of chips). The side column has one fixed width (112 px), so
-   every chart of a page is exactly as wide as the others. Labels stay short (Avg, Max, NP,
+   every chart of a page is exactly as wide as the others. Labels stay short (Avg, Max, Weighted,
    Steepest climb); the tooltip gives the full name and any detail ("Average power",
    "Steepest climb: 3,4 % average over 4,07 km, +140 m"). Hovering a stat highlights
    what makes it on the chart: the point (max, min — also shown on the map), the climbs or
@@ -111,7 +111,7 @@ performance condition, stamina and potential stamina. Streams without data are n
 - **Stats on the map too**: hovering a stat that marks something on the chart shows it on the
   route map as well — a point (Max, Min) as the map's dot, stretches (Max 20 min / 1 h, Ascent,
   Descent, Steepest and Longest climb, In target, Above tempo) as the amber highlight, the same one
-  best efforts and surface kinds use. A stat that is only a value (Avg, NP, Steps…) marks nothing,
+  best efforts and surface kinds use. A stat that is only a value (Avg, Weighted, Steps…) marks nothing,
   nor does a pill with the latest value (Fitness, Fatigue, Form): its point is the end of the
   line, next to the pill.
 - **Dark theme:** series colours are mixed 22 % towards the card background and the fills
@@ -146,7 +146,7 @@ performance condition, stamina and potential stamina. Streams without data are n
     `activity-power-avg`).
 - Hovering a best effort (list or a point of a duration curve in the tiles above) highlights
   its stretch on every chart (light band, bold line) and on the route map (amber line).
-- Values that clearly belong to a chart (Avg/Max HR, pace, Avg/NP/Max power, cadence,
+- Values that clearly belong to a chart (Avg/Max HR, pace, Avg/Weighted/Max power, cadence,
   ascent/descent) live only next to that chart and are never repeated in the tiles above,
   even when the chart is hidden; they are tiles only when the activity has no such chart.
 - Hovering a chart shows that moment on the map (a dot on the route); hovering the route

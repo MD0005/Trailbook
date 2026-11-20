@@ -28,6 +28,9 @@ RECENT_DAYS = 14  # an older activity (history imported now) is no news
 EVENTS_KEEP = 100  # stored
 PUSH_DAYS = 2  # an event Home Assistant could not get for this long is not sent any more
 STALE_DAYS = 3  # an activity still unprocessed after this is marked seen without events
+SPORTS = ("run", "ride")  # activity groups with records (segments: the activity's group)
+KINDS = ("pace", "ride", "longest", "power")  # best efforts with records (not heart rate)
+YEAR_POWER_S = (1200, 3600)  # power: every duration of all time, these only for the year
 
 # Best efforts ranked per (kind, key), with the activity's distance as one more effort (kind
 # "longest", key 0, value = the distance in m; higher is better) so it ranks like the others.
@@ -36,9 +39,9 @@ EFFORTS_SQL = """(SELECT activity_id, kind, key, value, start_s, end_s FROM best
     SELECT id, 'longest', 0, distance_m, 0, elapsed_s FROM activities
     WHERE distance_m > 0 AND category IN ('run', 'ride'))"""
 
-LOWER_IS_BETTER = ("pace", "ride", "segment")  # times; power, HR and distance: higher
+LOWER_IS_BETTER = ("pace", "ride", "segment")  # times; power and distance: higher
 _ORDER = "CASE WHEN o.kind IN ('pace', 'ride') THEN o.value ELSE -o.value END"
-_KIND_ORDER = ("pace", "ride", "longest", "segment", "power", "hr")  # in a message
+_KIND_ORDER = ("pace", "ride", "longest", "segment", "power")  # in a message
 
 
 # ---- labels (decimal comma, space between thousands: the app's number format) ----------------
@@ -78,7 +81,7 @@ def _span(s: float) -> str:
 def key_label(kind: str, key: float) -> str:
     if kind in ("pace", "ride"):
         return _distance(key)
-    if kind in ("power", "hr"):
+    if kind == "power":
         return _span(key)
     return ""
 
@@ -88,19 +91,15 @@ def value_label(kind: str, v: float) -> str:
         return duration(v)
     if kind == "power":
         return f"{num(v)} W"
-    if kind == "hr":
-        return f"{num(v)} bpm"
     return f"{num(v / 1000, 2)} km"
 
 
 def delta_label(kind: str, d: float) -> str:
-    """How much better: '12 s', '0,4 s', '1:05', '8 W', '3 bpm', '1,25 km'."""
+    """How much better: '12 s', '0,4 s', '1:05', '8 W', '1,25 km'."""
     if kind in LOWER_IS_BETTER:
         return f"{num(d, 1 if d < 10 else 0)} s" if d < 60 else duration(d)
     if kind == "power":
         return f"{num(d)} W"
-    if kind == "hr":
-        return f"{num(d)} bpm"
     return f"{num(d / 1000, 2)} km"
 
 
@@ -123,9 +122,19 @@ def _local_date(start_utc: str, offset_s: int | None) -> str:
 
 def _ranked(c: sqlite3.Connection, year: str | None) -> list[sqlite3.Row]:
     """Rows that are on a top-3 list now (rk) or were before the new activities (rk_old), for
-    best efforts and segments; `year` limits to that year."""
-    yf = "substr(a.start_time_utc, 1, 4) = ?" if year else "1"
-    params = [year] if year else []
+    best efforts and segments of runs and rides (SPORTS, KINDS); `year` limits to that year
+    (and power to YEAR_POWER_S)."""
+    sports_in = ", ".join(f"'{g}'" for g in SPORTS)
+    yf = f"a.category IN ({sports_in})"
+    params: list = []
+    if year:
+        yf += " AND substr(a.start_time_utc, 1, 4) = ?"
+        params = [year]
+    kinds_in = ", ".join(f"'{k}'" for k in KINDS)
+    kf = f"o.kind IN ({kinds_in})"
+    if year:
+        keys = ", ".join(str(k) for k in YEAR_POWER_S)
+        kf += f" AND (o.kind != 'power' OR o.key IN ({keys}))"
     cols = """a.person_id, a.id AS activity_id, a.start_time_utc, a.utc_offset_s,
               a.records_seen AS seen"""
     rank = """ROW_NUMBER() OVER (PARTITION BY person_id, list_key ORDER BY ord, start_time_utc)
@@ -140,6 +149,7 @@ def _ranked(c: sqlite3.Connection, year: str | None) -> list[sqlite3.Row]:
                        {_ORDER} AS ord
                 FROM {EFFORTS_SQL} o JOIN activities a ON a.id = o.activity_id
                 WHERE a.person_id IN (SELECT id FROM persons WHERE archived = 0) AND {yf}
+                  AND {kf}
                 UNION ALL
                 SELECT {cols}, s.category, 'segment', 0, se.elapsed_s, s.id,
                        's:' || s.id, se.elapsed_s
@@ -315,7 +325,6 @@ _WHAT = {
     "pace": "run {k}",
     "ride": "ride {k}",
     "power": "{c} power {k}",
-    "hr": "{c} heart rate {k}",
     "longest": "longest {c}",
     "segment": "segment {s}",
 }
@@ -405,6 +414,14 @@ def publish(c: sqlite3.Connection, now: datetime | None = None) -> int:
     rows = c.execute(
         "SELECT id, created_at, data FROM record_events WHERE pushed_at IS NULL ORDER BY id"
     ).fetchall()
+    if not rows:
+        return 0
+    # A record always arrives as a change from a number (0 or the previous record): after an
+    # HA restart the sensor is first created with 0. The automation ignores a sensor that
+    # appears, so an event sent again after a restart can never notify twice.
+    present = homeassistant.has_state(ENTITY_ID)
+    if present is None or (present is False and not ensure_sensor()):
+        return 0
     for r in rows:
         p = payload(_stored(r))
         if not homeassistant.set_state(ENTITY_ID, p["state"], p["attributes"]):
@@ -412,6 +429,16 @@ def publish(c: sqlite3.Connection, now: datetime | None = None) -> int:
         c.execute("UPDATE record_events SET pushed_at = ? WHERE id = ?", (stamp, r["id"]))
         pushed += 1
     return pushed
+
+
+def ensure_sensor() -> bool:
+    """Create the sensor with state 0 (no new record) when Home Assistant does not have it:
+    before the first record and after every HA restart. The automation ignores 0, so this
+    never repeats a notification. True when it was created."""
+    if not homeassistant.available() or homeassistant.has_state(ENTITY_ID) is not False:
+        return False
+    p = payload(None)
+    return homeassistant.set_state(ENTITY_ID, p["state"], p["attributes"])
 
 
 def refresh_and_publish(c: sqlite3.Connection) -> None:

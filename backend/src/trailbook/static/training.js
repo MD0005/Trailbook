@@ -15,7 +15,7 @@ const todayIso = () => {
 const mondayOf = (s) => addDays(s, -((parseDay(s).getUTCDay() + 6) % 7));
 const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-const loadUnit = (v) => (v == null ? "–" : `${num(v)} TSS`);
+const loadUnit = (v) => (v == null ? "–" : num(v)); // load has no unit: one hour at threshold = 100
 const shortDist = (m) => (m == null || m < 50 ? "" : m >= 10000 ? `${num(m / 1000, 0)} km` : `${num(m / 1000, 1)} km`);
 const shortDur = (s) => {
   if (!s) return "";
@@ -188,7 +188,7 @@ async function renderCalendar(params) {
     const speed = a.distance_m && a.time_s ? a.distance_m / a.time_s : a.avg_speed;
     return [a.distance_m >= 50 ? km(a.distance_m) : "", dur(a.time_s),
       foot && speed ? pace(speed) : "", !foot && a.avg_power ? watts(a.avg_power) : !foot && speed && a.distance_m ? unit(speed * 3.6, "km/h", 1) : "",
-      a.load ? `${num(a.load)} TSS` : ""].filter(Boolean).join(" · ");
+      a.load ? `load ${num(a.load)}` : ""].filter(Boolean).join(" · ");
   };
   // One line each: in a narrow day the long forms give way to short ones (CSS container
   // queries: `full` / `short`), the full values stay in the tooltip.
@@ -267,11 +267,11 @@ async function renderCalendar(params) {
     if (ahead) { // the same lines as a week done, from the plan's estimates
       const pd = psum(wopen, "distance_m"), pt = psum(wopen, "duration_s");
       lines.push(`<div class="cw-big cw-planned" title="Planned (estimate)"><b>${pd >= 50 ? `≈ ${km(pd)}` : shortDur(pt)}</b></div>`);
-      lines.push(`<div class="cw-line cw-planned">${[pd >= 50 ? shortDur(pt) : "", `≈ ${num(psum(wopen, "load"))} TSS`].filter(Boolean).join(" · ")}</div>`);
+      lines.push(`<div class="cw-line cw-planned">${[pd >= 50 ? shortDur(pt) : "", `load ≈ ${num(psum(wopen, "load"))}`].filter(Boolean).join(" · ")}</div>`);
     } else if (wacts.length) {
       const dist = ws("distance_m"), time = ws("time_s"), load = ws("load");
       lines.push(`<div class="cw-big">${dist >= 50 ? `<b>${km(dist)}</b>` : `<b>${shortDur(time)}</b>`}</div>`);
-      lines.push(`<div class="cw-line">${[dist >= 50 ? shortDur(time) : "", load ? `${num(load)} TSS` : ""].filter(Boolean).join(" · ")}</div>`);
+      lines.push(`<div class="cw-line">${[dist >= 50 ? shortDur(time) : "", load ? `load ${num(load)}` : ""].filter(Boolean).join(" · ")}</div>`);
     }
     // activities: done and planned, a dot per day (planned days in the plan colour)
     const active = new Set(wacts.map((a) => a.day)), plannedDays = new Set(wopen.map((p) => p.day));
@@ -584,11 +584,11 @@ const ICON_FORM = svg(`<path d="M4 18a8 8 0 1 1 16 0"/><path d="M12 18l4-5"/><ci
 const FITNESS_SECTIONS = [["fitness", "Fitness", ICON_FITNESS], ["form", "Form", ICON_FORM]];
 // Pastel zone colours (docs/CHARTS.md): the form line, its bands and the summary use them.
 const FORM_ZONES = [
-  [25, Infinity, "Transition", "#9aa3b5"],
+  [25, Infinity, "Detraining", "#9aa3b5"],
   [5, 25, "Fresh", "#5fb0e6"],
-  [-10, 5, "Grey zone", "#a9adb5"],
-  [-30, -10, "Optimal", "#4fb67c"],
-  [-Infinity, -30, "High risk", "#e8716f"],
+  [-10, 5, "Neutral", "#a9adb5"],
+  [-30, -10, "Productive", "#4fb67c"],
+  [-Infinity, -30, "Overreaching", "#e8716f"],
 ];
 const formZone = (tsb) => FORM_ZONES.find(([lo, hi]) => tsb >= lo && tsb < hi) || FORM_ZONES[2];
 // Ramp rate (fitness change in 7 days): above 8 builds too fast, below 0 fitness is lost.
@@ -700,7 +700,7 @@ function fitnessSeries(s, { marks = [], opt = FITNESS_OPTIONS } = {}) {
     ({ label, value: values[i], i, values, color, text: sign ? signed(values[i], d) : num(values[i], d), tip, mark: i !== last });
   const fresh = extreme(tsb, true), tired = extreme(tsb, false);
   return [
-    { key: "fitness", label: "Fitness", title: opt.fatigue === "off" ? "Fitness" : "Fitness and fatigue", yTitle: "Training load", unit: "TSS/d", dec: 0, height: 396,
+    { key: "fitness", label: "Fitness", title: opt.fatigue === "off" ? "Fitness" : "Fitness and fatigue", yTitle: "Training load per day", unit: "", dec: 0, height: 396,
       color: COLORS.ctl, iconHtml: ICON_FITNESS, values: ctl, lines: opt.fatigue === "off" ? [] : [{ label: "Fatigue", color: COLORS.atl, values: atl }],
       fill: opt.fill === "fill", marks, marksHidden: opt.activities === "off",
       tip: "Fitness: 42-day average of the daily training load. Fatigue: the same over 7 days.",
@@ -750,7 +750,7 @@ function bindFitnessHead(params, onToggle = () => {}) {
   });
 }
 
-const METHOD_LABELS = { power: "Power (TSS)", pace: "Running pace (rTSS)", hr: "Heart rate (hrTSS)", none: "No load (no data)" };
+const METHOD_LABELS = { power: "Power", pace: "Running pace", hr: "Heart rate", none: "No load (no data)" };
 const SOURCE_LABEL = { set: "", watch: " (watch)", auto: " (estimated)", default: " (default)" };
 const SOURCE_CHIP = { set: ["Set", "set"], watch: ["Watch", "watch"], auto: ["Estimated", "est"], default: ["Default", "est"] };
 const THRESHOLD_ITEMS = [
