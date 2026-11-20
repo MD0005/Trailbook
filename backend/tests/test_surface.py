@@ -37,3 +37,17 @@ def test_short_switches_are_smoothed_away():
     # a short run between two different kinds joins the longer neighbour
     runs = [[0, 300, "paved"], [300, 350, "unknown"], [350, 1000, "gravel"]]
     assert surface.smooth(runs) == [[0, 300, "paved"], [300, 1000, "gravel"]]
+
+
+def test_virtual_activities_get_no_surface(conn):
+    conn.execute("INSERT INTO persons (id, label) VALUES ('alice', 'Alice')")
+    for aid, kind in ((1, "road_biking"), (2, "virtual_ride")):
+        conn.execute(
+            """INSERT INTO activities (id, person_id, fit_uid, start_time_utc, category,
+                                       activity_type, has_gps, importer_version)
+               VALUES (?, 'alice', ?, '2026-01-01T08:00:00Z', 'ride', ?, 1, 1)""",
+            (aid, f"uid{aid}", kind),
+        )
+    conn.commit()
+    assert surface.progress(conn) == {"total": 1, "done": 0}  # the virtual ride does not count
+    assert surface.compute(conn, 2) is None  # an app's world: never sent to the map server

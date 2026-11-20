@@ -411,6 +411,60 @@ def _channels(conn: sqlite3.Connection, activity_id: int) -> dict[str, list]:
     }
 
 
+def time_in_hr_zones(time: list, hr: list, bounds: list[float]) -> list[float]:
+    """Seconds in each heart rate zone, in the shape of fitfile.time_in_zones: times[0] below
+    zone 1 (under bounds[0]), times[k] in zone k (bounds[k - 1] … bounds[k]), above the last
+    bound counts in the top zone. A sample lasts until the next one; gaps over MAX_GAP_S
+    (pauses) count 1 s."""
+    times = [0.0] * len(bounds)
+    n = min(len(time), len(hr))
+    for i in range(n - 1):
+        v, t0, t1 = hr[i], time[i], time[i + 1]
+        if v is None or t0 is None or t1 is None:
+            continue
+        dt = t1 - t0
+        dt = 1.0 if dt > MAX_GAP_S else max(0.0, dt)
+        k = next((j for j, b in enumerate(bounds) if v < b), len(bounds) - 1)
+        times[k] += dt
+    return [round(x) for x in times]
+
+
+def stream_hr_zones(conn: sqlite3.Connection, row: sqlite3.Row) -> dict | None:
+    """Time in heart rate zones from the heart rate stream, for an activity whose file has
+    none (virtual rides: apps write no time in zones). The zone limits are Garmin's of the
+    person's activity of the same sport nearest in time (else of any sport). None without a
+    heart rate stream or any zone limits."""
+    bounds, source = None, None
+    for same in (True, False):
+        r = conn.execute(
+            f"""SELECT zones, start_time_utc FROM activities
+               WHERE person_id = ? AND zones LIKE '%"hr"%' AND id != ?
+                     {"AND category IS ?" if same else ""}
+               ORDER BY ABS(julianday(start_time_utc) - julianday(?)) LIMIT 1""",
+            (
+                row["person_id"],
+                row["id"],
+                *([row["category"]] if same else []),
+                row["start_time_utc"],
+            ),
+        ).fetchone()
+        if r:
+            bounds = (json.loads(r["zones"]).get("hr") or {}).get("bounds")
+            source = r["start_time_utc"]
+            if bounds:
+                break
+    if not bounds or len(bounds) < 2:
+        return None
+    ch = _channels(conn, row["id"])
+    time, hr = ch.get("time") or [], ch.get("hr") or []
+    if not any(v for v in hr if v):
+        return None
+    times = time_in_hr_zones(time, hr, bounds)
+    if not any(times):
+        return None
+    return {"times": times, "bounds": bounds, "computed": True, "from": source}
+
+
 def backfill(conn: sqlite3.Connection, progress: ProgressFn | None = None) -> int:
     """Analyse every activity whose analysis is missing or outdated. Returns the count."""
     todo = conn.execute(

@@ -1172,15 +1172,15 @@ async function renderActivity(id) {
     const gl = c.activityTrainingLoad;
     const method = METHOD_LABELS[a.load_method];
     const loadLines = [
-      kv("Trailbook", a.load != null ? num(a.load) : null,
-        `Training load of the activity${method ? `, from ${method.toLowerCase()}` : ""}: one hour at your threshold = 100. The calendar adds these up; fitness and fatigue are built from them (Manual › Fitness)`),
+      kv("Load", a.load != null ? num(a.load) : null,
+        `Training load${method ? ` from ${method.toLowerCase()}` : ""}: one hour at your threshold = 100`),
       kv("Garmin", gl != null ? num(gl) : null, "Training load of the activity (Garmin, its own scale)"),
       kv("Body Battery", bb != null ? sign(bb) : null, "Change of Body Battery during the activity (Garmin)"),
     ].join("");
     const colB = [
       kind ? stat("Training type", kind, `<span data-tip="${a.workout_override ? "Chosen in Edit" : "Detected from the activity; Edit changes it"} (Help › Training types)">${esc(workoutLabel(kind))}</span>`, "interval_time") : "",
       effect,
-      loadLines ? stat("Load", "x", `<span class="kv-lines">${loadLines}</span>`, "training_load") : "",
+      loadLines ? stat("Effort", "x", `<span class="kv-lines">${loadLines}</span>`, "training_load") : "",
       on.has("speed") ? "" : stat("Average pace", a.distance_m && a.avg_speed, pace(a.avg_speed), "avg_pace"),
       on.has("hr") ? "" : stat("Average heart rate", a.avg_hr, bpm(a.avg_hr), "avg_heart_rate") + stat("Maximum heart rate", a.max_hr, bpm(a.max_hr), "max_heart_rate"),
       on.has("power") ? "" : stat("Average power", a.avg_power, watts(a.avg_power), "avg_power") + stat("Weighted power", a.np_power, watts(a.np_power), "normalized_power"),
@@ -1211,7 +1211,7 @@ async function renderActivity(id) {
     </div>`;
   const hasData = (arr) => Array.isArray(arr) && arr.some((v) => v != null && v > 0);
   const ROUTE_MODES = [["plain", "Single colour", true], ["speed", "Speed", hasData(st.speed)], ["hr", "Heart rate", hasData(st.hr)],
-    ["power", "Power", hasData(st.power)], ["cadence", "Cadence", hasData(st.cadence)], ["altitude", "Altitude", hasVals(st.altitude)], ["surface", "Surface", Boolean(a.has_gps)],
+    ["power", "Power", hasData(st.power)], ["cadence", "Cadence", hasData(st.cadence)], ["altitude", "Altitude", hasVals(st.altitude)], ["surface", "Surface", hasSurface(a)],
     ["intervals", "Intervals", sections?.kind === "intervals"]].filter((m) => m[2]);
   const mode = "plain", kmOn = true; // fixed defaults on every visit
   const laps = lapSource(a, chartX, st); // 1 km laps: the device auto-laps, else from the streams
@@ -1504,7 +1504,7 @@ async function renderActivity(id) {
     }).catch(() => {});
   }
   // Road surface (OpenStreetMap, cached after the first time): shares in the tile, strip on a chart.
-  if (a.has_gps) {
+  if (hasSurface(a)) {
     api(`activities/${id}/surface`).then((sf) => {
       if (!sf || !sf.runs) { view.querySelector("[data-surface-share]")?.remove(); return; }
       surfaceData = sf;
@@ -1630,11 +1630,17 @@ function zoneBars(a, kind) {
 }
 function hrZonesCard(a) {
   const bars = zoneBars(a, "hr");
-  return bars ? `<div class="card act-tile act-hr"><h3 class="tile-title">${metricIcon("time_in_hr_zone", 18)}<span>Heart rate in zones</span></h3>${bars}</div>` : "";
+  let from = null;
+  try { const z = JSON.parse(a.zones || "{}").hr; if (z?.computed) from = z.from; } catch { from = null; }
+  // the file had no time in zones (virtual rides): counted from the heart rate line
+  const tip = from ? ` data-tip="Counted from the heart rate, with the zones of your activity of ${esc(from.slice(0, 10))}"` : "";
+  return bars ? `<div class="card act-tile act-hr"><h3 class="tile-title"${tip}>${metricIcon("time_in_hr_zone", 18)}<span>Heart rate in zones</span></h3>${bars}</div>` : "";
 }
+// Road surface: outdoors only - a virtual route is an app's world, not a road.
+const hasSurface = (a) => Boolean(a.has_gps) && !a.activity_type?.startsWith("virtual_");
 // Road surface tile (filled when the map data arrives).
 function surfaceCardHtml(a) {
-  return a.has_gps ? `<div class="card act-tile act-surface" data-surface-share><h3 class="tile-title">${metricIcon("route", 18)}<span>Surface</span></h3><div class="hint">Loading map data…</div></div>` : "";
+  return hasSurface(a) ? `<div class="card act-tile act-surface" data-surface-share><h3 class="tile-title">${metricIcon("route", 18)}<span>Surface</span></h3><div class="hint">Loading map data…</div></div>` : "";
 }
 // Surface shares: one stacked bar in the surface hatching and the share of each kind.
 function surfaceShareHtml(sf) {

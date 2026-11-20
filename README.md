@@ -15,7 +15,7 @@ export, FIT/GPX/TCX files) are there to bring in older history or a second devic
 
 ![Supports aarch64](https://img.shields.io/badge/aarch64-yes-green.svg)
 ![Supports amd64](https://img.shields.io/badge/amd64-yes-green.svg)
-![Stage](https://img.shields.io/badge/stage-experimental-orange.svg)
+![Stage](https://img.shields.io/badge/stage-stable-green.svg)
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 
 ![Activity page](docs/screenshots/activity.png)
@@ -90,10 +90,19 @@ export, FIT/GPX/TCX files) are there to bring in older history or a second devic
 
 ### Light on resources
 - Near-zero CPU when idle; imports run in the background at the lowest priority.
+- CPU and memory go up only while activities are being added and while the road surface is
+  looked up for them. You notice it only when a large batch comes in at once (the first
+  Garmin download, a Strava export); everyday syncing stays in the background.
 
 ![Settings](docs/screenshots/settings.png)
 
 ## Installation
+
+Two ways to run Trailbook, the same app in both:
+
+- **Home Assistant add-on** (recommended) — for Home Assistant OS and Supervised installs.
+- **Docker** — for everyone else: no Home Assistant at all, or Home Assistant Container / Core,
+  which have no add-ons. See [Without Home Assistant](#without-home-assistant-docker).
 
 [![Add repository to my Home Assistant](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2FMD0005%2FTrailbook)
 
@@ -118,7 +127,8 @@ The database lives in `./data`; put FIT files in `./share/trailbook` and choose
 `/share/trailbook` as the watched folder. Exports land in `./share/trailbook-exports`.
 Update with `docker compose pull && docker compose up -d`. Log out at `/logout`.
 The compose file does not start without `TRAILBOOK_PASSWORD`; with a plain `docker run` and no
-password there is no login at all, so leave it out only if nobody else can reach the port. Home Assistant notifications are not available outside Home Assistant.
+password there is no login at all, so leave it out only if nobody else can reach the port.
+Home Assistant notifications and the records sensor are not available outside the add-on.
 
 ## First steps
 
@@ -132,9 +142,48 @@ password there is no login at all, so leave it out only if nobody else can reach
 The watched folder must be inside a folder the add-on can see: `/share` (for example
 `/share/trailbook`), `/media` (read only) or the add-on's own config folder.
 
+## Records in Home Assistant
+
+When a new activity sets a record, the add-on tells Home Assistant through one sensor,
+`sensor.trailbook_records`. A record is a top-3 place of all time or of this year: the best
+efforts of runs and rides (fastest 5 km, best 20 min power…), the longest distance and your
+segments. Only activities from the last 14 days count, so importing old history never fires.
+
+- Each new record is **one new state** of the sensor: the state is the record's id, `0` means
+  "no new record". Each record is sent once.
+- The attributes carry a ready notification: `title` (e.g. `ALL-TIME RECORD`, `2026 2ND BEST`),
+  `message` (who, what, the result and the result it beat), `icon` (`mdi:trophy`,
+  `mdi:medal`…) and `color`, plus the details (`person`, `activity_id`, `scope`, `rank`…).
+- After a Home Assistant restart the sensor comes back as `0`, so a record is always a change
+  from a number — the condition below makes sure nothing is announced twice.
+
+Example: a notification for every new record.
+
+```yaml
+alias: Trailbook - record notification
+triggers:
+  - trigger: state
+    entity_id: sensor.trailbook_records
+    not_from: [unavailable, unknown]
+    not_to: [unavailable, unknown, "0"]
+conditions:
+  # only a change from a number (0 or the previous record), never the sensor appearing
+  - condition: template
+    value_template: >-
+      {{ trigger.from_state is not none and is_number(trigger.from_state.state) }}
+actions:
+  - action: persistent_notification.create  # or notify.mobile_app_<your phone>
+    data:
+      title: "{{ trigger.to_state.attributes.title }}"
+      message: "{{ trigger.to_state.attributes.message }}"
+mode: queued
+max: 30
+```
+
 ## Updating
 
-Home Assistant shows when a new version is out (**Settings › Add-ons › Trailbook**).
+Home Assistant shows when a new version is out (**Settings › Add-ons › Trailbook**); the
+update dialog lists what changed ([changelog](trailbook/CHANGELOG.md)).
 The database is upgraded on start. An older version cannot open a database a newer one has
 upgraded, so tick *Create backup* in the update dialog if you may want to go back.
 

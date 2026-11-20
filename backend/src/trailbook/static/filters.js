@@ -344,7 +344,8 @@ function bindWorkoutPanel(root) {
 
 // Apply / Clear of the Time and Type panels: navigate to `route` with the other parameters
 // kept. `drop` lists older parameters the new ones replace (year, type, range, page, …).
-function bindFilterBadges(root, route, params, { drop = [] } = {}) {
+// `allTime`: the page has a default period, so All time is kept as `last=<allTime>`.
+function bindFilterBadges(root, route, params, { drop = [], allTime = null } = {}) {
   const readers = { time: bindTimePanel(root), type: bindTypePanel(root), workout: bindWorkoutPanel(root) };
   const old = ["page", "year", "type", "range", ...drop];
   const go = (changes) => {
@@ -355,7 +356,10 @@ function bindFilterBadges(root, route, params, { drop = [] } = {}) {
   };
   root.querySelectorAll("[data-fapply]").forEach((b) => b.onclick = () => {
     const read = readers[b.dataset.fapply];
-    if (read) go(read());
+    if (!read) return;
+    const v = read();
+    if (allTime && b.dataset.fapply === "time" && !v.from && !v.to && !v.last && !v.years) v.last = allTime;
+    go(v);
   });
   root.querySelectorAll("[data-fclear]").forEach((b) => b.onclick = () => {
     go({ time: { from: "", to: "", last: "", years: "" }, type: { types: "" }, workout: { workouts: "" } }[b.dataset.fclear]);
@@ -366,6 +370,7 @@ function bindFilterBadges(root, route, params, { drop = [] } = {}) {
 function filterQuery(params) {
   const q = {};
   for (const k of ["from", "to", "last", "years", "types", "workouts"]) if (params[k]) q[k] = params[k];
+  if (q.last === "all") delete q.last; // All time on a page with a default period
   if (!q.types && params.type) q.types = params.type; // older links
   return q;
 }

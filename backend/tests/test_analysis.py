@@ -258,3 +258,12 @@ def test_ftp_is_taken_from_the_same_sport_and_can_be_corrected(tdb):
     assert ftp(ride) == 240
     a = c.execute("SELECT * FROM activities WHERE id = ?", (ride,)).fetchone()
     assert analysis.activity_thresholds(c, a).sources["ftp"] == "activity"
+
+
+def test_time_in_hr_zones_from_the_stream():
+    from trailbook.analysis import time_in_hr_zones
+
+    bounds = [100, 120, 140, 160, 180, 200]  # below z1 | z1 … z5
+    time = [0, 1, 2, 3, 4, 64, 65]  # a 60 s pause after the 5th sample counts 1 s
+    hr = [90, 110, 130, 150, 210, 170, None]
+    assert time_in_hr_zones(time, hr, bounds) == [1, 1, 1, 1, 1, 1]

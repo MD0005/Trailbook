@@ -294,6 +294,16 @@ Phases: 15 s means of the heart rate; the zone changes only 3 bpm past a limit (
 the scale); neighbours in one zone are joined; the shortest block under the minimum joins the
 neighbour closer in heart rate, until none is shorter.
 
+## Heart rate in zones (activity page)
+
+- From the activity file: Garmin's time in zones (`time_in_zone`), with the zone limits the
+  watch used.
+- Files without it (virtual rides: training apps write none): counted from the heart rate
+  line. Zone limits = Garmin's of the person's activity of the same sport nearest in time (else
+  of any sport). Each sample lasts until the next one; a gap over 10 s (a pause) counts 1 s.
+  Below the first limit = "below zone 1", above the last = the top zone.
+- No heart rate line or no activity with zones yet: no tile.
+
 ## Calendar: steps, floors, stress, day length
 
 Code: `fitfile.parse_monitoring`, `analysis.daily_values`, `dayLength()` in `training.js`,

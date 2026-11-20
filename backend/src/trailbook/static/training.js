@@ -199,6 +199,7 @@ async function renderCalendar(params) {
     const parts = [];
     let weather = "";
     const k = (n) => (n < 10000 ? `${num(n / 1000, 1)}k` : `${num(n / 1000, 0)}k`);
+    if (d === today) v = null; // today: the day is not over, only the forecast (as the coming days)
     if (v?.steps != null) parts.push(`<span class="cal-m cal-steps" title="${num(v.steps)} steps">${CAL_ICONS.steps()}${both(num(v.steps), k(v.steps))}</span>`);
     if (v?.floors != null) parts.push(`<span class="cal-m cal-floors" title="${num(v.floors)} floors climbed">${CAL_ICONS.floors()}${num(v.floors)}</span>`);
     else if (v?.ascent_m != null) parts.push(`<span class="cal-m cal-floors" title="${meters(v.ascent_m)} ascent">${CAL_ICONS.ascent()}${both(meters(v.ascent_m), num(v.ascent_m, 0))}</span>`);
@@ -328,9 +329,11 @@ async function renderCalendar(params) {
   const showTray = single && (TAB.workouts ?? false);
   const sw = switchHtml("calview", [["month", `${ICON_CAL_MONTH}<span>Month</span>`], ["year", `${ICON_CAL_YEAR}<span>Year</span>`]], mode);
   view.innerHTML = `${pageHead("Calendar", `${gotoBadge(target)}${single ? `${badgeHtml("ctargets", "Targets", "", { panel: `<div class="opt-panel targets-panel" data-targets></div>` })}<button class="badge ${showTray ? "on" : ""}" data-cworkouts>Workouts</button>` : ""}<button class="badge ${showSummary ? "on" : ""}" data-ckpis>Summary</button>`, sw)}
-    <div class="cal-sticky" data-csticky>
+    <div class="cal-top">
       <div data-csummary ${showSummary ? "" : "hidden"}></div>
       <div data-ctray ${showTray ? "" : "hidden"}></div>
+    </div>
+    <div class="cal-sticky" data-csticky>
       <div class="cal-heads">${WEEKDAYS.map((w) => `<div class="cal-head">${w}</div>`).join("")}<div class="cal-head"></div></div>
     </div>
     <div class="card cal-card">
@@ -347,8 +350,9 @@ async function renderCalendar(params) {
     location.hash = "#/calendar?" + new URLSearchParams(b.dataset.value === "year" ? { view: "year", year: (target || today).slice(0, 4) } : {});
   });
 
-  // The summary and the weekday names stay under the page header; the summary is the month
-  // of the first week row below them (its Thursday's month).
+  // The weekday names stay under the page header; the summary and the workouts scroll away
+  // under it (as the summary of Activities). The summary is the month of the first week row
+  // under the weekday names (its Thursday's month).
   const sticky = view.querySelector("[data-csticky]"), weeks = view.querySelector("[data-weeks]");
   const head = view.querySelector(".page-head");
   const placeSticky = () => { sticky.style.top = `${parseFloat(getComputedStyle(head).top) + head.offsetHeight + 6}px`; };
@@ -614,6 +618,8 @@ const FITNESS_OPTIONS = { activities: "on", fill: "fill", fatigue: "on", zones: 
 const fitnessOptions = () => ({ ...FITNESS_OPTIONS, ...(UI.data["fitness-options"] || {}) });
 
 async function renderFitness(params) {
+  // Opens on the last 6 months (fixed, for everyone); All time is `last=all`.
+  if (!timeActive(params)) params = { ...params, last: "6m" };
   const shown = fitnessShown();
   const opt = fitnessOptions();
   const { types, workouts, ...time } = filterQuery(params); // Fitness: the time filter only
@@ -730,7 +736,7 @@ function thresholdWarning(warnings) {
 function bindFitnessHead(params, onToggle = () => {}) {
   const head = view.querySelector(".page-head");
   bindBadges(head);
-  bindFilterBadges(head, "#/fitness", params);
+  bindFilterBadges(head, "#/fitness", params, { allTime: "all" });
   const kpis = head.querySelector("[data-fkpis]");
   kpis.onclick = () => {
     const on = !kpis.classList.contains("on");

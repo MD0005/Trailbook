@@ -780,6 +780,13 @@ def create_app(db_path: str | Path) -> Starlette:
                 for d in devs:
                     d["image"] = _device_image(d.get("product"))
                 a["devices"] = devs
+            # no time in heart rate zones in the file (virtual rides): from the stream
+            zones = json.loads(a["zones"]) if a.get("zones") else {}
+            if "hr" not in zones and "hr" in a["channels"]:
+                computed = analysis.stream_hr_zones(c, row)
+                if computed:
+                    zones["hr"] = computed
+                    a["zones"] = json.dumps(zones)
             a["segments"] = _activity_segments(c, a)
             # Garmin Connect list data (title, training effect, body battery, location…)
             g = c.execute(

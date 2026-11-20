@@ -654,7 +654,7 @@ tr.filters-row .tpick { min-width: 150px; }
 /* ---- Calendar ---- */
 .cal-card { padding: 10px; }
 /* weeks: 7 days and the week's totals; the summary and the weekday names stay under the header */
-.cal-heads, .cal-row { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)) minmax(84px, 0.7fr); gap: 4px; }
+.cal-heads, .cal-row { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)) minmax(96px, 0.8fr); gap: 4px; }
 .cal-row + .cal-row { margin-top: 4px; }
 /* week number and year: plain text in the left margin, only where the screen leaves room for
    it (as the back button of an activity); it moves with its week */
@@ -667,13 +667,11 @@ tr.filters-row .tpick { min-width: 150px; }
   .cal-wk b { font-size: 13px; color: var(--fg); }
   .cal-wk.off { opacity: 0; }
 }
-.cal-sticky { position: sticky; z-index: 4; background: var(--bg); padding: 0 11px 2px; margin: -8px -1px 0; }
-.cal-sticky [data-csummary] .stat-strip { margin: 8px 0 6px; }
-/* Summary and the Workouts tray: the plain summary strip of Activities, as wide as the header */
-/* the first frame 14 px under the header, as on Activities (the sticky block itself starts 6 px
-   under it; its padding keeps the frame's margin from collapsing into the header's fade) */
-.cal-sticky { padding-top: 8px; }
-.cal-sticky [data-csummary] .stat-strip, .cal-sticky .wo-panel { margin: 0 -10px 8px; border-radius: 8px;
+.cal-sticky { position: sticky; z-index: 4; background: var(--bg); padding: 8px 11px 2px; margin: -8px -1px 0; }
+/* Summary and the Workouts tray: the plain summary strip of Activities, as wide as the header;
+   they scroll away under the header, only the weekday names stay */
+.cal-top { padding: 0 11px; margin: 0 -1px; }
+.cal-top [data-csummary] .stat-strip, .cal-top .wo-panel { margin: 0 -10px 8px; border-radius: 8px;
   background: var(--surface); border: 1px solid var(--line); box-shadow: none; }
 .cal-mstat { justify-content: center; }
 .cal-mname { font-size: 16px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
@@ -754,10 +752,10 @@ tr.filters-row .tpick { min-width: 150px; }
 .cw-dots i.on { background: var(--accent); }
 .cw-dots i.plan { background: var(--plan); }
 .cw-sports { display: flex; flex-direction: column; gap: 2px; margin-top: 3px; }
-.cw-sport { display: grid; grid-template-columns: 13px minmax(12px, 1fr) 44px; align-items: center; gap: 5px; } /* bars of one width */
+.cw-sport { display: grid; grid-template-columns: 13px minmax(12px, 1fr) 34px; align-items: center; gap: 4px; } /* bars of one width */
 .cw-val { text-align: right; overflow: hidden; text-overflow: ellipsis; }
 .cw-sport svg, .cw-sport .cal-ic { width: 13px; height: 13px; flex: none; }
-.cw-bar { display: flex; height: 4px; border-radius: 2px; background: color-mix(in srgb, var(--line) 70%, transparent); overflow: hidden; }
+.cw-bar { display: flex; height: 8px; border-radius: 4px; background: color-mix(in srgb, var(--line) 70%, transparent); overflow: hidden; }
 .cw-bar i { display: block; height: 100%; background: color-mix(in srgb, var(--accent) 70%, var(--surface)); }
 .cw-bar b { display: block; height: 100%; background: var(--plan); }  /* what the planned workouts add */
 .cw-bar i.over, .cw-bar b.over { background: var(--danger); }  /* past the target */

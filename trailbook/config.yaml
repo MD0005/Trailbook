@@ -1,7 +1,7 @@
 # Bump `version` to ship a change to Home Assistant: CI builds the images for a new version,
 # then HA shows the update (Settings › Add-ons › Trailbook).
 name: Trailbook
-version: "0.1.6"
+version: "0.1.7"
 slug: trailbook
 description: Garmin training log at home — route map, statistics and charts
 url: https://github.com/MD0005/Trailbook
@@ -9,7 +9,7 @@ image: ghcr.io/md0005/trailbook-{arch}
 arch:
   - aarch64
   - amd64
-stage: experimental
+stage: stable
 startup: application
 boot: auto
 init: true

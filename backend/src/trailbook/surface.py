@@ -225,11 +225,16 @@ def fetch_ways(points: list[tuple[float, float, float]], url: str) -> list[dict]
 
 
 def compute(conn: sqlite3.Connection, activity_id: int) -> dict | None:
-    """Surface of an activity (cached in activities.surface). None without a route.
+    """Surface of an activity (cached in activities.surface). None without a route and for
+    virtual activities.
 
     Raises OSError when the map server cannot be reached (nothing is cached then).
     """
-    row = conn.execute("SELECT surface FROM activities WHERE id = ?", (activity_id,)).fetchone()
+    row = conn.execute(
+        "SELECT surface, activity_type FROM activities WHERE id = ?", (activity_id,)
+    ).fetchone()
+    if row and (row["activity_type"] or "").startswith("virtual"):
+        return None
     if row and row["surface"]:
         cached = json.loads(row["surface"])
         if cached.get("version") == SURFACE_VERSION:
@@ -264,10 +269,14 @@ def _shown(stored: dict) -> dict | None:
     return {"version": stored["version"], "runs": runs, "shares": shares(runs)}
 
 
+# Virtual rides and runs: the route is an app's world, there is no road under it.
+OUTDOORS = "has_gps = 1 AND COALESCE(activity_type, '') NOT LIKE 'virtual%'"
+
+
 def next_missing(conn: sqlite3.Connection) -> int | None:
-    """The newest activity with a route whose surface is not known yet."""
+    """The newest activity with a route outdoors whose surface is not known yet."""
     row = conn.execute(
-        """SELECT id FROM activities WHERE has_gps = 1 AND surface IS NULL
+        f"""SELECT id FROM activities WHERE {OUTDOORS} AND surface IS NULL
            ORDER BY start_time_utc DESC LIMIT 1"""
     ).fetchone()
     return row["id"] if row else None
@@ -275,6 +284,6 @@ def next_missing(conn: sqlite3.Connection) -> int | None:
 
 def progress(conn: sqlite3.Connection) -> dict:
     total, done = conn.execute(
-        "SELECT COUNT(*), COUNT(surface) FROM activities WHERE has_gps = 1"
+        f"SELECT COUNT(*), COUNT(surface) FROM activities WHERE {OUTDOORS}"
     ).fetchone()
     return {"total": total, "done": done}
