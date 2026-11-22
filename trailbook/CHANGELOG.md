@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.1.11
+
+### Added
+- Phone layout: the page title in the top bar, the tabs in a menu behind the hamburger, the
+  filters behind an icon beside the view buttons, so the activity gets most of the screen.
+- Best efforts: **top speed over 1 minute** on rides, with GPS jumps left out.
+- Best efforts: the longest distance in **12 minutes** on runs (Cooper) and in **1 hour** on rides,
+  and the **elevation gain** of the activity.
+- Statistics › Records: the **biggest climb** and the **steepest 1 km**, with altitude jumps left out.
+- Segments › Edit: **Match width** (e.g. the other side of the street) and **One detour**
+  (e.g. around a block); a wider match shows as a shadow around the segment on the map.
+- Calendar: hovering an activity shows its values in the middle of its chart.
+- Activity: **Power in zones** is a small tile of its own with the zones as one coloured bar.
+- Power zones have one set of colours everywhere: grey, blue, green, yellow, red, violet, black.
+- Statistics › Compare years: X axis **Mixed** (the default) — per month, running totals per week.
+
+### Changed
+- Virtual and indoor rides have their own records for distances, times and top speed; their
+  power still counts with all rides.
+- Statistics › Records: best efforts tiles beside their curves — running, power, cycling,
+  virtual and segments, each record with its date; the 3 best of all time, or with a Time
+  filter its best next to the all-time best; a click opens the activity.
+- Statistics: the views are Compare years, Timeline and Records, each opening on its own period
+  (all time, last 12 months, last 6 months).
+- Activity › Best efforts: rows named Distance and Power20m; indoor rides show Best efforts
+  virtual.
+- Activity › Best efforts: an activity from an earlier year compares with its whole year
+  (the column shows the year instead of YTD).
+- Statistics: Compare years charts take the full width, one under another.
+- Map: a click on a route lists the activities in flat rows with their type icon.
+- Road surface is fetched in small batches right after an import and waits longer after the
+  map server refuses, so the log no longer fills with server errors.
+- Calendar: a larger wind arrow. Target lines on the activity charts are a bit lighter.
+- The loading cyclist sits in the middle of the page without a frame on every tab.
+
+### Fixed
+- Map: the page header no longer flickers when opening or leaving the map.
+
 ## 0.1.10
 
 ### Fixed

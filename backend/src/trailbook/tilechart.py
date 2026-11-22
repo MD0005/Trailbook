@@ -192,13 +192,14 @@ def hr_blocks(
     (`_zone_blocks`, each at least `share` of the time).
     `avg` = the activity's average heart rate on the same scale (a dashed line).
     Without heart rate the same from power (e.g. a bike computer without an HR strap): height
-    from 0 W to the top of Garmin's power zones, colour = the power zone in the heart rate
-    colours, so the tile looks the same."""
+    from 0 W to the top of Garmin's power zones, colour = the power zone in the power zone
+    colours (grey, blue, green, yellow, red, violet, black; `power` true)."""
     ch = _channels(conn, a["id"], ("time", "hr", "power"))
     time, hr, pw = ch.get("time") or [], ch.get("hr") or [], ch.get("power") or []
     if len(time) < 2:
         return None
     zones = json.loads(a["zones"]) if a["zones"] else None
+    hr_raw = any(hr)  # the blocks come from the heart rate (else from power, in its zone colours)
     if any(hr):
         vals, top, hyst = hr, _hr_max(zones, a, hr), HYSTERESIS_BPM
         # the scale starts at the resting heart rate (watch, else the person's, else a default)
@@ -233,7 +234,8 @@ def hr_blocks(
         ])  # fmt: skip
     mean = _avg(time, hr, t_start, t_end)
     return {"kind": "blocks", "bars": bars, "zones": _zone_count(zones),
-            "avg": scale(mean) if mean else None}  # fmt: skip
+            "avg": scale(mean) if mean else None,
+            "power": not hr_raw}  # fmt: skip
 
 
 def interval_blocks(conn: sqlite3.Connection, a: sqlite3.Row) -> dict | None:

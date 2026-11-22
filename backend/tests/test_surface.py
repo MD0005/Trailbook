@@ -51,3 +51,43 @@ def test_virtual_activities_get_no_surface(conn):
     conn.commit()
     assert surface.progress(conn) == {"total": 1, "done": 0}  # the virtual ride does not count
     assert surface.compute(conn, 2) is None  # an app's world: never sent to the map server
+
+
+def test_refused_server_cools_down(monkeypatch):
+    import pytest
+
+    from trailbook import surface
+
+    surface._answered()
+    assert surface.cooldown_left() == 0
+    assert surface._refused(None, now=1000) == surface.COOLDOWN_S
+    assert surface.cooldown_left(now=1000) == surface.COOLDOWN_S
+    assert surface._refused(None, now=1000) == 2 * surface.COOLDOWN_S  # doubled
+    assert surface._refused(10**6, now=1000) == surface.COOLDOWN_MAX_S  # capped
+    surface._answered()
+    assert surface._refused(5000, now=0) == 5000  # Retry-After wins when longer
+    surface._answered()
+
+    calls = []
+
+    def refuse(points, url):
+        calls.append(url)
+        raise surface.Refused("HTTP 502 Bad Gateway")
+
+    monkeypatch.setattr(surface, "fetch_ways", refuse)
+    monkeypatch.setattr(surface, "_route", lambda c, aid: [(50, 20, 0), (50.001, 20, 111)])
+
+    class Conn:
+        def execute(self, *a):
+            class R:
+                def fetchone(self):
+                    return {"surface": None, "activity_type": "ride"}
+
+            return R()
+
+    monkeypatch.setattr(surface.db, "get_setting", lambda c, k: None)
+    for _ in range(3):
+        with pytest.raises(OSError):
+            surface.compute(Conn(), 1)
+    assert len(calls) == 1  # asked once, then left alone
+    surface._answered()

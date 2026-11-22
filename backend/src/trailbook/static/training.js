@@ -181,16 +181,25 @@ async function renderCalendar(params) {
     return `<a class="cal-act" href="#/activity/${a.id}" title="${esc(a.name || typeLabel(a.activity_type))} · ${esc(typeLabel(a.activity_type))}${isAll ? " · " + esc(personLabel(a.person_id)) : ""}">
       <span class="cal-act-head">${isAll ? `<span class="cal-dot" style="background:${personColor(person(a.person_id))}"></span>` : ""}${typeIcon(a.activity_type, 16)}
         <span class="cal-act-text">${esc((DISTANCE_GROUPS.has(a.category) && shortDist(a.distance_m)) || shortDur(a.time_s))}</span>${plan ? plannedFlag(plan) : ""}${kind ? `<span class="cal-kind">${esc(kind)}</span>` : ""}</span>
-      <span class="cal-act-chart" title="${esc(actFacts(a))}">${chart.startsWith("<svg") ? chart : `<span class="tile-sport">${typeIcon(a.activity_type, 26)}</span>`}</span></a>`;
+      ${chart.startsWith("<svg") ? `<span class="cal-act-chart">${chart}${factsPill(a)}</span>` : `<span class="cal-act-chart" title="${esc(actFacts(a))}"><span class="tile-sport">${typeIcon(a.activity_type, 26)}</span></span>`}</a>`;
   };
-  // Hovering the chart: distance, time, pace (on foot) or power / speed (rides), load.
-  const actFacts = (a) => {
+  // Hovering the bar chart: its values in the middle on a soft pill (as the values over the
+  // activity charts), one line, without the one the card's header shows (distance or time); a
+  // narrow day drops the load.
+  const factsPill = (a) => {
+    const head = DISTANCE_GROUPS.has(a.category) && shortDist(a.distance_m) ? "distance" : "time";
+    const f = factList(a).filter(([k]) => k !== head);
+    return f.length ? `<span class="cal-facts">${f.map(([k, v]) => `<span class="cal-f-${k}">${esc(v).replace(/ /g, "&nbsp;")}</span>`).join("")}</span>` : "";
+  };
+  // The chart's values: distance, time, pace (on foot) or power / speed (rides), load.
+  const factList = (a) => {
     const foot = ["run", "walk", "hike"].includes(a.category);
     const speed = a.distance_m && a.time_s ? a.distance_m / a.time_s : a.avg_speed;
-    return [a.distance_m >= 50 ? km(a.distance_m) : "", dur(a.time_s),
-      foot && speed ? pace(speed) : "", !foot && a.avg_power ? watts(a.avg_power) : !foot && speed && a.distance_m ? unit(speed * 3.6, "km/h", 1) : "",
-      a.load ? `load ${num(a.load)}` : ""].filter(Boolean).join(" · ");
+    return [["distance", a.distance_m >= 50 ? km(a.distance_m) : ""], ["time", a.time_s ? durMin(a.time_s) : ""],
+      ["speed", foot && speed ? pace(speed) : !foot && a.avg_power ? watts(a.avg_power) : !foot && speed && a.distance_m ? unit(speed * 3.6, "km/h", 1) : ""],
+      ["load", a.load ? `load ${num(a.load)}` : ""]].filter(([, v]) => v);
   };
+  const actFacts = (a) => factList(a).map(([, v]) => v).join(" · ");
   // One line each: in a narrow day the long forms give way to short ones (CSS container
   // queries: `full` / `short`), the full values stay in the tooltip.
   const both = (full, short) => `<span class="cal-full">${full}</span><span class="cal-short">${short}</span>`;
@@ -822,12 +831,16 @@ const parsePace = (txt) => {
 };
 
 // ---- Statistics -------------------------------------------------------------------------
-// Three views (docs/SPEC.md › Statistics): Years (each year one series over its weeks or months;
-// every metric as a chart and its running total side by side), Timeline (the whole period on
-// one axis) and Records. Header: Time, Type and X axis (Weeks / Months / Years; Months on every
-// visit; Years has no Years).
+// Three views (docs/SPEC.md › Statistics): Compare years (each year one series over its weeks or
+// months; every metric as a chart and its running total, one under the other), Timeline (the whole
+// period on one axis) and Records. Header: Time, Type and X axis. Each view opens on its own
+// period, fixed (`STAT_TIME`; All time is `last=all`): Compare years all time, Timeline the last
+// 12 months, Records the last 6 months. X axis: Compare years Mixed (each period chart by month,
+// each running total by week) | Weeks | Months; Timeline Weeks | Months | Years. Kept while on the tab.
 
 const STAT_X = [["week", "Weeks"], ["month", "Months"], ["year", "Years"]];
+const STAT_X_YEARS = [["mixed", "Mixed"], ["week", "Weeks"], ["month", "Months"]];
+const STAT_TIME = { years: null, timeline: "1y", records: "6m" };
 const RECORD_LABELS = {
   pace: { 400: "400 m", 1000: "1 km", 1609.344: "1 mile", 5000: "5 km", 10000: "10 km", 21097.5: "Half marathon", 42195: "Marathon" },
   power: { 5: "5 s", 15: "15 s", 30: "30 s", 60: "1 min", 300: "5 min", 600: "10 min", 1200: "20 min", 3600: "60 min" },
@@ -842,40 +855,58 @@ const STAT_METRICS = [
   ["ascent_m", "Elevation gain", "m", (v) => v, 0],
   ["time_s", "Time", "h", (v) => v / 3600, 1],
 ];
-let STAT_CHARTS = null; // chart group of the page (destroyed on the next draw)
+let STAT_CHARTS = []; // chart groups of the page (destroyed on the next draw)
 
 async function renderStats(params) {
   const tab = ["timeline", "records"].includes(params.tab) ? params.tab : "years";
-  const sw = switchHtml("stab", [["years", `${ICON_YEARS}<span>Years</span>`], ["timeline", `${ICON_TIMELINE}<span>Timeline</span>`],
+  if (STAT_TIME[tab] && !timeActive(params)) params = { ...params, last: STAT_TIME[tab] };
+  const sw = switchHtml("stab", [["years", `${ICON_YEARS}<span>Compare years</span>`], ["timeline", `${ICON_TIMELINE}<span>Timeline</span>`],
     ["records", `${ICON_RECORDS}<span>Records</span>`]], tab);
   if (tab === "records") await renderRecords(params, sw);
   else await renderStatCharts(params, sw, tab);
+  // another view opens on its own period; the Type filter stays
   view.querySelectorAll("[data-switch=stab]").forEach((b) => b.onclick = () => {
-    location.hash = "#/stats?" + new URLSearchParams({ ...filterQuery(params), tab: b.dataset.value });
+    const { types } = filterQuery(params);
+    location.hash = "#/stats?" + new URLSearchParams({ ...(types ? { types } : {}), tab: b.dataset.value });
   });
 }
 
 async function renderStatCharts(params, sw, tab) {
-  const choices = tab === "years" ? STAT_X.slice(0, 2) : STAT_X;
-  let x = choices.some(([k]) => k === TAB.statsX) ? TAB.statsX : "month"; // kept while on the tab
+  const choices = tab === "years" ? STAT_X_YEARS : STAT_X;
+  const keep = `statsX-${tab}`;
+  let x = choices.some(([k]) => k === TAB[keep]) ? TAB[keep] : choices[0][0]; // kept while on the tab
   const xBadge = badgeHtml("stat-x", "X axis", choices.find(([k]) => k === x)[1], { panel: `<div class="opt-panel">${pickList("stat-x", choices, x)}</div>` });
   view.innerHTML = `${pageHead("Statistics", timeBadge(params) + typeBadge(params) + xBadge, sw)}
-    <div class="charts${tab === "years" ? " pairs" : ""}" data-scharts><div class="card">${loaderHtml()}</div></div>`;
+    <div class="charts" data-scharts><div class="page-loader">${loaderHtml()}</div></div>`;
   const head = view.querySelector(".page-head");
   bindBadges(head);
-  bindFilterBadges(head, "#/stats", { ...params, tab });
+  bindFilterBadges(head, "#/stats", { ...params, tab }, { allTime: STAT_TIME[tab] ? "all" : null });
   const box = view.querySelector("[data-scharts]");
   const draw = async () => {
-    const built = tab === "years" ? await yearCharts(params, x) : await timelineCharts(params, x);
-    STAT_CHARTS?.destroy?.();
+    // Mixed: the period charts by month, the running totals by week - each chart its own group
+    // (other x values), a click on a pill hides the series on all of them
+    const builds = tab !== "years" ? [await timelineCharts(params, x)]
+      : x !== "mixed" ? [await yearCharts(params, x)]
+      : await Promise.all([yearCharts(params, "month"), yearCharts(params, "week")]);
+    STAT_CHARTS.forEach((c) => c?.destroy?.());
+    STAT_CHARTS = [];
     if (!box.isConnected) return;
-    if (!built) { box.innerHTML = `<div class="card">${hint("No activities match the filters.")}</div>`; STAT_CHARTS = null; return; }
+    if (!builds[0]) { box.innerHTML = `<div class="card">${hint("No activities match the filters.")}</div>`; return; }
     box.innerHTML = "";
-    STAT_CHARTS = chartGroup(box, built);
+    if (builds.length === 1) { STAT_CHARTS = [chartGroup(box, builds[0])]; return; }
+    const [byMonth, byWeek] = builds;
+    const onToggle = (label, off) => STAT_CHARTS.forEach((c) => c.toggleLine(label, off));
+    for (const s of byMonth.series.filter((c) => !c.key.endsWith("-cum"))) {
+      const cum = byWeek.series.find((c) => c.key === `${s.key}-cum`);
+      for (const [b, one] of [[byMonth, s], [byWeek, cum]]) {
+        const el = box.appendChild(document.createElement("div"));
+        STAT_CHARTS.push(chartGroup(el, { ...b, series: [one], onToggle }));
+      }
+    }
   };
   head.querySelectorAll('[data-pick="stat-x"]').forEach((b) => b.onclick = () => {
     head.querySelectorAll('[data-pick="stat-x"]').forEach((o) => { o.classList.toggle("on", o === b); o.setAttribute("aria-checked", o === b); });
-    x = TAB.statsX = b.dataset.value;
+    x = TAB[keep] = b.dataset.value;
     head.querySelector('[data-badge-value="stat-x"]').textContent = choices.find(([k]) => k === x)[1];
     document.onclick?.();
     draw();
@@ -988,64 +1019,96 @@ async function timelineCharts(params, by) {
   };
 }
 
-async function renderRecords(params, sw) {
-  const kind = ["pace", "power", "hr"].includes(params.kind) ? params.kind : "pace";
-  const fq = filterQuery(params);
-  if (kind === "pace") fq.types = "g:run";
-  const filtered = timeActive(params);
-  const q = (f) => api("stats/records?" + new URLSearchParams({ person: CURRENT, kind, ...f }));
-  const [data, all] = await Promise.all([q(fq), filtered ? q({ ...fq, from: "", to: "", last: "", years: "" }) : null]);
-  const labels = RECORD_LABELS[kind];
-  const fmt = (r) => (kind === "pace"
-    ? `${dur(r.value)} <span class="hint">${pace(r.key / r.value)}</span>`
-    : kind === "power" ? watts(r.value) : bpm(r.value));
-  const rangeLabel = timeLabel(params);
-  const controls = `<div class="seg">${[["pace", "Running pace"], ["power", "Power"], ["hr", "Heart rate"]].map(([k, l]) => `<button class="${k === kind ? "on" : ""}" data-kind="${k}">${l}</button>`).join("")}</div>`;
-  const best = Object.fromEntries((all?.records || []).map((r) => [r.key, r.value]));
-  const table = data.records.length ? `<div class="scroll"><table class="data">
-      <thead><tr><th>${kind === "pace" ? "Distance" : "Duration"}</th><th class="num">${kind === "pace" ? "Time" : kind === "power" ? "Avg power" : "Avg HR"}</th>${all ? `<th class="num">All-time best</th>` : ""}<th>Date</th><th>Activity</th></tr></thead>
-      <tbody>${data.records.map((r) => `<tr><td><b>${labels[r.key] || r.key}</b></td><td class="num">${fmt(r)}</td>
-        ${all ? `<td class="num">${best[r.key] != null ? fmt({ key: r.key, value: best[r.key] }) : "–"}</td>` : ""}
-        <td>${localTime(r).slice(0, 10)}</td><td><a class="tb-activity-name" href="#/activity/${r.id}">${typeIcon(r.activity_type)}<span>${esc(r.name || typeLabel(r.activity_type))}</span></a></td></tr>`).join("")}</tbody></table></div>`
-    : hint(kind === "pace" ? "No runs with distance data in this period." : kind === "power" ? "No activities with power data in this period." : "No activities with heart rate in this period.");
-  view.innerHTML = `${pageHead("Statistics", timeBadge(params) + (kind === "pace" ? "" : typeBadge(params)), sw)}
-    <div class="card"><div class="card-row records-bar">${controls}</div></div>
-    <div class="card"><h3>${kind === "pace" ? "Fastest times" : kind === "power" ? "Best average power" : "Highest average heart rate"} · ${esc(rangeLabel)}</h3>
-      ${data.records.length > 1 ? recordsCurve(data.records, all?.records, kind) : ""}
-      ${table}
-      ${hint(kind === "pace" ? "Fastest time over each distance within any run (from the distance stream), not only whole races." : "Best average over each duration within any activity, with pauses of more than 10 s breaking a window.")}
-    </div>`;
-  view.querySelectorAll("[data-kind]").forEach((b) => b.onclick = () => {
-    location.hash = "#/stats?" + new URLSearchParams({ tab: "records", kind: b.dataset.kind, ...filterQuery(params) });
-  });
-  bindBadges(view.querySelector(".page-head"));
-  bindFilterBadges(view.querySelector(".page-head"), "#/stats", { tab: "records", kind, ...params });
-}
+// Records: tiles in the style of the activity's top tiles, a table of best efforts beside its
+// curve (one grid: the tables one width, each pair one height): Running; Power; Cycling (outdoor);
+// Virtual (indoor rides: records of their own). Without a Time filter the 3 best of all time,
+// with one the best in that time and the best of all time. A record opens its activity.
+const REC_DIST = { 400: "400 m", 1000: "1 km", 1609.344: "1 mile", 5000: "5 km", 10000: "10 km", 20000: "20 km", 21097.5: "Half marathon",
+  30000: "30 km", 40000: "40 km", 42195: "Marathon", 50000: "50 km", 100000: "100 km" };
+const REC_POWER_ROWS = [5, 15, 30, 60, 300, 600, 1200, 3600, 7200]; // the table; the curve has every duration
+const distShort = (m) => (m === 1609.344 ? "1mi" : m === 21097.5 ? "HM" : m === 42195 ? "M" : m < 1000 ? `${m}m` : `${num(m / 1000)}k`);
+const distFull = (m) => REC_DIST[m] || km(m);
+const REC_MAIN = "#86aef5", REC_POWER = "#b9a2f2";
 
-// Duration / distance curve on a log x axis. Pace is shown as speed (higher = faster).
-function recordsCurve(rows, allRows, kind) {
-  const W = 1000, H = 220, P = { l: 48, r: 14, t: 12, b: 26 };
-  const val = (r) => (kind === "pace" ? (r.key / r.value) * 3.6 : r.value);
-  const pts = rows.map((r) => [r.key, val(r)]);
-  const pall = (allRows || []).map((r) => [r.key, val(r)]);
-  const xs = [...pts, ...pall].map((p) => p[0]), ys = [...pts, ...pall].map((p) => p[1]);
-  const x0 = Math.log(Math.min(...xs)), x1 = Math.log(Math.max(...xs));
-  let lo = Math.min(...ys), hi = Math.max(...ys);
-  const pad = (hi - lo) * 0.12 || 1; lo -= pad; hi += pad;
-  const x = (k) => P.l + ((Math.log(k) - x0) / (x1 - x0 || 1)) * (W - P.l - P.r);
-  const y = (v) => H - P.b - ((v - lo) / (hi - lo)) * (H - P.t - P.b);
-  const path = (ps) => ps.map(([k, v], i) => `${i ? "L" : "M"}${x(k).toFixed(1)},${y(v).toFixed(1)}`).join("");
-  const unitLabel = kind === "pace" ? "km/h" : kind === "power" ? "W" : "bpm";
-  const labels = RECORD_LABELS[kind];
-  return `<div class="fit-chart curve"><svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
-    ${[0, 0.25, 0.5, 0.75, 1].map((f) => { const v = lo + f * (hi - lo); return `<line x1="${P.l}" x2="${W - P.r}" y1="${y(v).toFixed(1)}" y2="${y(v).toFixed(1)}" class="grid"/><text x="${P.l - 6}" y="${(y(v) + 4).toFixed(1)}" class="ax" text-anchor="end">${num(v, kind === "pace" ? 1 : 0)}</text>`; }).join("")}
-    ${pall.length ? `<path d="${path(pall)}" fill="none" stroke="var(--muted)" stroke-dasharray="5 4" stroke-width="1.5" vector-effect="non-scaling-stroke"/>` : ""}
-    <path d="${path(pts)}" fill="none" stroke="var(--accent)" stroke-width="2.4" vector-effect="non-scaling-stroke"/>
-    ${pts.map(([k, v]) => `<circle cx="${x(k).toFixed(1)}" cy="${y(v).toFixed(1)}" r="3.5" fill="var(--accent)"/>`).join("")}
-    ${rows.map((r) => `<text x="${x(r.key).toFixed(1)}" y="${H - 6}" class="ax" text-anchor="middle">${labels[r.key] || r.key}</text>`).join("")}
-    <text x="${P.l + 4}" y="${P.t + 12}" class="ax">${unitLabel}${pall.length ? " · dashed: all time" : ""}</text>
-  </svg></div>`;
+async function renderRecords(params, sw) {
+  view.innerHTML = `${pageHead("Statistics", timeBadge(params), sw)}<div class="page-loader">${loaderHtml()}</div>`;
+  const head = view.querySelector(".page-head");
+  bindBadges(head);
+  bindFilterBadges(head, "#/stats", { ...params, tab: "records" }, { allTime: "all" });
+  const tq = Object.fromEntries(Object.entries(filterQuery(params)).filter(([k]) => ["from", "to", "last", "years"].includes(k)));
+  const data = await api("stats/records?" + new URLSearchParams({ person: CURRENT, ...tq }));
+  const filtered = data.filtered;
+  const rangeLabel = timeLabel(params);
+  RECORD_CHARTS.forEach((c) => c?.destroy());
+  RECORD_CHARTS = [];
+  const find = (list, kind, v = 0) => list.filter((e) => e.kind === kind && e.v === v).sort((p, q) => p.key - q.key);
+  const run = data.run || [], ride = data.ride || [];
+  // one result: the value and its pace or speed (the time of the longest); the activity and the
+  // date on hover, a click opens it
+  const value = (e, r) => (e.kind === "ascent" || e.kind === "climb" ? meters(r.value) : e.kind === "grade" ? `${num(r.value, 1)} %` : e.kind === "longest" || e.kind === "within" ? km(r.value) : e.kind === "speed" ? kmh(r.value) : e.kind === "power" ? watts(r.value) : clock(r.value));
+  const sub = (e, r) => (e.kind === "pace" ? pace(e.key / r.value) : e.kind === "ride" ? kmh(e.key / r.value)
+    : e.kind === "within" ? (e.group === "run" ? pace(r.value / e.key) : kmh(r.value / e.key)) : e.kind === "longest" ? (r.time_s ? durMin(r.time_s) : "") : "");
+  // a segment effort: its time, pace or speed (the activity's group)
+  const segValue = (e, r) => clock(r.value);
+  const segSub = (e, r) => (ON_FOOT.has(r.category) ? pace(e.segment.distance_m / r.value) : kmh(e.segment.distance_m / r.value));
+  // a value without a speed (power, elevation, grade…) sits in the middle of both columns
+  const cell = (e, r) => {
+    if (!r) return `<span class="effort-rec">–</span><span></span><span></span>`;
+    const s = e.segment ? segSub(e, r) : sub(e, r);
+    const link = `<a class="effort-rec plain-link${s ? "" : " rec-span2"}" href="#/activity/${r.activity_id}" data-tip="${esc(r.name || typeLabel(r.activity_type))}">${e.segment ? segValue(e, r) : value(e, r)}</a>`;
+    return `${link}${s ? `<span class="effort-speed">${s}</span>` : ""}<span class="effort-speed rec-date">${localTime(r).slice(0, 10)}</span>`;
+  };
+  const name = (e) => (e.segment ? `<a class="plain-link rec-seg" href="#/segment/${e.segment.id}" data-tip="${esc(e.segment.name || "Segment")} · ${km(e.segment.distance_m)}">${esc(e.segment.name || "Segment")}</a>`
+    : e.kind === "longest" ? `<span data-tip="Longest distance in one activity">Max distance</span>`
+    : e.kind === "speed" ? `<span data-tip="Top speed held for 1 minute; stretches with GPS jumps are left out">Top speed 1 min</span>`
+    : e.kind === "ascent" ? `<span data-tip="Elevation gain of the whole activity">Max elevation gain</span>`
+    : e.kind === "climb" ? `<span data-tip="The biggest single climb: from a low point to its top, short dips on the way allowed (as the climbs on the altitude chart); altitude jumps left out">Biggest climb</span>`
+    : e.kind === "grade" ? `<span data-tip="The steepest ${km(e.key)} of any climb, average grade; altitude and distance jumps left out">Steepest 1 km</span>`
+    : e.kind === "within" ? (e.key === 720 ? `<span data-tip="Longest distance run within 12 minutes (Cooper test)">Cooper 12 min</span>`
+      : `<span data-tip="Longest distance within ${durFull(e.key)}">Max in 1 h</span>`)
+    : e.kind === "power" ? durFull(e.key) : REC_DIST[e.key] || km(e.key));
+  const cols = filtered ? [[esc(rangeLabel), `Best in: ${esc(rangeLabel)}`], ["All time", "Best of all time"]]
+    : [["Best", "Best of all time"], ["2nd", "Second best of all time"], ["3rd", "Third best of all time"]];
+  const table = (rows) => `<div class="efforts rec-efforts" style="--rec-cols:${cols.length}"><div class="effort effort-head"><span></span>${cols.map(([c, tip]) => `<span class="eh-col" data-tip="${tip}">${c}</span>`).join("")}</div>
+    ${rows.map((e) => `<div class="effort"><span class="effort-name">${name(e)}</span>${filtered ? cell(e, e.range) + cell(e, e.ever[0]) : [0, 1, 2].map((k) => cell(e, e.ever[k])).join("")}</div>`).join("")}</div>`;
+  // a table tile's title: the sport, then the laurel and BEST EFFORTS
+  const be = (what) => `${what}</span>${LAUREL_SVG}<span class="rec-be">Best efforts`;
+  const tile = (icon, title, body, cls = "", tip = "") => `<div class="card act-tile rec-tile ${cls}"><h3 class="tile-title"${tip ? ` data-tip="${tip}"` : ""}>${icon}<span>${title}</span></h3>${body}</div>`;
+  const curveTile = (key, title, icon) => tile(metricIcon(icon, 18), title, `<div class="curve-box" data-rec-curve="${key}"></div>`, "rec-curve-tile");
+  const runRows = [...find(run, "pace"), ...find(run, "longest"), ...find(run, "within"), ...find(run, "ascent"), ...find(run, "climb"), ...find(run, "grade")];
+  const outRows = [...find(ride, "ride"), ...find(ride, "longest"), ...find(ride, "within"), ...find(ride, "speed"), ...find(ride, "ascent"), ...find(ride, "climb"), ...find(ride, "grade")];
+  const inRows = [...find(ride, "ride", 1), ...find(ride, "longest", 1), ...find(ride, "within", 1), ...find(ride, "speed", 1), ...find(ride, "ascent", 1), ...find(ride, "climb", 1), ...find(ride, "grade", 1)];
+  const powAll = find(ride, "power"), powRows = powAll.filter((e) => REC_POWER_ROWS.includes(e.key));
+  const segRows = data.segments || [];
+  const pair = (left, right) => `${left}${right || "<div></div>"}`;
+  const tiles = [
+    runRows.length && pair(tile(typeIcon("run"), be("Running"), table(runRows)),
+      find(run, "pace").length > 1 && curveTile("run", "Running speed curve", "speed")),
+    powRows.length && pair(tile(metricIcon("power", 18), be("Cycling power"), table(powRows), "", "Power of every ride, outdoor and indoor"),
+      powAll.length > 1 && curveTile("power", "Power curve", "power")),
+    outRows.length && pair(tile(typeIcon("ride"), be("Cycling"), table(outRows), "", "Outdoor rides"),
+      find(ride, "ride").length > 1 && curveTile("ride", "Cycling speed curve", "speed")),
+    (inRows.length || segRows.length) && pair(inRows.length ? tile(typeIcon("virtual_ride"), be("Cycling virtual"), table(inRows), "", "Virtual and indoor rides: a trainer's distance and speed are records of their own") : "<div></div>",
+      segRows.length && tile(metricIcon("route", 18), be("Segment"), table(segRows), "rec-seg-tile", "Every segment you have an effort on: the fastest times")),
+  ].filter(Boolean);
+  view.querySelector(".page-loader")?.remove();
+  view.insertAdjacentHTML("beforeend", tiles.length ? `<div class="rec-page">${tiles.join("")}</div>` : `<div class="card">${hint("No runs or rides with records yet.")}</div>`);
+  // the curves: the best in the Time filter (or of all time) and, filtered, the best of all time dashed
+  const open = (p) => { if (p.activity_id) location.hash = `#/activity/${p.activity_id}`; };
+  const pts = (rows, val) => rows.map((e) => { const m = filtered ? e.range : e.ever[0];
+    return { key: e.key, value: m ? val(e, m) : null, date: m ? localTime(m).slice(0, 10) : "", activity_id: m?.activity_id,
+      compare: filtered && e.ever[0] ? val(e, e.ever[0]) : null, compareDate: filtered && e.ever[0] ? localTime(e.ever[0]).slice(0, 10) : "" }; });
+  const speedOf = (e, r) => (e.key / r.value) * 3.6;
+  const common = { mainLabel: filtered ? rangeLabel : "All time", compareLabel: "All time", onClick: open, dots: true, tags: true };
+  const distAxis = { keyShort: distShort, keyFull: distFull, xTitle: "Distance", xTip: "The fastest time over each distance, as a speed." };
+  const draw = (key, opts) => { const el = view.querySelector(`[data-rec-curve="${key}"]`); if (el) RECORD_CHARTS.push(curveChart(el, opts)); };
+  draw("run", { ...common, ...distAxis, points: pts(find(run, "pace"), speedOf), color: REC_MAIN, unit: "km/h", label: "Speed",
+    fmt: (v) => pace(v / 3.6) });
+  draw("ride", { ...common, ...distAxis, points: pts(find(ride, "ride"), speedOf), color: REC_MAIN, unit: "km/h", label: "Speed",
+    fmt: (v) => `${num(v, 1)} km/h` });
+  draw("power", { ...common, points: pts(powAll, (e, r) => r.value), color: REC_POWER, unit: "W", label: "Power" });
 }
+let RECORD_CHARTS = [];
 
 // ---- Thresholds (Settings › People) -------------------------------------------------------
 // Each value: your own (Settings) > from the watch (FIT files) > estimated. The People table

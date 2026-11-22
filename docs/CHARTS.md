@@ -67,8 +67,9 @@ performance condition, stamina and potential stamina. Streams without data are n
   and a moment — cursor, pins, interval lines — is one straight vertical line down the page.
 - Structured workouts: the target of each workout step (heart rate, power, speed or cadence
   range, as set in the plan) is drawn on that chart over the step's laps: the high and the
-  low limit are two continuous fine dashed lines that step up or down where the target
-  changes (a stretch without a target breaks them), with a light grey band between them.
+  low limit are two continuous fine dashed lines (42 % of the text colour) that step up or
+  down where the target changes (a stretch without a target breaks them), with a light grey
+  band between them (3 %, the hovered step 8 %). The same on every chart with a target.
   Hovering inside a step darkens its band
   and the value flag also shows the target ("Target 284–405 W", with "below"/"above" when
   the value is outside). An **In target** stat gives the share of the steps' time within the
@@ -167,7 +168,20 @@ performance condition, stamina and potential stamina. Streams without data are n
   (e.g. the cumulative pair), with its flag.
 - X axis: months (Jan … Dec, every month) or weeks (W1 … W53, every 1, 2, 4 or 8 weeks as they
   fit) with half a period of room at both ends; Timeline: the date axis.
-- Years: four pairs of charts (per period | cumulative), two columns from 1100 px.
+- Compare years: four pairs of charts (per period, then cumulative), each the full width, one
+  under the other. X axis Mixed (default): the per-period charts by month, the running totals by
+  week — each chart its own group (its own x values, no shared crosshair); a click on a pill
+  hides the series on all of them (`onToggle` / `api.toggleLine`).
+- Records: the speed and power curves are the activity's duration curve (`curveChart`, same
+  frame, fills, dashed comparison) — over the distances for speed (labels 400m, 1k, 1mi, 5k…,
+  HM, M; tooltip pace and speed on foot), over the durations for power; the main series is the
+  best in the Time filter (or of all time), the all-time best dashed; a click on a point opens
+  its activity; a dot per value; the series pills on the right as on every chart (label and
+  value inside, at the height of the last value, pushed apart when they would overlap) in a
+  column of one width (150 px), so the curves end evenly.
+  Hover flag, compact: the distance or duration, then one line per series — value, name, date
+  (pace only on foot). They fill the height of
+  the table tile beside them.
 
 ## Fitness page
 

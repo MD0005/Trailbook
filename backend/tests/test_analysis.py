@@ -118,7 +118,7 @@ def test_backfill_computes_load_and_efforts(tdb):
     rows = c.execute("SELECT activity_type, load, load_method FROM activities").fetchall()
     assert all(r["load_method"] == "hr" and r["load"] > 0 for r in rows)
     kinds = {r[0] for r in c.execute("SELECT DISTINCT kind FROM best_efforts")}
-    assert kinds == {"hr", "pace", "power", "ride"}
+    assert kinds == {"hr", "pace", "power", "ride", "speed", "within"}
     # every effort knows where it happened
     assert c.execute("SELECT COUNT(*) FROM best_efforts WHERE end_s <= start_s").fetchone()[0] == 0
     five_k = c.execute(
@@ -159,10 +159,15 @@ def test_training_api(tdb):
         runs = client.get("/api/stats/totals?person=anna&type=g:run").json()
         assert sum(r["count"] for r in runs["rows"]) == 2
 
-        rec = client.get("/api/stats/records?person=anna&kind=pace&type=g:run").json()
-        best5k = next(r for r in rec["records"] if r["key"] == 5000)
-        assert best5k["value"] == pytest.approx(5000 / 3.5, abs=1)
-        assert client.get("/api/stats/records?person=anna&kind=x").status_code == 400
+        rec = client.get("/api/stats/records?person=anna").json()
+        assert rec["filtered"] is False
+        best5k = next(r for r in rec["run"] if r["kind"] == "pace" and r["key"] == 5000)
+        assert best5k["ever"][0]["value"] == pytest.approx(5000 / 3.5, abs=1)
+        assert best5k["range"] is None
+        assert {r["kind"] for r in rec["ride"]} >= {"ride", "power"}
+        rec = client.get("/api/stats/records?person=anna&years=2025").json()
+        assert rec["filtered"] is True and all(r["range"] is None for r in rec["run"])
+        assert client.get("/api/stats/records?person=nobody").status_code == 400
 
         assert client.put("/api/thresholds/anna", json={"hr_max": 400}).status_code == 400
         r = client.put(
@@ -267,3 +272,131 @@ def test_time_in_hr_zones_from_the_stream():
     time = [0, 1, 2, 3, 4, 64, 65]  # a 60 s pause after the 5th sample counts 1 s
     hr = [90, 110, 130, 150, 210, 170, None]
     assert time_in_hr_zones(time, hr, bounds) == [1, 1, 1, 1, 1, 1]
+
+
+def _ride(seconds: int, speed_at):
+    """time, distance, lat, lon, device speed of a ride north at speed_at(t) m/s."""
+    t = list(range(seconds))
+    d, lat, lon, sp = [], [], [], []
+    run = 0.0
+    for s in t:
+        v = speed_at(s)
+        run += v if s else 0.0
+        d.append(run)
+        lat.append(50.0 + run / 111195.0)
+        lon.append(20.0)
+        sp.append(v)
+    return t, d, lat, lon, sp
+
+
+def test_top_speed_clean_ride():
+    t, d, lat, lon, sp = _ride(600, lambda s: 12.0 if 200 <= s < 300 else 8.0)
+    v, start = analysis.top_speed_at(t, d, 60, lat, lon, sp)
+    assert v == pytest.approx(12.0, abs=0.05) and 200 <= start <= 240
+
+
+def test_top_speed_ignores_gps_jumps():
+    t, d, lat, lon, sp = _ride(600, lambda s: 8.0)
+    # a jump of the position: 150 m in one second, then back on track
+    for k in range(300, 600):
+        d[k] += 150
+        lat[k] += 150 / 111195.0
+    v, _ = analysis.top_speed_at(t, d, 60, lat, lon, sp)
+    assert v == pytest.approx(8.0, abs=0.05)
+    # a slow drift: the distance says 11 m/s, the device's own speed 8 m/s
+    t, d, lat, lon, sp = _ride(300, lambda s: 11.0)
+    sp = [8.0] * len(sp)
+    assert analysis.top_speed_at(t, d, 60, lat, lon, sp) is None
+    # the distance runs on, the track does not (positions frozen)
+    t, d, lat, lon, sp = _ride(300, lambda s: 10.0)
+    lat = [50.0] * len(lat)
+    assert analysis.top_speed_at(t, d, 60, lat, lon, None) is None
+
+
+def test_virtual_rides_have_own_records(tdb):
+    from starlette.testclient import TestClient
+
+    from trailbook import api
+
+    path, c = tdb
+    analysis.backfill(c)
+    ride = c.execute("SELECT * FROM activities WHERE category = 'ride'").fetchone()
+    cols = [k for k in ride.keys() if k not in ("id", "fit_uid")]
+    c.execute(
+        f"INSERT INTO activities ({', '.join(cols)}, fit_uid) SELECT "
+        f"{', '.join(cols)}, 'virtual' FROM activities WHERE id = ?",
+        (ride["id"],),
+    )
+    vid = c.execute("SELECT MAX(id) FROM activities").fetchone()[0]
+    c.execute(
+        "UPDATE activities SET activity_type = 'virtual_ride', indoor = 1, distance_m = 99000,"
+        " start_time_utc = '2026-03-01T08:00:00Z' WHERE id = ?",
+        (vid,),
+    )
+    c.execute(
+        """INSERT INTO best_efforts (activity_id, kind, key, value, start_s, end_s)
+           SELECT ?, kind, key, value * 0.5, start_s, end_s FROM best_efforts
+           WHERE activity_id = ?""",
+        (vid, ride["id"]),
+    )
+    with TestClient(api.create_app(path)) as client:
+        rec = client.get("/api/stats/records?person=anna").json()["ride"]
+        longest = {r["v"]: r["ever"][0]["activity_id"] for r in rec if r["kind"] == "longest"}
+        assert longest == {0: ride["id"], 1: vid}  # each pool its own record
+        power = [r for r in rec if r["kind"] == "power"]
+        assert power and all(r["v"] == 0 and len(r["ever"]) == 2 for r in power)  # together
+        a = client.get(f"/api/activities/{ride['id']}").json()
+        lon = next(e for e in a["best_efforts"] if e["kind"] == "longest")
+        assert lon["v"] == 0 and lon["record_activity"] == ride["id"]  # not the 99 km virtual
+
+
+def test_distance_within_12_minutes():
+    t = list(range(0, 1800, 2))
+    d = [s * (4.0 if 300 <= s < 1020 else 3.0) for s in t]  # 4 m/s for 12 min: 2 880 m
+    run = 0.0
+    dist = []
+    for k, s in enumerate(t):
+        run += (4.0 if 300 <= s < 1020 else 3.0) * (2 if k else 0)
+        dist.append(run)
+    m, start = analysis.best_distance_in_at(t, dist, 720)
+    assert m == pytest.approx(2880, abs=10) and 290 <= start <= 310
+    assert analysis.best_distance_in_at(t[:100], dist[:100], 720) is None  # shorter than 12 min
+    del d
+
+
+def test_altitude_jumps_are_taken_out():
+    t = list(range(10))
+    alt = [100, 101, 102, 152, 153, 154, 155, 156, 157, 158]  # 50 m in a second: a jump
+    clean = analysis.clean_altitude(t, alt)
+    assert clean[3] == pytest.approx(102) and clean[-1] == pytest.approx(108)
+
+
+def test_biggest_climb_allows_short_dips():
+    # 0-2 km up 100 m, a 200 m dip of 10 m, up 60 m more; later a separate 40 m climb
+    dist, alt = [], []
+    for m in range(0, 2001, 50):
+        dist.append(m), alt.append(m / 20)
+    for m in range(2050, 2201, 50):
+        dist.append(m), alt.append(100 - (m - 2000) / 20)
+    for m in range(2250, 3401, 50):
+        dist.append(m), alt.append(90 + (m - 2200) / 20)
+    for m in range(3450, 6001, 50):
+        dist.append(m), alt.append(150 - (m - 3400) / 50)
+    gain, i0, i1 = analysis.biggest_climb(dist, alt)
+    assert gain == pytest.approx(150, abs=3) and dist[i0] == 0 and dist[i1] == 3400
+
+
+def test_steepest_km_skips_jumps():
+    t = list(range(0, 2000))
+    dist = [s * 3.0 for s in t]  # 3 m/s
+    alt = [d * 0.05 if d < 3000 else 150 + (d - 3000) * 0.10 for d in dist]  # 5 %, then 10 %
+    grade, start, end = analysis.steepest_at(t, dist, alt, 1000)
+    assert grade == pytest.approx(10, abs=0.2) and start >= 1000
+    # a jump of the altitude (400 m for 20 s) is taken out before, as in analyse()
+    alt2 = [a + (400 if 500 <= s < 520 else 0) for s, a in zip(t, alt, strict=True)]
+    clean = analysis.clean_altitude(t, alt2)
+    assert analysis.steepest_at(t, dist, clean, 1000)[0] == pytest.approx(10, abs=0.2)
+    # a distance jump: 1 km in a few seconds would be a climb faster than anyone - not counted
+    dist3 = [d + (1000 if s >= 400 else 0) for s, d in zip(t, dist, strict=True)]
+    alt3 = [a + (100 if s >= 400 else 0) for s, a in zip(t, alt, strict=True)]
+    assert analysis.steepest_at(t, dist3, alt3, 1000)[0] == pytest.approx(10, abs=0.2)

@@ -165,9 +165,9 @@ FILE_TEXT_FILTERS = {
 # Best efforts plus the longest distance per run and ride (records.EFFORTS_SQL).
 EFFORTS_SQL = records.EFFORTS_SQL
 
-_RECORDS_SQL = f"""SELECT o.kind, o.key, o.value, oa.start_time_utc, oa.utc_offset_s,
+_RECORDS_SQL = f"""SELECT o.kind, o.key, o.v, o.value, oa.start_time_utc, oa.utc_offset_s,
            oa.id AS activity_id,
-           ROW_NUMBER() OVER (PARTITION BY o.kind, o.key
+           ROW_NUMBER() OVER (PARTITION BY o.kind, o.key, o.v
                ORDER BY CASE WHEN o.kind IN ('pace', 'ride') THEN o.value ELSE -o.value END,
                         oa.start_time_utc) AS rk
     FROM {EFFORTS_SQL} o JOIN activities oa ON oa.id = o.activity_id WHERE {{where}}"""
@@ -178,10 +178,10 @@ def _prev_bests(c: sqlite3.Connection, a, where: list[str], params: list) -> dic
     record of `a` beat (how much and how long it stood)."""
     rows = c.execute(
         f"""WITH r AS ({_RECORDS_SQL.format(where=" AND ".join([*where, "oa.start_time_utc < ?"]))})
-            SELECT kind, key, value, start_time_utc, utc_offset_s FROM r WHERE rk = 1""",
+            SELECT kind, key, v, value, start_time_utc, utc_offset_s FROM r WHERE rk = 1""",
         [*params, a["start_time_utc"]],
     ).fetchall()
-    return {(r["kind"], r["key"]): r for r in rows}
+    return {(r["kind"], r["key"], r["v"]): r for r in rows}
 
 
 HA_RECORDS_RETRY_S = 300  # how often record events Home Assistant missed are sent again
@@ -781,11 +781,12 @@ def create_app(db_path: str | Path) -> Starlette:
                 dict(r)
                 for r in c.execute(
                     f"""WITH r AS ({same})
-                       SELECT b.kind, b.key, b.value, b.start_s, b.end_s, r.value AS record,
-                              r.start_time_utc AS record_time, r.utc_offset_s AS record_offset_s,
-                              r.activity_id AS record_activity
+                       SELECT b.kind, b.key, b.v, b.value, b.start_s, b.end_s,
+                              r.value AS record, r.start_time_utc AS record_time,
+                              r.utc_offset_s AS record_offset_s, r.activity_id AS record_activity
                        FROM {EFFORTS_SQL} b
-                       LEFT JOIN r ON r.kind = b.kind AND r.key = b.key AND r.rk = 1
+                       LEFT JOIN r ON r.kind = b.kind AND r.key = b.key AND r.v = b.v
+                            AND r.rk = 1
                        WHERE b.activity_id = ? ORDER BY b.kind, b.key""",
                     (a["person_id"], a["category"], aid),
                 )
@@ -795,7 +796,7 @@ def create_app(db_path: str | Path) -> Starlette:
                 c, row, ["oa.person_id = ?", "oa.category IS ?"], [a["person_id"], a["category"]]
             )
             for b in a["best_efforts"]:
-                p = prev.get((b["kind"], b["key"]))
+                p = prev.get((b["kind"], b["key"], b["v"]))
                 b["prev"] = dict(p) if p else None
             # Own photos of devices: data/device-images/<product>.(png|jpg|webp)
             if a.get("devices"):
@@ -850,8 +851,9 @@ def create_app(db_path: str | Path) -> Starlette:
             ]
             return JSONResponse(a)
 
-    # The person's best value per effort (kind, key) in a time range, to compare an activity
-    # with: all (all time), year (this calendar year), 365d, 90d, 30d.
+    # The person's best value per effort (kind, key, v) in a time range, to compare an activity
+    # with: all (all time), year (the whole calendar year of the activity: an older activity
+    # is compared with its year, not with the year so far), 365d, 90d, 30d.
     async def activity_records(request: Request):
         aid = request.path_params["id"]
         rng = request.query_params.get("range", "all")
@@ -863,7 +865,7 @@ def create_app(db_path: str | Path) -> Starlette:
             params = [a["person_id"], a["category"]]
             if rng == "year":
                 where.append("substr(oa.start_time_utc, 1, 4) = ?")
-                params.append(datetime.now(UTC).strftime("%Y"))
+                params.append(a["start_time_utc"][:4])
             elif rng in days:
                 since = datetime.now(UTC) - timedelta(days=days[rng])
                 where.append("oa.start_time_utc >= ?")
@@ -872,14 +874,14 @@ def create_app(db_path: str | Path) -> Starlette:
                 raise HTTPException(400, "range must be all, year, 365d, 90d or 30d")
             rows = c.execute(
                 f"""WITH r AS ({_RECORDS_SQL.format(where=" AND ".join(where))})
-                    SELECT kind, key, value, start_time_utc, utc_offset_s, activity_id
+                    SELECT kind, key, v, value, start_time_utc, utc_offset_s, activity_id
                     FROM r WHERE rk = 1""",
                 params,
             ).fetchall()
             prev = _prev_bests(c, a, where, params)  # the range's best before this activity
             records = []
             for r in rows:
-                p = prev.get((r["kind"], r["key"]))
+                p = prev.get((r["kind"], r["key"], r["v"]))
                 records.append({**dict(r), "prev": dict(p) if p else None})
         return JSONResponse({"range": rng, "records": records})
 
@@ -1471,48 +1473,91 @@ def create_app(db_path: str | Path) -> Starlette:
             {"rows": [dict(r) for r in rows], "groups": [dict(r) for r in groups], "years": years}
         )
 
+    # Statistics › Records: per sport (run, ride) and best effort (kind, key, v) the 3 best of
+    # all time and, with a Time filter, the best in that time. Rides: outdoor and indoor (v = 1)
+    # distances, times and top speed apart, power together. The Type filter does not apply.
+    RECORD_KINDS = {
+        "run": ("pace", "longest", "within", "ascent", "climb", "grade"),
+        "ride": ("ride", "longest", "within", "speed", "ascent", "climb", "grade", "power"),
+    }
+
     async def stats_records(request: Request):
         q = request.query_params
-        kind = q.get("kind", "pace")
-        if kind not in ("pace", "power", "hr"):
-            raise HTTPException(400, "kind must be pace, power or hr")
-        rng = q.get("range", "all")
+        time_q = {k: q[k] for k in ("from", "to", "last", "years", "year") if q.get(k)}
         with closing(conn()) as c:
             pid = _single_person(c, request)
-            shared, sp = activity_filters(q, person=False)
-            where, params = ["a.person_id = ?", "b.kind = ?", *shared], [pid, kind, *sp]
-            if rng == "90d":
-                since = datetime.now(UTC) - timedelta(days=90)
-                where.append("a.start_time_utc >= ?")
-                params.append(since.strftime("%Y-%m-%dT%H:%M:%SZ"))
-            elif re.fullmatch(r"\d{4}", rng):
-                where.append("substr(a.start_time_utc, 1, 4) = ?")
-                params.append(rng)
-            elif rng != "all":
-                raise HTTPException(400, "range must be all, 90d or a year")
-            order = "ASC" if kind == "pace" else "DESC"  # pace: lowest time wins
-            rows = c.execute(
-                f"""WITH e AS (
-                        SELECT b.key, b.value, a.id, a.name, a.activity_type, a.start_time_utc,
-                               a.utc_offset_s,
-                               ROW_NUMBER() OVER (PARTITION BY b.key
-                                   ORDER BY b.value {order}, a.start_time_utc) AS rk
-                        FROM best_efforts b JOIN activities a ON a.id = b.activity_id
-                        WHERE {" AND ".join(where)})
-                    SELECT key, value, id, name, activity_type, start_time_utc, utc_offset_s
-                    FROM e WHERE rk = 1 ORDER BY key""",
-                params,
-            ).fetchall()
-            years = [
-                r[0]
-                for r in c.execute(
-                    """SELECT DISTINCT substr(a.start_time_utc, 1, 4) AS y
-                       FROM best_efforts b JOIN activities a ON a.id = b.activity_id
-                       WHERE a.person_id = ? AND b.kind = ? ORDER BY y DESC""",
-                    (pid, kind),
-                )
-            ]
-        return JSONResponse({"kind": kind, "records": [dict(r) for r in rows], "years": years})
+            shared, sp = activity_filters(time_q, person=False)
+            kinds = " OR ".join(
+                f"(a.category = '{g}' AND o.kind IN ({', '.join(repr(k) for k in ks)}))"
+                for g, ks in RECORD_KINDS.items()
+            )
+            keep = lambda r: {k: r[k] for k in r.keys() if k not in ("grp", "kind", "key", "v")}  # noqa: E731
+
+            def top(where: list[str], params: list, n: int) -> list[sqlite3.Row]:
+                return c.execute(
+                    f"""WITH e AS (
+                            SELECT a.category AS grp, o.kind, o.key, o.v, o.value,
+                                   a.id AS activity_id, a.name, a.activity_type,
+                                   a.start_time_utc, a.utc_offset_s, a.distance_m, a.time_s,
+                                   ROW_NUMBER() OVER (
+                                       PARTITION BY a.category, o.kind, o.key, o.v
+                                       ORDER BY {records._ORDER}, a.start_time_utc) AS rk
+                            FROM {EFFORTS_SQL} o JOIN activities a ON a.id = o.activity_id
+                            WHERE a.person_id = ? AND ({kinds})
+                              {"".join(f" AND {w}" for w in where)})
+                        SELECT * FROM e WHERE rk <= {n} ORDER BY grp, kind, v, key, rk""",
+                    [pid, *params],
+                ).fetchall()
+
+            out: dict[str, dict] = {}
+            for r in top([], [], 3):
+                e = out.setdefault(
+                    f"{r['grp']}:{r['kind']}:{r['key']}:{r['v']}",
+                    {"group": r["grp"], "kind": r["kind"], "key": r["key"], "v": r["v"],
+                     "ever": [], "range": None},
+                )  # fmt: skip
+                e["ever"].append(keep(r))
+            if shared:
+                for r in top(shared, sp, 1):
+                    e = out.get(f"{r['grp']}:{r['kind']}:{r['key']}:{r['v']}")
+                    if e:
+                        e["range"] = keep(r)
+
+            # segments: per segment the person rode, the 3 fastest of all time and the fastest
+            # in the Time filter (the activity's group decides pace or speed)
+            def seg_top(where: list[str], params: list, n: int) -> list[sqlite3.Row]:
+                return c.execute(
+                    f"""WITH e AS (
+                            SELECT s.id AS segment_id, s.name AS segment_name, s.distance_m
+                                       AS segment_m, se.elapsed_s AS value, a.category,
+                                   a.id AS activity_id, a.name, a.activity_type,
+                                   a.start_time_utc, a.utc_offset_s,
+                                   ROW_NUMBER() OVER (PARTITION BY s.id
+                                       ORDER BY se.elapsed_s, a.start_time_utc) AS rk
+                            FROM segment_efforts se JOIN segments s ON s.id = se.segment_id
+                            JOIN activities a ON a.id = se.activity_id
+                            WHERE a.person_id = ? {"".join(f" AND {w}" for w in where)})
+                        SELECT * FROM e WHERE rk <= {n} ORDER BY segment_name, segment_id, rk""",
+                    [pid, *params],
+                ).fetchall()
+
+            segs: dict[int, dict] = {}
+            drop = ("segment_id", "segment_name", "segment_m", "rk")
+            for r in seg_top([], [], 3):
+                e = segs.setdefault(
+                    r["segment_id"],
+                    {"segment": {"id": r["segment_id"], "name": r["segment_name"],
+                                 "distance_m": r["segment_m"]}, "ever": [], "range": None},
+                )  # fmt: skip
+                e["ever"].append({k: r[k] for k in r.keys() if k not in drop})
+            if shared:
+                for r in seg_top(shared, sp, 1):
+                    if r["segment_id"] in segs:
+                        segs[r["segment_id"]]["range"] = {
+                            k: r[k] for k in r.keys() if k not in drop
+                        }
+        groups = {g: [e for e in out.values() if e["group"] == g] for g in RECORD_KINDS}
+        return JSONResponse({"filtered": bool(shared), **groups, "segments": list(segs.values())})
 
     # The latest record event: what the add-on pushes to Home Assistant as
     # sensor.trailbook_records (records.py).
@@ -1532,7 +1577,7 @@ def create_app(db_path: str | Path) -> Starlette:
         the last 12 months, the 2 efforts before this one, and the bests of this year and of
         all time (for the best efforts tile)."""
         since = (datetime.now(UTC) - timedelta(days=365)).strftime("%Y-%m-%dT%H:%M:%SZ")
-        year = datetime.now(UTC).strftime("%Y")
+        year = a["start_time_utc"][:4]  # the activity's year (all of it, also for old ones)
         rank = """(SELECT COUNT(*) + 1 FROM segment_efforts e2
                     JOIN activities a2 ON a2.id = e2.activity_id
                     WHERE e2.segment_id = e.segment_id AND a2.person_id = a.person_id
@@ -1605,6 +1650,8 @@ def create_app(db_path: str | Path) -> Starlette:
         d["pending"] = s["match_version"] < segments.MATCH_VERSION
         d["two_way"] = segments.two_way(s)
         d["two_way_auto"] = segments.two_way_auto(s)
+        d["match_width_m"] = segments.match_width(s)
+        d["match_detour_m"] = segments.match_detour(s)
         return d
 
     def _person_filter(request: Request) -> tuple[str, list]:
@@ -1879,6 +1926,25 @@ def create_app(db_path: str | Path) -> Starlette:
                     raise HTTPException(400, "two_way_mode must be auto, on or off")
                 if mode != s["two_way_mode"]:
                     c.execute("UPDATE segments SET two_way_mode = ? WHERE id = ?", (mode, sid))
+                    segments.reset_segment(c, sid)
+                    job.start_segments()
+            # how loosely it matches: the corridor's half width and one detour (m)
+            for key, lo, hi, default in (
+                ("match_width_m", segments.WIDTH_MIN_M, segments.WIDTH_MAX_M,
+                 segments.TRACK_RADIUS_M),
+                ("match_detour_m", 0.0, segments.DETOUR_MAX_M, 0.0),
+            ):  # fmt: skip
+                if key not in body:
+                    continue
+                try:
+                    v = float(body[key])
+                except (TypeError, ValueError) as exc:
+                    raise HTTPException(400, f"{key} must be a number") from exc
+                if not lo <= v <= hi:
+                    raise HTTPException(400, f"{key} must be {lo:g} to {hi:g}")
+                v = None if v == default else round(v)
+                if v != s[key]:
+                    c.execute(f"UPDATE segments SET {key} = ? WHERE id = ?", (v, sid))
                     segments.reset_segment(c, sid)
                     job.start_segments()
             return JSONResponse(_segment_dict(_segment_or_404(c, sid)))
@@ -2370,30 +2436,53 @@ def create_app(db_path: str | Path) -> Starlette:
         Mount("/", _RevalidatedStatic(directory=STATIC_DIR, html=True), name="static"),
     ]
 
-    # Road surface for all activities, slowly in the background (setting surface_mode =
-    # "background"): one activity, then a pause, newest first; a server error waits longer.
+    # Road surface for all activities in the background (setting surface_mode = "background"),
+    # newest first, in batches (surface.BATCH activities surface.STEP_S apart, then a pause);
+    # the end of an import starts a batch at once, so new activities get theirs right away. A
+    # refusing server is left alone for its cooldown (surface.cooldown_left).
     surface_wake = asyncio.Event()
 
     async def surface_loop():
+        in_batch, importing = 0, False
         while True:
-            wait = 600.0
-            with closing(conn()) as c:
-                on = (db.get_setting(c, "surface_mode") or "background") == "background"
-                aid = surface.next_missing(c) if on else None
-            if aid is not None:
+            wait = 3600.0
+            left = surface.cooldown_left()
+            if left:
+                wait = left
+            else:
+                with closing(conn()) as c:
+                    on = (db.get_setting(c, "surface_mode") or "background") == "background"
+                    aid = surface.next_missing(c) if on else None
+                if aid is None:
+                    in_batch = 0
+                else:
 
-                def work(aid=aid):
-                    with closing(conn()) as c2:
-                        surface.compute(c2, aid)
+                    def work(aid=aid):
+                        with closing(conn()) as c2:
+                            surface.compute(c2, aid)
 
-                try:
-                    await run_in_threadpool(work)
-                    wait = 15.0
-                except OSError:
-                    wait = 600.0  # logged by surface.compute
-                except Exception:  # noqa: BLE001 - keep the loop alive
-                    log.exception("Road surface of activity %s failed", aid)
-                    wait = 600.0
+                    try:
+                        await run_in_threadpool(work)
+                        in_batch += 1
+                    except OSError:  # logged by surface.compute, cooldown set
+                        in_batch = 0
+                    except Exception:  # noqa: BLE001 - keep the loop alive
+                        log.exception("Road surface of activity %s failed", aid)
+                        in_batch = 0
+                    left = surface.cooldown_left()
+                    if left:
+                        wait = left
+                    elif in_batch >= surface.BATCH:
+                        in_batch, wait = 0, surface.BATCH_PAUSE_S
+                    else:
+                        wait = surface.STEP_S
+            # an import running: look every 30 s, its end starts the next batch at once
+            if job.running():
+                importing, wait = True, min(wait, 30.0)
+            elif importing:
+                importing = False
+                if not surface.cooldown_left():
+                    in_batch, wait = 0, 0.0
             try:
                 await asyncio.wait_for(surface_wake.wait(), wait)
                 surface_wake.clear()

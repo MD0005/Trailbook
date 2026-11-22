@@ -42,7 +42,8 @@ const WO_SETS = {
   ],
 };
 
-const woZoneColor = (z, n) => rampColor(ROUTE_SCALES.hr.stops, n > 1 ? (Math.min(Math.max(z, 1), n) - 1) / (n - 1) : 0);
+// a zone's colour: power zones (7) in the power zone colours, heart rate zones green → red
+const woZoneColor = (z, n) => (n === 7 ? powerZoneColor(z) : rampColor(ROUTE_SCALES.hr.stops, n > 1 ? (Math.min(Math.max(z, 1), n) - 1) / (n - 1) : 0));
 const woLength = (ln) => (ln.kind === "distance"
   ? (ln.value >= 1000 ? `${num(ln.value / 1000, ln.value % 1000 ? 2 : 0)} km` : `${num(ln.value)} m`)
   : woClock(ln.value)); // one time format: 35:30, 1:05:00

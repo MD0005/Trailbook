@@ -61,7 +61,7 @@ const fillAlpha = (a) => (dark() ? a * 0.65 : a);
 //               `keys` and a strip above each with the values of every section (label). A line
 //               can be dragged; on the strip a ball with − over a line removes it, a ball with +
 //               elsewhere adds one. Changes apply to all those charts.
-function chartGroup(root, { x, kind, series, hidden = [], sections = null, onHover = () => {}, onRanges = () => {}, onState = () => {}, onOrder = () => {} }) {
+function chartGroup(root, { x, kind, series, hidden = [], sections = null, onHover = () => {}, onRanges = () => {}, onState = () => {}, onOrder = () => {}, onToggle = () => {} }) {
   const g = { kind, plots: [], pins: [], range: null, hoverIdx: null, dragged: false, mark: null, hidden: new Set(hidden), secs: [].concat(sections || []) };
   const syncKey = "tb-" + Math.random().toString(36).slice(2);
   const xs = () => x[g.kind];
@@ -607,12 +607,12 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, onHov
     const X = (i) => Math.round(u.valToPos(xs()[i], "x", true)) + 0.5, Y = (v) => Math.round(u.valToPos(v, "y", true)) + 0.5;
     const ts = [...s.targets].sort((p, q) => p.i0 - q.i0);
     for (const t of ts) { // light band per step, the hovered one darker
-      ctx.fillStyle = fg; ctx.globalAlpha = u._tgt === t ? 0.1 : 0.04;
+      ctx.fillStyle = fg; ctx.globalAlpha = u._tgt === t ? 0.08 : 0.03;
       ctx.fillRect(X(t.i0), Y(t.hi), X(t.i1) - X(t.i0), Y(t.lo) - Y(t.hi));
     }
     // The high and the low limit as two continuous lines that step up or down between
     // adjacent steps (a gap without a target breaks them).
-    ctx.globalAlpha = 0.6; ctx.strokeStyle = fg; ctx.lineWidth = dpr; ctx.setLineDash([3 * dpr, 2.5 * dpr]);
+    ctx.globalAlpha = 0.42; ctx.strokeStyle = fg; ctx.lineWidth = dpr; ctx.setLineDash([3 * dpr, 2.5 * dpr]);
     for (const key of ["hi", "lo"]) {
       ctx.beginPath();
       ts.forEach((t, k) => {
@@ -664,8 +664,9 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, onHov
     b.tip.style.transform = `translate(${left + 14 + 150 > w ? left - 14 - b.tip.offsetWidth : left + 14}px, ${Math.max(0, top - 22)}px)`;
   }
   // Show or hide one series (by label) on every multi chart of the group; its pills turn grey.
-  function toggleLine(label) {
-    const off = !g.plots.some(({ s }) => s.multi && s.lines.some((l) => l.label === label && l.hidden));
+  // onToggle(label, off) tells other groups of the page (api.toggleLine sets it from outside).
+  function toggleLine(label, set = null) {
+    const off = set ?? !g.plots.some(({ s }) => s.multi && s.lines.some((l) => l.label === label && l.hidden));
     for (const { u, s, el } of g.plots) {
       if (!s.multi) continue;
       s.lines.forEach((l, k) => {
@@ -684,6 +685,7 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, onHov
     }
     if (g.focus?.label === label) g.focus = null;
     g.plots.forEach(({ u }) => u.redraw(false));
+    if (set == null) onToggle(label, off);
   }
 
   // Hovered stat: the point (max/min), the climbs/descents, or a line at the value (average).
@@ -1026,6 +1028,7 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, onHov
       if (!p) return;
       p.u.setCursor(i == null ? { left: -10, top: -10 } : { left: p.u.valToPos(xs()[i], "x"), top: -10 });
     },
+    toggleLine(label, off) { toggleLine(label, off); },
     destroy() { ro.disconnect(); themeWatch.disconnect(); g.plots.forEach(({ u }) => u.destroy()); },
   };
   return api;
@@ -1094,16 +1097,23 @@ const statTip = (label, s) => (STAT_WORDS[label] ? `${STAT_WORDS[label]} ${s.lab
 // Duration curve (best average over 5 s … 1 h) as a chart of the standard: framed plot,
 // axis titles, dense ticks, dashed grid, crosshair with a value flag, filled series (this
 // activity and the comparison). points: [{ key (s), value, compare, compareDate, start_s, end_s }].
-// onHover(point | null) for the charts and the map.
-function curveChart(root, { points, color, unit, label, compareLabel, onHover = () => {} }) {
-  const pts = points.filter((p) => p.value != null).sort((p, q) => p.key - q.key);
+// onHover(point | null) for the charts and the map. Statistics › Records reuses it over
+// distances: keyShort / keyFull label the keys, fmt(value, point) the tooltip values, mainLabel
+// names the main series, point.date its date; onClick(point) opens the point's activity.
+const durShort = (s) => (s < 60 ? `${s}s` : s < 3600 ? `${s / 60}m` : `${num(s / 3600, s % 3600 ? 1 : 0)}h`);
+const durFull = (s) => (s < 60 ? `${s} s` : s < 3600 ? `${s / 60} min` : `${num(s / 3600, s % 3600 ? 1 : 0)} h`);
+function curveChart(root, { points, color, unit, label, compareLabel, onHover = () => {}, onClick = null, mainLabel = "this activity",
+  keyShort = durShort, keyFull = durFull, xTitle = "Duration", xTip = "How long the average was held.", fmt = null, dots = false, tags = false }) {
+  const pts = points.filter((p) => p.value != null || p.compare != null).sort((p, q) => p.key - q.key); // none in the period: the comparison alone
   if (pts.length < 2) return null;
   color = muteDark(color); // dark theme: calmer colour and weaker fills, like the activity charts
-  const dl = (s) => (s < 60 ? `${s}s` : s < 3600 ? `${s / 60}m` : `${num(s / 3600, s % 3600 ? 1 : 0)}h`);
-  const full = (s) => (s < 60 ? `${s} s` : s < 3600 ? `${s / 60} min` : `${num(s / 3600, s % 3600 ? 1 : 0)} h`);
-  root.innerHTML = `<div class="chart-frame curve-frame">
+  const fmtVal = fmt || ((v) => `${num(v)} ${unit}`);
+  // tags: the series pills of the standard on the right, each at the height of its last value
+  // (label and value inside), in a column of one width (--curve-tags-w) so curves end evenly
+  const frame = `<div class="chart-frame curve-frame">
       <div class="chart-ylabel"><span>${label} (${unit})</span></div><div class="chart-plot"></div>
-      <div class="chart-xlabel" data-tip="How long the average was held.">Duration</div></div>`;
+      <div class="chart-xlabel" data-tip="${xTip}">${xTitle}</div></div>`;
+  root.innerHTML = tags ? `<div class="curve-row">${frame}<div class="chart-stats chart-tags curve-tags"></div></div>` : frame;
   const holder = root.querySelector(".chart-plot");
   const muted = cssVar("--muted"), line = cssVar("--line"), grey = muted || "#8a8f98";
   const grad = (c, a0) => (u) => {
@@ -1113,18 +1123,18 @@ function curveChart(root, { points, color, unit, label, compareLabel, onHover = 
   };
   const tip = Object.assign(document.createElement("div"), { className: "chart-tip", hidden: true });
   const u = new uPlot({
-    width: holder.clientWidth || 300, height: Math.max(140, holder.clientHeight || 150), padding: [8, 6, 0, 0], legend: { show: false },
+    width: holder.clientWidth || 300, height: Math.max(140, holder.clientHeight || 150), padding: [8, 14, 0, 0], legend: { show: false },
     scales: { x: { time: false, range: (uu, mn, mx) => [mn, mx] } }, // durations evenly spaced, each labelled
     cursor: { drag: { x: false, y: false }, points: { size: 9, width: 2, stroke: cssVar("--surface") || "#fff", fill: (uu, si) => (si === 1 ? color : grey) } },
     series: [{},
-      { label: "This activity", stroke: color, width: 2.2, fill: grad(color, 0.42), points: { show: false } },
+      { label: mainLabel, stroke: color, width: 2.2, fill: grad(color, 0.42), points: { show: dots, size: 6, width: 1.5, stroke: color, fill: cssVar("--surface") || "#fff" } },
       { label: compareLabel, stroke: withAlpha(grey.startsWith("#") ? grey : "#8a8f98", 0.9), width: 1.4, dash: [5, 4], fill: grad(grey.startsWith("#") ? grey : "#8a8f98", 0.16), points: { show: false }, spanGaps: true }],
     axes: [
       { font: CHART_FONT, stroke: muted, size: 18, gap: 2, splits: () => pts.map((p, k) => k),
-        values: (uu, vals) => vals.map((v) => (pts[v] ? dl(pts[v].key) : "")), border: { show: true, stroke: line, width: 1 }, grid: { show: false }, ticks: { stroke: line, size: 3, width: 1 } },
+        values: (uu, vals) => vals.map((v) => (pts[v] ? keyShort(pts[v].key) : "")), border: { show: true, stroke: line, width: 1 }, grid: { show: false }, ticks: { stroke: line, size: 3, width: 1 } },
       { font: CHART_FONT, stroke: muted, space: 20, gap: 2, size: (uu, vals) => (vals ? Math.max(...vals.map((v) => String(v).length)) * 6.4 + 8 : 24),
         border: { show: true, stroke: line, width: 1 }, grid: { stroke: line, width: 0.6, dash: [2, 3] }, ticks: { stroke: line, size: 3, width: 1 },
-        values: (uu, vals) => vals.map((v) => num(v)) },
+        values: (uu, vals) => { const dec = vals.length > 1 && Math.abs(vals[1] - vals[0]) < 1 ? 1 : 0; return vals.map((v) => num(v, dec)); } },
     ],
     hooks: {
       draw: [(uu) => { // frame on all four sides
@@ -1138,24 +1148,46 @@ function curveChart(root, { points, color, unit, label, compareLabel, onHover = 
         onHover(show ? pts[i] : null);
         if (!show) return;
         const p = pts[i];
-        tip.innerHTML = `<div class="chart-tip-name">Best ${full(p.key)}</div><div><b style="color:${color}">${num(p.value)} ${unit}</b> <span class="chart-tip-name">this activity</span></div>
-          ${p.compare != null ? `<div><b>${num(p.compare)} ${unit}</b> <span class="chart-tip-name">${compareLabel.toLowerCase()}</span></div>` : ""}
-          ${p.compare != null && p.compareDate ? `<div class="chart-tip-name">${p.compareDate}</div>` : ""}`;
+        // compact: the duration or distance, then one line per series - value, its name, the date
+        const line = (v, c, name, date) => `<div><b${c ? ` style="color:${c}"` : ""}>${fmtVal(v, p)}</b> <span class="chart-tip-name">${name}${date ? ` · ${date}` : ""}</span></div>`;
+        tip.innerHTML = `<div class="chart-tip-name">Best ${keyFull(p.key)}</div>${p.value != null ? line(p.value, color, mainLabel.toLowerCase(), p.date) : ""}${p.compare != null ? line(p.compare, "", compareLabel.toLowerCase(), p.compareDate) : ""}`;
         const left = uu.cursor.left, w = uu.over.clientWidth;
-        tip.style.transform = `translate(${left + 12 + 140 > w ? left - 12 - tip.offsetWidth : left + 12}px, 4px)`;
+        tip.style.transform = `translate(${left + 12 + tip.offsetWidth > w ? left - 12 - tip.offsetWidth : left + 12}px, 4px)`;
       }],
     },
   }, [pts.map((p, k) => k), pts.map((p) => p.value), pts.map((p) => p.compare ?? null)], holder);
   u.over.appendChild(tip);
+  if (tags) placeCurveTags();
+  if (onClick) {
+    holder.classList.add("clickable");
+    u.over.addEventListener("click", () => { const i = u.cursor.idx; if (i != null && pts[i]) onClick(pts[i]); });
+  }
   holder.addEventListener("mouseenter", () => holder.classList.add("hot"));
   holder.addEventListener("mouseleave", () => holder.classList.remove("hot"));
   // The chart fills its box (the tile's height comes from the tiles beside it).
   const ro = new ResizeObserver(() => {
     const w = holder.clientWidth, h = Math.max(140, holder.clientHeight);
     if (w && (Math.abs(w - u.width) > 2 || Math.abs(h - u.height) > 2)) u.setSize({ width: w, height: h });
+    if (tags) placeCurveTags();
   });
   ro.observe(holder);
   return { destroy() { ro.disconnect(); u.destroy(); } };
+  // The pills at the last value of each series (pushed apart when they would overlap).
+  function placeCurveTags() {
+    const box = root.querySelector(".curve-tags");
+    if (!box) return;
+    const last = pts[pts.length - 1];
+    const grey = "#8a8f98";
+    const items = [[mainLabel, last.value, color], [compareLabel, last.compare, grey]].filter(([, v]) => v != null);
+    box.innerHTML = items.map(([l, v, c], k) => `<div class="chart-stat chart-tag inside${k ? " curve-tag-dash" : ""}" data-tip="${esc(`${l}: ${fmtVal(v, last)} at ${keyFull(last.key)}`)}"><span class="chart-ribbon" style="--c:${c}"><span class="chart-ribbon-label">${esc(l)}</span>${num(v, v < 100 ? 1 : 0)} ${unit}</span></div>`).join("");
+    const off = u.over.getBoundingClientRect().top - box.getBoundingClientRect().top, h = 20, step = 22;
+    const ys = items.map(([, v]) => off + u.valToPos(Math.min(u.scales.y.max, Math.max(u.scales.y.min, v)), "y") - h / 2);
+    if (ys.length === 2 && Math.abs(ys[0] - ys[1]) < step) { // overlap: both give way equally
+      const mid = (ys[0] + ys[1]) / 2, up = ys[0] <= ys[1] ? 0 : 1;
+      ys[up] = mid - step / 2; ys[1 - up] = mid + step / 2;
+    }
+    [...box.children].forEach((el, k) => { el.style.transform = `translateY(${Math.max(0, Math.min(box.clientHeight - h, ys[k]))}px)`; });
+  }
 }
 
 // Turning points of a series, ignoring wiggles under th units (3 m of altitude).

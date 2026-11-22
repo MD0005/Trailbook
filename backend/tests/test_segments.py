@@ -255,6 +255,12 @@ def test_segments_api(sdb, monkeypatch):
     by_date = client.get(f"/api/segments/{sid}/efforts?sort=date").json()["items"]
     assert by_date[0]["start_time_utc"] > by_date[-1]["start_time_utc"]
 
+    rec = client.get("/api/stats/records?person=anna").json()["segments"]
+    assert rec[0]["segment"]["id"] == sid and len(rec[0]["ever"]) == 2  # anna's two efforts
+    assert rec[0]["ever"][0]["value"] <= rec[0]["ever"][1]["value"] and rec[0]["range"] is None
+    rec = client.get("/api/stats/records?person=anna&years=2020").json()["segments"]
+    assert rec[0]["range"] is None  # nothing in that time
+
     snap = client.post("/api/segments/snap", json={"pins": [pt(300), pt(1300)]})
     assert snap.status_code == 200 and snap.json()["distance_m"] > 900
     far = client.post("/api/segments/snap", json={"pins": [pt(300, 500), pt(1300, 500)]})
@@ -294,3 +300,60 @@ def test_two_way_mode_overrides_automatic(tmp_path):
     segments.backfill(c)
     assert reverse_count() == 1  # on: both ways even when steep
     c.close()
+
+
+def loose(time, lat, lon, width=segments.TRACK_RADIUS_M, detour=0.0):
+    seg = segments.prepare(1, SEGMENT)
+    seg.width, seg.detour = width, detour
+    return segments.find_efforts(segments.Track(time, lat, lon, seg.proj), seg)
+
+
+def test_wider_corridor_takes_the_other_side_of_the_street():
+    other_side = path((0, 40), (1500, 40))  # 40 m east: outside the default 30 m
+    assert loose(*other_side) == []
+    assert len(loose(*other_side, width=50)) == 1
+    assert loose(*path((0, 100), (1500, 100)), width=75) == []  # another road stays out
+
+
+def test_one_detour_when_allowed():
+    # around a block: 150 m of the segment missed, 2 × 200 m off it
+    block = path((0, 0), (600, 0), (600, 200), (750, 200), (750, 0), (1500, 0))
+    assert loose(*block) == []
+    assert len(loose(*block, detour=200)) == 1
+    assert loose(*block, detour=100) == []  # the detour is longer than allowed
+    two = path((0, 0), (400, 0), (400, 200), (550, 200), (550, 0), (800, 0), (800, 200),
+               (950, 200), (950, 0), (1500, 0))  # fmt: skip
+    assert loose(*two, detour=200) == []  # only once
+
+
+def test_match_settings_api(sdb, monkeypatch):
+    db_path, c, a1 = sdb
+    app = create_app(db_path)
+    monkeypatch.setattr(app.state.import_job, "start_segments", lambda: True)
+    client = TestClient(app)
+    sid = client.post(
+        "/api/segments", json={"activity_id": a1, "start_s": 40, "end_s": 240, "name": "N"}
+    ).json()["id"]
+    s = client.get(f"/api/segments/{sid}").json()["segment"]
+    assert s["match_width_m"] == segments.TRACK_RADIUS_M and s["match_detour_m"] == 0
+    r = client.patch(f"/api/segments/{sid}", json={"match_width_m": 45, "match_detour_m": 150})
+    assert r.json()["match_width_m"] == 45 and r.json()["match_detour_m"] == 150
+    assert r.json()["pending"]  # matched again
+    bad = client.patch(f"/api/segments/{sid}", json={"match_width_m": 200})
+    assert bad.status_code == 400
+    r = client.patch(f"/api/segments/{sid}", json={"match_width_m": 30, "match_detour_m": 0})
+    assert r.json()["match_width_m"] == 30
+    row = c.execute("SELECT match_width_m, match_detour_m FROM segments").fetchone()
+    assert tuple(row) == (None, None)  # the defaults
+
+
+def test_wide_corridor_over_a_switchback_still_matches():
+    # up 400 m, a hairpin, back down 20 m to the east, up again: lanes closer than the corridor
+    legs = [(0, 0), (400, 0), (400, 20), (0, 20), (0, 40), (400, 40)]
+    seg_pts = [pt(n, e) for (n, e) in legs]
+    track = path((-100, 0), *legs, (500, 40))
+    for width in (30, 50, 75):
+        seg = segments.prepare(1, seg_pts)
+        seg.width = width
+        tr = segments.Track(*track, seg.proj)
+        assert len(segments.find_efforts(tr, seg)) == 1, width

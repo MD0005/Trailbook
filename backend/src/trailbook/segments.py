@@ -13,6 +13,11 @@ Matching an activity (pure Python, a few ms per candidate on the CM4):
   * it must pass every checkpoint in order within TRACK_RADIUS_M (distance to the track
     edge, so sparse GPS works), with at most MAX_GAP_TRAVEL_M of track between two
     checkpoints (detours and the opposite direction fail);
+  * per segment both can be loosened (Edit): the corridor's half width (`match_width_m`,
+    WIDTH_MIN_M…WIDTH_MAX_M, default TRACK_RADIUS_M; the start and end lines grow with it)
+    and one detour per effort (`match_detour_m`, 0…DETOUR_MAX_M): once, the checkpoints
+    along up to that many metres of the segment may be missed, when the track comes back
+    to the segment within twice the detour plus MAX_GAP_TRAVEL_M of track;
   * it ends at the first crossing of the end; the travelled distance must be close to the
     segment length. Several efforts per activity are possible (laps).
   * a flat segment (end at most TWO_WAY_MAX_CLIMB_M and TWO_WAY_MAX_GRADE of the length above
@@ -45,6 +50,8 @@ PIN_RADIUS_M = 50.0
 BBOX_MARGIN_DEG = 0.0005  # ~50 m
 TWO_WAY_MAX_CLIMB_M = 30.0  # end vs start altitude...
 TWO_WAY_MAX_GRADE = 0.03  # ...and at most 3 % of the length (short steep ramps stay one way)
+WIDTH_MIN_M, WIDTH_MAX_M = 15.0, 75.0  # the corridor's half width a person can choose
+DETOUR_MAX_M = 500.0  # the longest one detour a person can allow
 
 ProgressFn = Callable[[int, int], None]
 
@@ -121,6 +128,23 @@ class Prepared:
     u_start: tuple[float, float]
     u_end: tuple[float, float]
     reverse: bool = False
+    width: float = TRACK_RADIUS_M  # corridor half width (m)
+    detour: float = 0.0  # one detour may miss the checkpoints along this many metres
+
+    @property
+    def end_radius(self) -> float:
+        """Start and end lines: as wide as the corridor allows (25 m at the default 30 m)."""
+        return START_RADIUS_M * self.width / TRACK_RADIUS_M
+
+
+def match_width(s) -> float:
+    w = s["match_width_m"] if "match_width_m" in s.keys() else None
+    return min(WIDTH_MAX_M, max(WIDTH_MIN_M, w)) if w else TRACK_RADIUS_M
+
+
+def match_detour(s) -> float:
+    d = s["match_detour_m"] if "match_detour_m" in s.keys() else None
+    return min(DETOUR_MAX_M, max(0.0, d)) if d else 0.0
 
 
 def prepare(segment_id: int, points: list[tuple[float, float]], reverse: bool = False) -> Prepared:
@@ -156,7 +180,10 @@ def prepared(s: sqlite3.Row) -> list[Prepared]:
     """The segment as matched: its own direction, and reversed when it is flat."""
     pts = _points(s)
     back = [prepare(s["id"], pts, reverse=True)] if two_way(s) else []
-    return [prepare(s["id"], pts), *back]
+    out = [prepare(s["id"], pts), *back]
+    for p in out:
+        p.width, p.detour = match_width(s), match_detour(s)
+    return out
 
 
 # ---- matching ----------------------------------------------------------------------------
@@ -257,27 +284,66 @@ def _near_run(tr: Track, start: int, p, radius: float, limit: float = math.inf):
     return i, j
 
 
-def _follow(tr: Track, seg: Prepared, start_pos: float) -> float | None:
-    """From an effort start, pass all checkpoints in order; returns the end position."""
-    r2 = TRACK_RADIUS_M * TRACK_RADIUS_M
+def _reach(tr: Track, cur: int, cp, r2: float, limit: float) -> tuple[int, float] | None:
+    """First track edge from `cur` on within the corridor of checkpoint `cp` and the track
+    travelled to it; None when the track goes on for more than `limit` metres (or ends)
+    first."""
+    cx, cy = cp
     n = len(tr)
+    j, travelled = cur, 0.0
+    while True:
+        if j >= n - 1:
+            return None
+        if _edge_d2(cx, cy, tr.x[j], tr.y[j], tr.x[j + 1], tr.y[j + 1]) <= r2:
+            return j, travelled
+        travelled += tr.step[j]
+        if travelled > limit:
+            return None
+        j += 1
+
+
+def _follow(tr: Track, seg: Prepared, start_pos: float) -> float | None:
+    """From an effort start, pass all checkpoints in order; returns the end position. With
+    `seg.detour`, the checkpoints along up to that many metres may be missed once.
+
+    A checkpoint counts where the track first comes into its corridor. A wide corridor over a
+    switchback catches checkpoints of the lane after the turn already on the lane before it,
+    so the track falls behind the segment; what it is behind (segment metres passed minus
+    track metres travelled) is added to the track allowed to the next checkpoint."""
+    r2 = seg.width * seg.width
     cur = int(start_pos)
-    for cx, cy in seg.cps[1:-1]:
-        j, travelled = cur, 0.0
-        while True:
-            if j >= n - 1:
-                return None
-            if _edge_d2(cx, cy, tr.x[j], tr.y[j], tr.x[j + 1], tr.y[j + 1]) <= r2:
+    inner = seg.cps[1:-1]
+    skip = int(seg.detour // CHECK_SPACING_M)  # checkpoints the one detour may miss
+    away = MAX_GAP_TRAVEL_M + 2 * seg.detour  # track it may take to come back
+    end_limit = MAX_GAP_TRAVEL_M
+    behind = 0.0  # segment metres passed minus track metres travelled
+    k = 0
+    while k < len(inner):
+        hit = _reach(tr, cur, inner[k], r2, MAX_GAP_TRAVEL_M + behind)
+        gained = CHECK_SPACING_M
+        if hit is None and skip:
+            for m in range(1, skip + 1):
+                if k + m >= len(inner):  # back only at the end of the segment
+                    k, end_limit = len(inner), away + behind
+                    break
+                hit = _reach(tr, cur, inner[k + m], r2, away + behind)
+                if hit is not None:
+                    k += m
+                    gained = CHECK_SPACING_M * (m + 1)
+                    break
+            skip = 0  # once per effort
+            if k >= len(inner):
                 break
-            travelled += tr.step[j]
-            if travelled > MAX_GAP_TRAVEL_M:
-                return None
-            j += 1
-        cur = j
-    run = _near_run(tr, cur, seg.cps[-1], START_RADIUS_M, limit=MAX_GAP_TRAVEL_M)
+        if hit is None:
+            return None
+        cur = hit[0]
+        behind = max(0.0, behind + gained - hit[1])
+        k += 1
+    radius = seg.end_radius
+    run = _near_run(tr, cur, seg.cps[-1], radius, limit=end_limit + behind)
     if run is None:
         return None
-    end = _crossing(tr, run[0], run[1], seg.cps[-1], seg.u_end, START_RADIUS_M, last=False)
+    end = _crossing(tr, run[0], run[1], seg.cps[-1], seg.u_end, radius, last=False)
     return end if end > start_pos else None
 
 
@@ -286,13 +352,13 @@ def find_efforts(tr: Track, seg: Prepared) -> list[Match]:
     if len(tr) < 2 or len(seg.cps) < 2:
         return out
     lo_len = seg.length * LENGTH_MIN_RATIO - 30
-    hi_len = seg.length * LENGTH_MAX_RATIO + LENGTH_SLACK_M
+    hi_len = seg.length * LENGTH_MAX_RATIO + LENGTH_SLACK_M + 2 * seg.detour
     i = 0
     while i < len(tr) - 1:
-        run = _near_run(tr, i, seg.cps[0], START_RADIUS_M)
+        run = _near_run(tr, i, seg.cps[0], seg.end_radius)
         if run is None:
             break
-        start = _crossing(tr, run[0], run[1], seg.cps[0], seg.u_start, START_RADIUS_M, last=True)
+        start = _crossing(tr, run[0], run[1], seg.cps[0], seg.u_start, seg.end_radius, last=True)
         end = _follow(tr, seg, start)
         if end is not None and lo_len <= tr.travelled(start, end) <= hi_len:
             out.append(Match(start, end, tr.time_at(start), tr.time_at(end)))
@@ -391,8 +457,13 @@ _CANDIDATE_SQL = """
 """
 
 
+def _margin(s) -> float:
+    """Bounding box margin (degrees): the default, or the segment's wider start / end lines."""
+    return max(BBOX_MARGIN_DEG, match_width(s) / 111_000)
+
+
 def _candidate_params(s: sqlite3.Row) -> list:
-    m = BBOX_MARGIN_DEG
+    m = _margin(s)
     return [
         s["start_lat"] + m, s["start_lat"] - m, s["start_lon"] + m, s["start_lon"] - m,
         s["end_lat"] + m, s["end_lat"] - m, s["end_lon"] + m, s["end_lon"] - m,
@@ -400,7 +471,7 @@ def _candidate_params(s: sqlite3.Row) -> list:
 
 
 def _covers(a: sqlite3.Row, s: sqlite3.Row) -> bool:
-    m = BBOX_MARGIN_DEG
+    m = _margin(s)
     if a["bbox_min_lat"] is None:
         return False
     if s["category"] and s["category"] != a["category"]:

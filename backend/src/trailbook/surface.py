@@ -33,6 +33,15 @@ SAMPLE_STEP_M = 20  # track points matched: one every this many metres
 BOX_POINTS = 10  # route points per box (about 1 km)
 CHUNK = 150  # boxes per server request
 TIMEOUT_S = 120
+# Being kind to the public server: the background run fetches BATCH activities STEP_S apart,
+# then pauses BATCH_PAUSE_S (an import that finishes starts the next batch at once). A server
+# that refuses (429, 5xx, no answer) is left alone for COOLDOWN_S, doubled with every further
+# refusal up to COOLDOWN_MAX_S (or as long as its Retry-After says); a success resets it.
+BATCH = 10
+STEP_S = 20.0
+BATCH_PAUSE_S = 600.0
+COOLDOWN_S = 600.0
+COOLDOWN_MAX_S = 6 * 3600.0
 
 PAVED = {"asphalt", "paved", "concrete", "concrete:plates", "concrete:lanes", "paving_stones",
          "sett", "cobblestone", "unhewn_cobblestone", "metal", "wood", "chipseal", "bricks",
@@ -181,6 +190,41 @@ def _route(conn: sqlite3.Connection, activity_id: int) -> list[tuple[float, floa
     return out
 
 
+class Refused(OSError):
+    """The map data server refused or did not answer; `retry_after` in s when it said."""
+
+    def __init__(self, msg: str, retry_after: float | None = None):
+        super().__init__(msg)
+        self.retry_after = retry_after
+
+
+_cool = {"until": 0.0, "fails": 0}  # one server per add-on: one cooldown for all callers
+
+
+def cooldown_left(now: float | None = None) -> float:
+    """Seconds until the map data server may be asked again (0: now)."""
+    return max(0.0, _cool["until"] - (time.time() if now is None else now))
+
+
+def _refused(retry_after: float | None, now: float | None = None) -> float:
+    _cool["fails"] += 1
+    wait = min(COOLDOWN_S * 2 ** (_cool["fails"] - 1), COOLDOWN_MAX_S)
+    wait = max(wait, min(retry_after or 0.0, COOLDOWN_MAX_S))
+    _cool["until"] = (time.time() if now is None else now) + wait
+    return wait
+
+
+def _answered() -> None:
+    _cool["until"], _cool["fails"] = 0.0, 0
+
+
+def _retry_after(exc: urllib.error.HTTPError) -> float | None:
+    try:
+        return float(exc.headers.get("Retry-After") or "")
+    except (TypeError, ValueError, AttributeError):
+        return None
+
+
 def fetch_ways(points: list[tuple[float, float, float]], url: str) -> list[dict]:
     """Ways with a highway tag near the route, from an Overpass server.
 
@@ -216,9 +260,12 @@ def fetch_ways(points: list[tuple[float, float, float]], url: str) -> list[dict]
                     data = json.loads(resp.read())
                 break
             except urllib.error.HTTPError as exc:
-                if attempt or exc.code not in (429, 502, 503, 504):
-                    raise
-                time.sleep(3)
+                if exc.code in (429, 502, 503, 504) and not attempt and exc.code != 429:
+                    time.sleep(5)
+                    continue
+                raise Refused(f"HTTP {exc.code} {exc.reason}", _retry_after(exc)) from exc
+            except (urllib.error.URLError, TimeoutError) as exc:
+                raise Refused(str(getattr(exc, "reason", exc) or exc)) from exc
         for el in data.get("elements", []):
             if el.get("type") == "way":
                 ways[el["id"]] = el
@@ -247,14 +294,20 @@ def compute(conn: sqlite3.Connection, activity_id: int) -> dict | None:
             (json.dumps({"version": SURFACE_VERSION, "runs": [], "shares": {}}), activity_id),
         )
         return None
+    left = cooldown_left()
+    if left:  # the server refused lately: not asked again before the cooldown ends
+        raise OSError(f"map data server busy, next try in {math.ceil(left / 60)} min")
     url = db.get_setting(conn, "overpass_url") or OVERPASS_URL
     try:
         ways = fetch_ways(points, url)
-    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+    except (Refused, json.JSONDecodeError) as exc:
+        wait = _refused(getattr(exc, "retry_after", None))
         logging.getLogger("trailbook.surface").warning(
-            "Road surface of activity %s: map data server not available: %s", activity_id, exc
-        )
+            "Road surface of activity %s: map data server not available (%s), next try in %d min",
+            activity_id, exc, math.ceil(wait / 60),
+        )  # fmt: skip
         raise OSError(f"map data server: {exc}") from exc
+    _answered()
     runs = match(points, ways)
     result = {"version": SURFACE_VERSION, "runs": runs, "shares": shares(runs)}
     conn.execute(

@@ -29,19 +29,32 @@ EVENTS_KEEP = 100  # stored
 PUSH_DAYS = 2  # an event Home Assistant could not get for this long is not sent any more
 STALE_DAYS = 3  # an activity still unprocessed after this is marked seen without events
 SPORTS = ("run", "ride")  # activity groups with records (segments: the activity's group)
-KINDS = ("pace", "ride", "longest", "power")  # best efforts with records (not heart rate)
+KINDS = ("pace", "ride", "longest", "within", "speed", "power")  # best efforts with records
 YEAR_POWER_S = (1200, 3600)  # power: every duration of all time, these only for the year
 
-# Best efforts ranked per (kind, key), with the activity's distance as one more effort (kind
-# "longest", key 0, value = the distance in m; higher is better) so it ranks like the others.
-EFFORTS_SQL = """(SELECT activity_id, kind, key, value, start_s, end_s FROM best_efforts
+# Best efforts ranked per (kind, key, v), with the activity's distance and elevation gain as more
+# efforts (kinds "longest" and "ascent", key 0, value in m; higher is better) so they rank like
+# the others.
+# v = 1: an indoor ride's (virtual ride, trainer) distance, time over a distance and top speed -
+# their own records (a trainer's speed is no road speed); their power counts with every ride.
+VIRTUAL_KINDS = ("ride", "longest", "within", "speed", "ascent", "climb", "grade")
+_VK = ", ".join(f"'{k}'" for k in VIRTUAL_KINDS)
+EFFORTS_SQL = f"""(SELECT b.activity_id, b.kind, b.key, b.value, b.start_s, b.end_s,
+        CASE WHEN b.kind IN ({_VK}) AND va.category = 'ride' AND va.indoor THEN 1 ELSE 0 END
+            AS v
+    FROM best_efforts b JOIN activities va ON va.id = b.activity_id
     UNION ALL
-    SELECT id, 'longest', 0, distance_m, 0, elapsed_s FROM activities
-    WHERE distance_m > 0 AND category IN ('run', 'ride'))"""
+    SELECT id, 'longest', 0, distance_m, 0, elapsed_s,
+        CASE WHEN category = 'ride' AND indoor THEN 1 ELSE 0 END
+    FROM activities WHERE distance_m > 0 AND category IN ('run', 'ride')
+    UNION ALL
+    SELECT id, 'ascent', 0, ascent_m, 0, elapsed_s,
+        CASE WHEN category = 'ride' AND indoor THEN 1 ELSE 0 END
+    FROM activities WHERE ascent_m > 0 AND category IN ('run', 'ride'))"""
 
 LOWER_IS_BETTER = ("pace", "ride", "segment")  # times; power and distance: higher
 _ORDER = "CASE WHEN o.kind IN ('pace', 'ride') THEN o.value ELSE -o.value END"
-_KIND_ORDER = ("pace", "ride", "longest", "segment", "power")  # in a message
+_KIND_ORDER = ("pace", "ride", "longest", "within", "speed", "segment", "power")  # in a message
 
 
 # ---- labels (decimal comma, space between thousands: the app's number format) ----------------
@@ -81,7 +94,7 @@ def _span(s: float) -> str:
 def key_label(kind: str, key: float) -> str:
     if kind in ("pace", "ride"):
         return _distance(key)
-    if kind == "power":
+    if kind in ("power", "speed", "within"):
         return _span(key)
     return ""
 
@@ -91,6 +104,8 @@ def value_label(kind: str, v: float) -> str:
         return duration(v)
     if kind == "power":
         return f"{num(v)} W"
+    if kind == "speed":
+        return f"{num(v * 3.6, 1)} km/h"
     return f"{num(v / 1000, 2)} km"
 
 
@@ -100,6 +115,8 @@ def delta_label(kind: str, d: float) -> str:
         return f"{num(d, 1 if d < 10 else 0)} s" if d < 60 else duration(d)
     if kind == "power":
         return f"{num(d)} W"
+    if kind == "speed":
+        return f"{num(d * 3.6, 1)} km/h"
     return f"{num(d / 1000, 2)} km"
 
 
@@ -144,14 +161,15 @@ def _ranked(c: sqlite3.Connection, year: str | None) -> list[sqlite3.Row]:
               END AS rk_old"""
     return c.execute(
         f"""WITH e AS (
-                SELECT {cols}, a.category, o.kind, o.key, o.value, NULL AS segment_id,
-                       'e:' || a.category || ':' || o.kind || ':' || o.key AS list_key,
+                SELECT {cols}, a.category, o.kind, o.key, o.value, o.v, NULL AS segment_id,
+                       'e:' || a.category || ':' || o.kind || ':' || o.key || ':' || o.v
+                           AS list_key,
                        {_ORDER} AS ord
                 FROM {EFFORTS_SQL} o JOIN activities a ON a.id = o.activity_id
                 WHERE a.person_id IN (SELECT id FROM persons WHERE archived = 0) AND {yf}
                   AND {kf}
                 UNION ALL
-                SELECT {cols}, s.category, 'segment', 0, se.elapsed_s, s.id,
+                SELECT {cols}, s.category, 'segment', 0, se.elapsed_s, 0, s.id,
                        's:' || s.id, se.elapsed_s
                 FROM segment_efforts se JOIN activities a ON a.id = se.activity_id
                 JOIN segments s ON s.id = se.segment_id
@@ -271,6 +289,7 @@ def _record(c: sqlite3.Connection, r: sqlite3.Row) -> dict:
         "value": round(r["value"], 1),
         "label": value_label(kind, r["value"]),
         "speed": None,
+        "virtual": bool(r["v"]),
         "segment": None,
         "all": None,
         "year": None,
@@ -323,9 +342,11 @@ def _event(c: sqlite3.Connection, rec: dict) -> dict:
 COLOR = "#E8B86D"
 _WHAT = {
     "pace": "run {k}",
-    "ride": "ride {k}",
+    "ride": "{v}ride {k}",
+    "speed": "{v}top speed {k}",
     "power": "{c} power {k}",
-    "longest": "longest {c}",
+    "longest": "longest {v}{c}",
+    "within": "{v}{c} distance in {k}",
     "segment": "segment {s}",
 }
 _ICON = {
@@ -354,7 +375,8 @@ def notification(ev: dict) -> dict:
     group = sports.GROUPS.get(ev["category"] or "")
     cat = (group[0] if group else ev["category"] or "").lower()
     seg = ev["segment"]["name"] if ev["segment"] else ""
-    what = _WHAT[ev["kind"]].format(k=ev["key_label"], c=cat, s=seg)
+    virtual = "virtual " if ev.get("virtual") else ""
+    what = _WHAT[ev["kind"]].format(k=ev["key_label"], c=cat, s=seg, v=virtual)
     speed = f" ({ev['speed']})" if ev["speed"] else ""
     p = ev[scope]
     beaten = p["beaten"]

@@ -129,6 +129,55 @@ marked ⇄) when Edit › Direction says so:
 
 Changing it matches the segment again against every activity.
 
+## Segments: match width and one detour
+
+How close an effort must follow the segment (Edit, per segment; changing it matches the
+segment again against every activity):
+
+| Setting | Range | Default | Means |
+|---|---|---|---|
+| Match width | 15–75 m, steps of 5 | 30 m | every checkpoint (one per 25 m of the segment) must have the track within this distance; the start and end lines are 25 m × width / 30 wide (25 m by default) |
+| One detour | 0–500 m, steps of 25 | none | once per effort the checkpoints along up to this many metres of the segment may be missed, when the track comes back to the segment within 2 × detour + 200 m of track |
+
+- The travelled distance may be 0,8–1,3 × the segment length + 100 m, plus 2 × the detour.
+- Example: a 1 km segment along a street, run on the other side 40 m away: no effort with
+  30 m, one with 45 m. A block walked around (150 m of the segment missed, 200 m away from it
+  on each side): one effort with a detour of 150 m or more, none with less; two such blocks
+  in one effort: none (one detour only).
+- A wide corridor can let a parallel road in: keep it as narrow as the place allows.
+- A checkpoint counts where the track first enters its corridor. Over a switchback (two lanes
+  closer than the corridor) checkpoints of the lane after the turn are caught already on the lane
+  before it, so the track falls behind the segment; that lag (segment metres passed minus track
+  metres travelled) is added to the 200 m allowed to the next checkpoint. So a wider corridor
+  never loses an effort a narrower one found.
+
+## Top speed over 1 minute (rides)
+
+The best mean speed over 60 s, from the distance between samples, counting only seconds the
+data can be trusted:
+
+| Check | Limit |
+|---|---|
+| samples apart | at most 5 s |
+| speed | at most 80 km/h |
+| change of speed | at most 3 m/s per second (more is a jump of the position) |
+| the device's own speed (Doppler or a sensor) | within 1,5 m/s or 15 % |
+| next to a doubtful second | 5 s on each side dropped too |
+| the minute's distance vs the track's length | within 10 % |
+
+- A GPS jump of 150 m in one second makes the minutes around it count not at all, so it never
+  becomes a record. Rides recorded without a distance stream get no top speed.
+- Biggest climb: from a low point to its top; a dip on the way is allowed while it is at most
+  25 % as long as the rise before it and loses at most a third of the height gained so far;
+  at least 20 m. Steepest 1 km: the highest average grade over 1 km of distance.
+- Altitude jumps (more than 4 m/s between two samples) are taken out before. A 1 km stretch
+  counts only when the height was gained at most 1,5 m/s, its grade is at most 40 % and no 50 m
+  of it is steeper than 30 % (the distance jumped, or the barometer drifted while standing).
+- Distance within a time: the longest distance covered in 12 min on runs (Cooper test) and in
+  1 h on rides, from the distance stream (the end of the window interpolated between samples).
+- Indoor rides (virtual, trainer) have records of their own for distances, times, longest
+  distance, distance in 1 h and top speed; their power counts with all rides.
+
 ## Segments: trend line
 
 The dashed curve on the Trend chart is a robust local regression of the effort times over
@@ -464,10 +513,11 @@ off. The time can be corrected only by editing the file today.
 
 - Only runs and rides. Lists: per person and group, run time over a distance (400 m, 1 km,
   1 mi, 5 km, 10 km, half and full marathon), ride time over a distance (5–100 km), power over
-  a duration (all time: 5 s to 5 h; this year: 20 min and 1 h only), the longest distance, and
-  per segment; each with its 3 best results of all time and of this calendar year (UTC year
+  a duration (all time: 5 s to 5 h; this year: 20 min and 1 h only), the longest distance, the
+  top speed over 1 min (rides), and per segment — indoor rides' distances, times and top speed
+  on lists of their own; each with its 3 best results of all time and of this calendar year (UTC year
   of the start, like the other year filters). Heart rate is no record. Times: lower is better;
-  power and distance: higher is better; a tie goes to the earlier activity.
+  power, distance and top speed: higher is better; a tie goes to the earlier activity.
 - A record needs a result that beat one already on the list: with 2 results on a list a new
   third is no record, a new first or second is. The difference is to the result it pushed down
   at that place; for first place that is the old record.

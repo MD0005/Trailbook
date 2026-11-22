@@ -10,6 +10,7 @@ const ON_FOOT = new Set(["run", "walk", "hike"]);
 const ICON_TWO_WAY = svg(`<path d="M4 8h15l-4-4M20 16H5l4 4"/>`);
 const SEG_TWO_WAY_END = "#f5b400";
 const TWO_WAY_TIP = "Counted in both directions";
+const SEG_WIDTH_DEFAULT = 30; // segments.TRACK_RADIUS_M: the corridor's default half width (m)
 
 // Pace for on-foot groups, speed otherwise.
 const segSpeed = (mps, group) => (!mps ? "–" : ON_FOOT.has(group) ? pace(mps) : `${num(mps * 3.6, 1)} km/h`);
@@ -423,6 +424,10 @@ async function renderSegment(id, params) {
         pickList("seg-types", [["group", `${groupLabel(srcGroup)} only`], ["any", "Any activity type"]], g ? "group" : "any")) : ""}
       ${row(optLabel("Direction", `Automatic: both ways on flat segments (now ${s.two_way_auto ? "both ways" : "one way"})`),
         pickList("seg-twoway", [["auto", "Automatic"], ["on", "Both ways"], ["off", "One way"]], s.two_way_mode || "auto"))}
+      ${row(optLabel("Match width", `How far from the line an effort may run, e.g. the other side of the street (default ${num(SEG_WIDTH_DEFAULT)} m)`),
+        `<span class="seg-range"><input type="range" name="seg-width" min="15" max="75" step="5" value="${s.match_width_m}"><b data-seg-width>${num(s.match_width_m)} m</b></span>`)}
+      ${row(optLabel("One detour", "Once per effort, this much of the segment may be left out (around a block)"),
+        `<span class="seg-range"><input type="range" name="seg-detour" min="0" max="500" step="25" value="${s.match_detour_m}"><b data-seg-detour>${s.match_detour_m ? `${num(s.match_detour_m)} m` : "none"}</b></span>`)}
       ${row("", `<button class="badge danger" data-del>Delete segment</button>`)}</div>`;
   const src = d.source ? `${localTime(d.source).slice(0, 10)}${d.source.location ? ` · ${esc(d.source.location)}` : ""}` : "";
   const fq = new URLSearchParams(filterQuery(params)).toString();
@@ -499,6 +504,21 @@ async function renderSegment(id, params) {
     await api(`segments/${id}`, { method: "PATCH", body: JSON.stringify({ two_way_mode: b.dataset.value }) }).catch((err) => alert(err.message));
     renderSegment(id, params);
   });
+  // Match width and one detour: the corridor shows on the map while moving, saved on release
+  // (the segment is matched again).
+  const widthIn = panel.querySelector("[name=seg-width]"), detourIn = panel.querySelector("[name=seg-detour]");
+  const corridorOf = (w) => (w !== SEG_WIDTH_DEFAULT ? w : 0);
+  widthIn.oninput = () => {
+    panel.querySelector("[data-seg-width]").textContent = `${num(+widthIn.value)} m`;
+    setCorridor(activeMap, lonLat(s.polyline), +widthIn.value);
+  };
+  detourIn.oninput = () => { panel.querySelector("[data-seg-detour]").textContent = +detourIn.value ? `${num(+detourIn.value)} m` : "none"; };
+  const saveMatch = async (body) => {
+    await api(`segments/${id}`, { method: "PATCH", body: JSON.stringify(body) }).catch((err) => alert(err.message));
+    renderSegment(id, params);
+  };
+  widthIn.onchange = () => { setCorridor(activeMap, lonLat(s.polyline), corridorOf(+widthIn.value)); saveMatch({ match_width_m: +widthIn.value }); };
+  detourIn.onchange = () => saveMatch({ match_detour_m: +detourIn.value });
   panel.querySelector("[data-del]").onclick = async () => {
     if (!confirm(`Delete the segment “${s.name}” and all its efforts?\n\nActivities are not touched.`)) return;
     await api(`segments/${id}`, { method: "DELETE" });
@@ -508,7 +528,8 @@ async function renderSegment(id, params) {
   cardResize(mapEl.closest(".card"), () => mapEl.offsetHeight, (h) => { mapEl.style.height = `${h}px`; activeMap?.resize(); }, 220, 1000);
   // The segment line dashed (a segment, not an activity), both ends yellow when two-way.
   let route = null;
-  const mapReady = showRouteMap("seg-map", s.polyline, { dashed: true, ends: s.two_way ? SEG_TWO_WAY_END : null }).catch((e) => {
+  const mapReady = showRouteMap("seg-map", s.polyline, { dashed: true, ends: s.two_way ? SEG_TWO_WAY_END : null,
+    corridor: s.match_width_m !== SEG_WIDTH_DEFAULT ? s.match_width_m : 0 }).catch((e) => {
     document.getElementById("seg-map").outerHTML = state("Map unavailable: " + esc(e.message), "bad") + staticMap(s.polyline, { dashed: true, twoWay: s.two_way });
   });
   // Data: altitude or surface of the reference effort's activity, cut to the segment.

@@ -33,8 +33,10 @@ from datetime import UTC, date, datetime, timedelta
 from . import streams
 
 # v2: watch thresholds, load_estimated; v3: effort positions, ride; v4: 30 km ride;
-# v5: power over pauses, up to 5 h; v6: watch FTP per sport, FTP corrected per activity
-ANALYSIS_VERSION = 6
+# v5: power over pauses, up to 5 h; v6: watch FTP per sport, FTP corrected per activity;
+# v7: top speed (rides), distance within a time (Cooper 12 min, the hour), biggest climb and
+# steepest 1 km (runs and rides)
+ANALYSIS_VERSION = 7
 
 # Best efforts (SPEC §7.5). Pace: metres → best time in s. Power / HR: seconds → best mean.
 # Ride: kilometres → best time in s (kind "ride"). Efforts also keep where they happened
@@ -59,6 +61,31 @@ POWER_DURATIONS_S = (
     18000,
 )
 HR_DURATIONS_S = (10, 30, 60, 120, 300, 600, 1200, 1800, 3600)
+# Top speed of rides (kind "speed", key = seconds, value = m/s): the best mean over 1 min from
+# the distance, only over seconds the data can be trusted (see top_speed_at).
+SPEED_DURATIONS_S = (60,)
+# Distance within a time (kind "within", key = seconds, value = m): the longest distance covered
+# in that time - runs 12 min (the Cooper test), rides 1 h (the hour).
+WITHIN_S = {"run": (720,), "ride": (3600,)}
+# Climbs of runs and rides, from the altitude stream after jumps are taken out (clean_altitude):
+# the biggest single climb (kind "climb", key 0, value = m gained) - from a low point to its top,
+# dips on the way allowed while each is at most CLIMB_DIP_SHARE as long as the rise before it and
+# loses at most CLIMB_DIP_DROP of the height gained (as the climbs on the altitude chart) - and the
+# steepest stretch of GRADE_DISTANCES_M (kind "grade", key = m, value = % average grade).
+ALT_JUMP_MS = 4.0  # altitude changing faster than this (m/s): a jump (GPS, barometer reset)
+CLIMB_PIVOT_M = 3.0  # wiggles under this are noise
+CLIMB_DIP_SHARE, CLIMB_DIP_DROP = 0.25, 1 / 3
+CLIMB_MIN_M = 20.0
+GRADE_DISTANCES_M = (1000,)
+GRADE_MAX_VS = 1.5  # m/s of height gained: faster is no climbing by bike or on foot
+GRADE_MAX_PCT = 40.0
+GRADE_PIECE_M, GRADE_PIECE_PCT = 50.0, 30.0  # a stretch with 50 m steeper than 30 %: altitude drift
+SPEED_MAX_MS = 80 / 3.6  # 80 km/h: faster over a second is a jump of the position
+SPEED_ACCEL_MS2 = 3.0  # speed changing faster than this per second: a jump, not riding
+SPEED_AGREE_MS, SPEED_AGREE_SHARE = 1.5, 0.15  # distance and the device's speed agree within
+SPEED_TRACK_SHARE = 0.10  # the window's distance and the track's length agree within
+SPEED_PAD_S = 5  # seconds next to a doubtful one are not trusted either
+SPEED_STEP_S = 5  # samples further apart: no speed for that stretch
 MAX_GAP_S = 10  # longer gaps in a stream break a window (pause, lost signal)
 
 DEFAULT_HR_REST = 60
@@ -284,6 +311,254 @@ def best_time_for_distance_at(
     return (best, start) if best is not None else None
 
 
+def _metres(lat0: float, lon0: float, lat1: float, lon1: float) -> float:
+    """Distance of two near points (equirectangular, plenty for a few metres)."""
+    k = math.pi / 180
+    x = (lon1 - lon0) * k * math.cos((lat0 + lat1) / 2 * k)
+    return 6371000.0 * math.hypot(x, (lat1 - lat0) * k)
+
+
+def top_speed_at(
+    time: list,
+    distance: list,
+    window: int,
+    lat: list | None = None,
+    lon: list | None = None,
+    speed: list | None = None,
+) -> tuple[float, int] | None:
+    """Best mean speed (m/s) over `window` seconds without GPS glitches: (speed, start second).
+
+    The speed of each second comes from the distance between two samples. A second is not
+    trusted when the samples are more than SPEED_STEP_S apart, the speed is over SPEED_MAX_MS,
+    it changes by more than SPEED_ACCEL_MS2 from the stretch before (a jump of the position),
+    or it disagrees with the device's own speed (Doppler or a sensor) by more than
+    SPEED_AGREE_MS / SPEED_AGREE_SHARE; SPEED_PAD_S seconds around such a second are dropped
+    too (the signal settles). A window counts only when every second is trusted and, with a
+    track, the track's length agrees with the distance within SPEED_TRACK_SHARE."""
+    n = len(time)
+    pts = [
+        k for k in range(n) if time[k] is not None and k < len(distance) and distance[k] is not None
+    ]
+    if len(pts) < 2:
+        return None
+    end = int(time[pts[-1]]) + 1
+    v1: list[float | None] = [None] * end  # speed of each second (m/s)
+    g1: list[float | None] = [None] * end  # track length in each second (m), None without
+    bad = [False] * end
+    prev_v = prev_dt = None
+    prev_secs: range | None = None
+    for k0, k1 in zip(pts, pts[1:], strict=False):
+        t0, t1 = time[k0], time[k1]
+        dt = t1 - t0
+        if dt <= 0:
+            continue
+        if dt > SPEED_STEP_S:
+            prev_v = None
+            continue
+        v = (distance[k1] - distance[k0]) / dt
+        secs = range(int(t0), min(int(t1), end))
+        ok = 0 <= v <= SPEED_MAX_MS
+        dev = speed[k1] if speed and k1 < len(speed) else None
+        if ok and dev is not None:
+            ok = abs(v - dev) <= max(SPEED_AGREE_MS, SPEED_AGREE_SHARE * max(v, dev))
+        if prev_v is not None and abs(v - prev_v) / ((dt + prev_dt) / 2) > SPEED_ACCEL_MS2:
+            ok = False
+            for s in prev_secs or ():
+                bad[s] = True
+        g = None
+        if lat and lon and k1 < len(lat) and k1 < len(lon):
+            a0, o0, a1, o1 = lat[k0], lon[k0], lat[k1], lon[k1]
+            if None not in (a0, o0, a1, o1):
+                g = _metres(a0, o0, a1, o1) / dt
+        for s in secs:
+            v1[s], g1[s] = v, g
+            if not ok:
+                bad[s] = True
+        prev_v, prev_dt, prev_secs = v, dt, secs
+    clean = list(v1)
+    for s in range(end):
+        if bad[s]:
+            for j in range(max(0, s - SPEED_PAD_S), min(end, s + SPEED_PAD_S + 1)):
+                clean[j] = None
+    if end < window:
+        return None
+    best = None
+    start = 0
+    tot = tot_g = 0.0
+    missing = missing_g = 0
+    for i in range(end):
+        v, g = clean[i], g1[i]
+        if v is None:
+            missing += 1
+        else:
+            tot += v
+        if g is None:
+            missing_g += 1
+        else:
+            tot_g += g
+        if i >= window:
+            ov, og = clean[i - window], g1[i - window]
+            if ov is None:
+                missing -= 1
+            else:
+                tot -= ov
+            if og is None:
+                missing_g -= 1
+            else:
+                tot_g -= og
+        if i < window - 1 or missing:
+            continue
+        if missing_g == 0 and abs(tot_g - tot) > SPEED_TRACK_SHARE * tot:
+            continue  # the track says another distance: the positions or the distance jumped
+        mean = tot / window
+        if best is None or mean > best:
+            best, start = mean, i - window + 1
+    return (best, start) if best is not None and best > 0 else None
+
+
+def best_distance_in_at(time: list, distance: list, seconds: float) -> tuple[float, float] | None:
+    """Longest distance (m) covered within `seconds` (two pointers over the distance stream,
+    the end interpolated): (metres, start time)."""
+    pts = [(t, d) for t, d in zip(time, distance, strict=False) if t is not None and d is not None]
+    if len(pts) < 2 or pts[-1][0] - pts[0][0] < seconds:
+        return None
+    best = None
+    start = 0.0
+    j = 0
+    for i in range(len(pts)):
+        end_t = pts[i][0] + seconds
+        while j < len(pts) and pts[j][0] < end_t:
+            j += 1
+        if j >= len(pts):
+            break
+        t0, d0 = pts[j - 1]
+        t1, d1 = pts[j]
+        frac = 0.0 if t1 == t0 else (end_t - t0) / (t1 - t0)
+        metres = d0 + frac * (d1 - d0) - pts[i][1]
+        if best is None or metres > best:
+            best, start = metres, pts[i][0]
+    return (best, start) if best else None
+
+
+def clean_altitude(time: list, altitude: list) -> list[float | None]:
+    """The altitude with its jumps taken out: a change faster than ALT_JUMP_MS between two samples
+    (a GPS jump, the barometer set again) shifts everything after it back by that step."""
+    out: list[float | None] = []
+    shift = 0.0
+    last_t = last_a = None
+    for t, a in zip(time, altitude, strict=False):
+        if t is None or a is None:
+            out.append(None)
+            continue
+        if last_a is not None:
+            dt = max(t - last_t, 1.0)
+            step = a + shift - last_a
+            if abs(step) / dt > ALT_JUMP_MS:
+                shift -= step
+        v = a + shift
+        out.append(v)
+        last_t, last_a = t, v
+    return out
+
+
+def _pivots(v: list[float], th: float = CLIMB_PIVOT_M) -> list[int]:
+    """Turning points of a series, ignoring wiggles under `th`."""
+    if len(v) < 2:
+        return []
+    piv, trend, ext = [0], 0, 0
+    for i in range(1, len(v)):
+        if trend == 0:
+            if abs(v[i] - v[ext]) >= th:
+                trend, ext = (1 if v[i] > v[ext] else -1), i
+        elif trend * (v[i] - v[ext]) >= 0:
+            ext = i
+        elif trend * (v[ext] - v[i]) >= th:
+            piv.append(ext)
+            trend, ext = -trend, i
+    piv.append(ext)
+    return piv
+
+
+def biggest_climb(dist: list[float], alt: list[float]) -> tuple[float, int, int] | None:
+    """The biggest single climb of a route (distance in m, cleaned altitude, same length):
+    (metres gained, first index, last index); None under CLIMB_MIN_M."""
+    piv = _pivots(alt)
+    best = None
+    cur = None  # [i0, i1, rise of the last rise]
+
+    def close():
+        nonlocal best, cur
+        if cur:
+            gain = alt[cur[1]] - alt[cur[0]]
+            if gain >= CLIMB_MIN_M and (best is None or gain > best[0]):
+                best = (gain, cur[0], cur[1])
+        cur = None
+
+    for a, b in zip(piv, piv[1:], strict=False):
+        length = dist[b] - dist[a]
+        if alt[b] > alt[a]:
+            if cur is None:
+                cur = [a, b, length]
+            else:
+                cur[2] = length
+                if alt[b] > alt[cur[1]]:
+                    cur[1] = b
+        elif (
+            cur is None
+            or length > CLIMB_DIP_SHARE * cur[2]
+            or alt[a] - alt[b] > CLIMB_DIP_DROP * (alt[cur[1]] - alt[cur[0]])
+        ):
+            close()
+    close()
+    return best
+
+
+def steepest_at(
+    time: list, dist: list, alt: list, metres: float
+) -> tuple[float, float, float] | None:
+    """Steepest average grade (%) over `metres` of distance: (grade, start time, end time).
+    A stretch counts only when the height was gained at most GRADE_MAX_VS m/s, the grade is at
+    most GRADE_MAX_PCT and no GRADE_PIECE_M of it is steeper than GRADE_PIECE_PCT (else the
+    distance jumped or the altitude drifted while hardly moving, e.g. the barometer indoors)."""
+    pts = [(t, d, a) for t, d, a in zip(time, dist, alt, strict=False)
+           if t is not None and d is not None and a is not None]  # fmt: skip
+    if len(pts) < 2 or pts[-1][1] - pts[0][1] < metres:
+        return None
+    # samples inside a too steep piece; bad_sum[k] = how many before sample k
+    bad = [False] * len(pts)
+    j = 0
+    for i in range(len(pts)):
+        while j < len(pts) and pts[j][1] - pts[i][1] < GRADE_PIECE_M:
+            j += 1
+        if j >= len(pts):
+            break
+        if (pts[j][2] - pts[i][2]) / (pts[j][1] - pts[i][1]) * 100 > GRADE_PIECE_PCT:
+            for k in range(i, j + 1):
+                bad[k] = True
+    bad_sum = [0]
+    for b in bad:
+        bad_sum.append(bad_sum[-1] + b)
+    best = None
+    j = 0
+    for i in range(len(pts)):
+        need = pts[i][1] + metres
+        while j < len(pts) and pts[j][1] < need:
+            j += 1
+        if j >= len(pts):
+            break
+        t0, d0, a0 = pts[j - 1]
+        t1, d1, a1 = pts[j]
+        f = 0.0 if d1 == d0 else (need - d0) / (d1 - d0)
+        end_t, end_a = t0 + f * (t1 - t0), a0 + f * (a1 - a0)
+        gain, span = end_a - pts[i][2], end_t - pts[i][0]
+        if gain <= 0 or span <= 0 or gain / span > GRADE_MAX_VS or bad_sum[j + 1] - bad_sum[i]:
+            continue
+        grade = gain / metres * 100
+        if grade <= GRADE_MAX_PCT and (best is None or grade > best[0]):
+            best = (grade, pts[i][0], end_t)
+    return best
+
+
 def normalized_power(power_1hz: list[float | None]) -> float | None:
     """Weighted power: 4th-power mean of the 30 s rolling average (missing samples = 0 W)."""
     p = [v or 0.0 for v in power_1hz]
@@ -372,6 +647,30 @@ def analyse(activity: sqlite3.Row, ch: dict[str, list], th: Thresholds) -> Analy
             r = best_time_for_distance_at(time, ch["distance"], m)
             if r is not None:
                 efforts.append((distances[0], m, round(r[0], 1), r[1] - t0, r[1] - t0 + r[0]))
+    if group in ("run", "ride") and ch.get("distance") and ch.get("altitude") and time:
+        alt = clean_altitude(time, ch["altitude"])
+        dist = ch["distance"]
+        n = min(len(time), len(alt), len(dist))
+        keep = [k for k in range(n) if None not in (time[k], alt[k], dist[k])]
+        if len(keep) > 1:
+            c = biggest_climb([dist[k] for k in keep], [alt[k] for k in keep])
+            if c is not None:
+                s0, s1 = time[keep[c[1]]] - t0, time[keep[c[2]]] - t0
+                efforts.append(("climb", 0, round(c[0], 1), s0, s1))
+        for m in GRADE_DISTANCES_M:
+            r = steepest_at(time, ch["distance"], alt, m)
+            if r is not None:
+                efforts.append(("grade", m, round(r[0], 2), r[1] - t0, r[2] - t0))
+    if ch.get("distance") and time:
+        for s in WITHIN_S.get(group, ()):
+            r = best_distance_in_at(time, ch["distance"], s)
+            if r is not None:
+                efforts.append(("within", s, round(r[0], 1), r[1] - t0, r[1] - t0 + s))
+    if group == "ride" and ch.get("distance") and time:
+        for s in SPEED_DURATIONS_S:
+            r = top_speed_at(time, ch["distance"], s, ch.get("lat"), ch.get("lon"), ch.get("speed"))
+            if r is not None:
+                efforts.append(("speed", s, round(r[0], 2), r[1] - int(t0), r[1] - int(t0) + s))
 
     load = method = None
     if np_power and th.ftp and duration:
@@ -405,7 +704,9 @@ def _channels(conn: sqlite3.Connection, activity_id: int) -> dict[str, list]:
         r["channel"]: streams.decode(r["encoding"], r["data"])
         for r in conn.execute(
             """SELECT channel, encoding, data FROM streams
-               WHERE activity_id = ? AND channel IN ('time', 'hr', 'power', 'distance')""",
+               WHERE activity_id = ?
+                 AND channel IN ('time', 'hr', 'power', 'distance', 'lat', 'lon', 'speed',
+                                 'altitude')""",
             (activity_id,),
         )
     }

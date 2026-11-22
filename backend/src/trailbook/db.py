@@ -584,6 +584,12 @@ MIGRATIONS: list[str] = [
         pushed_at   TEXT                        -- sent to Home Assistant (records.publish)
     );
     """,
+    # v36 — how loosely a segment matches (segments.py): the corridor's half width and one
+    # detour, per segment; NULL = the defaults.
+    """
+    ALTER TABLE segments ADD COLUMN match_width_m REAL;
+    ALTER TABLE segments ADD COLUMN match_detour_m REAL;
+    """,
 ]
 
 SCHEMA_VERSION = len(MIGRATIONS)

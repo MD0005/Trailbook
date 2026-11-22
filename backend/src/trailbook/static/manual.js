@@ -487,7 +487,7 @@ function manualCharts() {
         ])}
         <p>Averages are weighted by time; a recording gap counts at most ${num(R.max_gap_s)} s. HR max is the top of Garmin's zones, else the activity's maximum.</p>
         ${mPanel("Without heart rate")}
-        <p>A bike computer with a power meter and no strap: the same blocks from power. Height from 0 W to the top of Garmin's power zones (an open last zone ends ${mPct((R.open_zone ?? 1) - 1)} above its start), colour = the power zone in the heart rate colours.</p>`,
+        <p>A bike computer with a power meter and no strap: the same blocks from power. Height from 0 W to the top of Garmin's power zones (an open last zone ends ${mPct((R.open_zone ?? 1) - 1)} above its start), colour = the power zone in the power zone colours (grey, blue, green, yellow, red, violet, black).</p>`,
     },
     {
       id: "phases", title: "How the phases are found", sum: "Stretches of one zone",

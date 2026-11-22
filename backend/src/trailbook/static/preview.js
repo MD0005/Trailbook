@@ -61,6 +61,7 @@ const ICON = {
   tilesLarge: svg(`<rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x="13" y="3" width="8" height="8" rx="1.5"/><rect x="3" y="13" width="8" height="8" rx="1.5"/><rect x="13" y="13" width="8" height="8" rx="1.5"/>`),
   grip: svg(`<circle cx="9" cy="6" r="1"/><circle cx="15" cy="6" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="9" cy="18" r="1"/><circle cx="15" cy="18" r="1"/>`),
   chevron: svg(`<path d="M6 9l6 6 6-6"/>`),
+  sliders: svg(`<path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/>`),
 };
 
 // Accent colours (light theme, dark theme). Chosen in Settings › General.
@@ -99,6 +100,7 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
 const num = (v, digits = 0) => Number(v).toLocaleString("en-US", { minimumFractionDigits: digits, maximumFractionDigits: digits }).replace(/,/g, " ").replace(".", ",");
 const unit = (v, u, digits = 0) => (v == null ? "–" : `${num(v, digits)} ${u}`);
 const km = (m) => (m == null ? "–" : `${num(m / 1000, 2)} km`); // distance: always 2 decimals
+const kmh = (ms) => (ms == null ? "–" : `${num(ms * 3.6, 1)} km/h`); // a speed in m/s
 const bpm = (v) => unit(v, "bpm");
 const meters = (v) => unit(v, "m");
 const watts = (v) => unit(v, "W");
@@ -279,6 +281,7 @@ function renderHeader(section) {
   menu.querySelectorAll("[data-person]").forEach((b) => b.onclick = () => {
     CURRENT = b.dataset.person;
     store.set("person", CURRENT);
+    setMenu(false);
     route();
   });
   setupTheme();
@@ -624,7 +627,7 @@ const TILE_CLIMB = { min_m: 5, share: 0.12 };
 function tileChart(tc) {
   const W = 400, H = 160, svg = (body) => `<svg class="tile-chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">${body}</svg>`;
   if (!tc) return `<span class="hint">no chart data</span>`;
-  const zoneColor = (z, n) => (z ? rampColor(ROUTE_SCALES.hr.stops, n > 1 ? (z - 1) / (n - 1) : 0) : "var(--muted)");
+  const zoneColor = (z, n) => (!z ? "var(--muted)" : tc.power ? powerZoneColor(z) : rampColor(ROUTE_SCALES.hr.stops, n > 1 ? (z - 1) / (n - 1) : 0));
   if (tc.kind === "blocks") {
     // blocks side by side (no gaps), height = heart rate from the resting to the maximum, a
     // dashed line at the average heart rate. Each block: its zone colour under a light vertical
@@ -1083,7 +1086,7 @@ async function renderActivity(id) {
     if (lowFirst && v < b[0]) return null;
     let k = his.findIndex((hi) => v < hi);
     if (k < 0) k = his.length - 1; // above the last limit: the top zone
-    return [k + 1, rampColor(ROUTE_SCALES[kind].stops, his.length > 1 ? k / (his.length - 1) : 0)];
+    return [k + 1, kind === "power" ? powerZoneColor(k + 1) : rampColor(ROUTE_SCALES[kind].stops, his.length > 1 ? k / (his.length - 1) : 0)];
   };
   const sections = iv && chartX ? (() => {
     const t = chartX.time, d = chartX.distance;
@@ -1324,8 +1327,8 @@ async function renderActivity(id) {
   const renderTop = (records, year) => {
     const cmp = COMPARE.find(([k]) => k === compare) || COMPARE[0];
     const efforts = (a.best_efforts || []).map((e) => {
-      const r = records ? records[`${e.kind}:${e.key}`] : { value: e.record, start_time_utc: e.record_time, utc_offset_s: e.record_offset_s };
-      const y = year?.[`${e.kind}:${e.key}`];
+      const r = records ? records[`${e.kind}:${e.key}:${e.v}`] : { value: e.record, start_time_utc: e.record_time, utc_offset_s: e.record_offset_s };
+      const y = year?.[`${e.kind}:${e.key}:${e.v}`];
       const rec = r?.start_time_utc ? r : null;
       // the best before this activity: what a new record beat, and how long it stood
       const before = (p) => (p ? { value: p.value, date: localTime(p).slice(0, 10),
@@ -1337,9 +1340,15 @@ async function renderActivity(id) {
     });
     const top = view.querySelector("[data-top]");
     const tiles = tilesHtml();
+    // tiles one under another in a column (nothing without a tile)
+    const col = (...cards) => (cards.some(Boolean) ? `<div class="act-col-hr">${cards.join("")}</div>` : "");
     top.innerHTML = `<div class="act-col-stats${(tiles.match(/stat-col/g) || []).length > 1 ? " two" : ""}" data-tiles>${tiles}</div>${(a.devices || []).length <= 1
-      ? `<div class="act-col-dev">${devicesHtml(a)}${surfaceCardHtml(a)}</div>${hrZonesCard(a)}`
-      : `${devicesHtml(a)}${hrZonesCard(a) || surfaceCardHtml(a) ? `<div class="act-col-hr">${hrZonesCard(a)}${surfaceCardHtml(a)}</div>` : ""}`}${powerCard(a, efforts) || hrCurveCard(efforts)}${effortsCard(efforts, cmp[0], a.category, a.segments || [])}`;
+      // no device tile: the surface goes under the heart rate zones (no column of its own that
+      // would take room from the power curve)
+      // Power in zones goes under the heart rate zones
+      ? (devicesHtml(a) ? `<div class="act-col-dev">${devicesHtml(a)}${surfaceCardHtml(a)}</div>${col(hrZonesCard(a), powerZonesCard(a))}`
+        : col(hrZonesCard(a), powerZonesCard(a), surfaceCardHtml(a)))
+      : `${devicesHtml(a)}${col(hrZonesCard(a), powerZonesCard(a), surfaceCardHtml(a))}`}${powerCard(a, efforts) || hrCurveCard(efforts)}${effortsCard(efforts, cmp[0], a.category, a.segments || [], a.start_time_utc.slice(0, 4), a.category === "ride" && Boolean(a.indoor))}`;
     // A zone row: where the heart rate (or power, as drawn) was in that zone, on charts and map.
     top.querySelectorAll("[data-zone]").forEach((el) => {
       const [kind, lo, hi] = el.dataset.zone.split(":");
@@ -1380,10 +1389,11 @@ async function renderActivity(id) {
       onHover: highlightEffort,
     });
     bindSlides(top);
+    fitZoneStrip(top);
     if (surfaceData) fillSurfaceTile();
   };
   // Best efforts: this year always, the comparison (all time by default) as the last column.
-  const byKey = (r) => Object.fromEntries(r.records.map((x) => [`${x.kind}:${x.key}`, x]));
+  const byKey = (r) => Object.fromEntries(r.records.map((x) => [`${x.kind}:${x.key}:${x.v}`, x]));
   let yearRecords = null;
   const loadCompare = async () => {
     const [yr, cr] = await Promise.all([
@@ -1604,7 +1614,7 @@ const clock = (s) => {
 };
 
 // Garmin's time in zones (from the FIT file) as one bar per zone, highest zone on top, in the
-// zone colours (HR green → red, power yellow → violet, as on the route map). Share only; the
+// zone colours (HR green → red, power grey → black, as on the route map). Share only; the
 // time and the zone range on hover.
 function zoneBars(a, kind) {
   let z = null;
@@ -1622,7 +1632,7 @@ function zoneBars(a, kind) {
   const max = Math.max(...zones.map((x) => x.t), 1);
   const rng = (x, k) => (k === zones.length - 1 && x.hi >= 1000 ? `${num(x.lo)}+` : k === 0 && !x.lo ? `under ${num(x.hi)}` : `${num(x.lo)}–${num(x.hi)}`);
   return `<div class="zone-bars${kind === "power" ? " with-time" : ""}">${zones.map((x, k) => {
-    const c = rampColor(ROUTE_SCALES[kind].stops, zones.length > 1 ? k / (zones.length - 1) : 0);
+    const c = kind === "power" ? powerZoneColor(k + 1) : rampColor(ROUTE_SCALES[kind].stops, zones.length > 1 ? k / (zones.length - 1) : 0);
     return `<div class="zone-row" style="--zc:${c}" data-zone="${kind}:${x.lo}:${x.hi}" data-tip="Zone ${k + 1} (${rng(x, k)} ${unitLabel}): ${x.t ? clock(x.t) : "no time"}"><span class="zone-name">Z${k + 1}</span>
       <span class="zone-bar"><span style="width:${(x.t / max) * 100}%"></span></span>${kind === "power" ? `<span class="zone-time">${x.t ? clock(x.t) : "–"}</span>` : ""}<span class="zone-pct">${num((x.t / total) * 100)}%</span></div>`;
   }).reverse().join("")}${lowFirst && d.times[0] / total >= 0.01 ? `<div class="zone-row zone-below" style="--zc:var(--muted)" data-tip="Below zone 1 (under ${num(b[0])} ${unitLabel}): ${clock(d.times[0])}">
@@ -1650,18 +1660,56 @@ function surfaceShareHtml(sf) {
   return `<div class="surface-bar">${kinds.map((k) => `<span class="surface-swatch s-${k}" style="width:${(sf.shares[k] / total) * 100}%" data-surface-kind="${k}" data-tip="${SURFACE_LABEL[k]}: ${km(sf.shares[k])}"></span>`).join("")}</div>
     <div class="surface-list">${kinds.map((k) => `<span data-surface-kind="${k}" data-tip="${SURFACE_LABEL[k]}: ${km(sf.shares[k])}"><i class="surface-swatch s-${k}"></i>${SURFACE_LABEL[k]} <b>${num((sf.shares[k] / total) * 100)}%</b></span>`).join("")}</div>`;
 }
-// Power (rides: a power meter, not an estimate): a sliding tile - the power curve first, then
-// the time in power zones.
+// Power curve (rides: a power meter, not an estimate).
 function powerCard(a, efforts) {
-  if (a.category !== "ride") return "";
-  const hasCurve = efforts.filter((e) => e.kind === "power").length >= 2, bars = zoneBars(a, "power");
-  const slides = [
-    hasCurve && `<div class="slide"><h3 class="tile-title">${metricIcon("power", 18)}<span>Power curve</span></h3><div class="curve-box" data-power-curve></div></div>`,
-    bars && `<div class="slide"><h3 class="tile-title">${metricIcon("time_in_power_zone", 18)}<span>Power in zones</span></h3>${bars}</div>`,
-  ].filter(Boolean);
-  if (!slides.length) return "";
-  return `<div class="card act-tile act-power"><div class="slides" data-slides>${slides.join("")}</div>
-    ${slides.length > 1 ? `<div class="slide-dots">${slides.map((_, k) => `<button type="button" class="${k ? "" : "on"}" data-slide="${k}" aria-label="Slide ${k + 1}"></button>`).join("")}</div>` : ""}</div>`;
+  if (a.category !== "ride" || efforts.filter((e) => e.kind === "power").length < 2) return "";
+  return `<div class="card act-tile act-power"><h3 class="tile-title">${metricIcon("power", 18)}<span>Power curve</span></h3>
+    <div class="curve-box" data-power-curve></div></div>`;
+}
+// Power in zones: a small tile of its own (like Surface) with the zones as one bar.
+function powerZonesCard(a) {
+  const strip = a.category === "ride" ? powerZoneStrip(a) : "";
+  return strip ? `<div class="card act-tile act-pzones"><h3 class="tile-title">${metricIcon("time_in_power_zone", 18)}<span>Power in zones</span></h3>${strip}</div>` : "";
+}
+// Time in power zones as one bar (as wide as the surface bar's tile allows): each zone its share
+// in fixed colours, Z1 grey … Z7 black; the share over a zone and its name under it only where
+// they fit (fitZoneStrip); hovering a zone: its range, share and time, and where it was on the
+// charts and the map.
+const POWER_ZONE_COLORS = ["#a3a9b3", "#4a90e2", "#43a047", "#f2c200", "#e53935", "#8e44ad", "var(--zone-black)"];
+// Power zone z (1…) in the colours above - everywhere power zones are shown.
+const powerZoneColor = (z) => POWER_ZONE_COLORS[Math.min(Math.max(z, 1), POWER_ZONE_COLORS.length) - 1];
+const PZ_LABEL_MIN = 0.15; // a zone with a smaller share gets neither its share nor its name
+function powerZoneStrip(a) {
+  let z = null;
+  try { z = a.zones ? JSON.parse(a.zones) : null; } catch { z = null; }
+  const d = z?.power;
+  if (!d) return "";
+  const b = d.bounds;
+  const lowFirst = b[0] === 0; // cycling power starts at 0: times[0] (under 0 W) belongs to zone 1
+  const zones = lowFirst ? b.slice(1).map((hi, k) => ({ lo: b[k], hi, t: (d.times[k + 1] || 0) + (k ? 0 : d.times[0] || 0) }))
+    : b.map((hi, k) => ({ lo: k ? b[k - 1] : 0, hi, t: d.times[k] || 0 }));
+  const total = zones.reduce((s, x) => s + x.t, 0);
+  if (!total) return "";
+  const rng = (x, k) => (k === zones.length - 1 && x.hi >= 1000 ? `${num(x.lo)}+` : `${num(x.lo)}–${num(x.hi)}`);
+  const parts = zones.map((x, k) => ({ ...x, k, share: x.t / total })).filter((x) => x.t > 0);
+  const col = (x) => POWER_ZONE_COLORS[Math.min(x.k, POWER_ZONE_COLORS.length - 1)];
+  const grid = parts.map((x) => `${x.share}fr`).join(" ");
+  return `<div class="pz-strip" style="grid-template-columns:${grid}">
+    ${parts.map((x) => `<span class="pz-pct" data-fit>${x.share >= PZ_LABEL_MIN ? `${num(x.share * 100)}%` : ""}</span>`).join("")}
+    ${parts.map((x, i) => `<span class="pz-seg${i ? "" : " first"}${i === parts.length - 1 ? " last" : ""}" style="--zc:${col(x)}" data-zone="power:${x.lo}:${x.hi}" data-tip="Zone ${x.k + 1} (${rng(x, x.k)} W): ${num(x.share * 100)} % · ${clock(x.t)}"></span>`).join("")}
+    ${parts.map((x) => `<span class="pz-name" data-fit>${x.share >= PZ_LABEL_MIN ? `Z${x.k + 1}` : ""}</span>`).join("")}</div>`;
+}
+// The shares and zone names only where they fit with a little room; the others stay empty.
+function fitZoneStrip(root) {
+  root.querySelectorAll(".pz-strip").forEach((s) => {
+    const fit = () => s.querySelectorAll("[data-fit]").forEach((el) => {
+      const r = document.createRange();
+      r.selectNodeContents(el);
+      el.style.visibility = r.getBoundingClientRect().width + 6 > el.clientWidth ? "hidden" : "";
+    });
+    fit();
+    if (!s._fit) { s._fit = new ResizeObserver(fit); s._fit.observe(s); } // the tile changes width
+  });
 }
 // Heart rate curve tile (shown instead of the power tile when there is none).
 function hrCurveCard(efforts) {
@@ -1688,36 +1736,48 @@ const COMPARE_SHORT = { all: ["ATH", "All-time best"], year: ["YTD", "Best this 
 // Tooltip of a record laurel: by how much the previous best ({value, date, days}) is beaten and
 // how long it stood. Times in seconds (lower is better), or watts with `isPower`.
 // isPower: higher is better, in W; "km": higher is better, a distance (the longest)
+// "kmh": higher is better, a speed in m/s (the top speed)
 function recordTip(tip, value, p, isPower) {
   if (!p) return `${tip}: this activity, the first result`;
   const d = p.value - value;
-  const fmt = (v) => (isPower === "km" ? km(v) : isPower ? watts(v) : clock(v));
-  const gain = isPower === "km" ? `${km(-d)} farther` : isPower ? `${watts(-d)} more` : `${d < 60 ? `${num(d, d < 10 ? 1 : 0)} s` : clock(d)} faster`;
+  const fmt = (v) => (isPower === "km" ? km(v) : isPower === "kmh" ? kmh(v) : isPower === "m" ? meters(v) : isPower === "pct" ? `${num(v, 1)} %` : isPower ? watts(v) : clock(v));
+  const gain = isPower === "km" ? `${km(-d)} farther` : isPower === "m" ? `${meters(-d)} more` : isPower === "pct" ? `${num(-d, 1)} % steeper` : isPower === "kmh" ? `${kmh(-d)} faster` : isPower ? `${watts(-d)} more` : `${d < 60 ? `${num(d, d < 10 ? 1 : 0)} s` : clock(d)} faster`;
   return `${tip}: this activity. ${gain} than ${fmt(p.value)} from ${p.date} (${num(p.days)} ${p.days === 1 ? "day" : "days"} earlier)`;
 }
-function effortsCard(efforts, compareKey, category, segs = []) {
+// year: the activity's year - its column holds the best of that whole year ("YTD" this year)
+// indoor: an indoor ride (virtual, trainer) - its distances and top speed are records of their own
+function effortsCard(efforts, compareKey, category, segs = [], year = todayDay().slice(0, 4), indoor = false) {
   const ride = category === "ride";
-  // Distances (fastest time), then the longest distance ("Max"); on rides also the best 20 min
-  // and 1 h power.
-  const order = (e) => (e.kind === "power" ? 2 : e.kind === "longest" ? 1 : 0);
+  const thisYear = year === todayDay().slice(0, 4);
+  const yearTip = thisYear ? "Best this year" : `Best in ${year}`;
+  // Distances (fastest time), then the longest distance ("Max"); on rides also the top speed
+  // over 1 min and the best 20 min and 1 h power.
+  // distances, then Distance, Ascent and Steepest side by side, Speed1m and Hour (Cooper), power
+  const RANK = { longest: 1, ascent: 2, grade: 3, speed: 4, within: 5, power: 6 };
+  const order = (e) => RANK[e.kind] || 0;
   const list = efforts.map((e, k) => ({ ...e, k }))
-    .filter((e) => e.kind === "pace" || e.kind === "ride" || e.kind === "longest" || (ride && e.kind === "power" && (e.key === 1200 || e.key === 3600)))
+    .filter((e) => e.kind === "pace" || e.kind === "ride" || e.kind === "longest" || e.kind === "within" || e.kind === "ascent" || e.kind === "grade" || (ride && e.kind === "speed") || (ride && e.kind === "power" && (e.key === 1200 || e.key === 3600)))
     .sort((p, q) => order(p) - order(q) || p.key - q.key);
   if (!list.length && !segs.length) return "";
   const [short, long] = COMPARE_SHORT[compareKey] || COMPARE_SHORT.all;
-  const longest = (e) => e.kind === "longest";
-  const power = (e) => e.kind === "power" || longest(e); // one wide value, higher is better
+  const longest = (e) => e.kind === "longest" || e.kind === "within"; // a distance, higher is better
+  const power = (e) => e.kind === "power" || e.kind === "speed" || e.kind === "ascent" || e.kind === "grade" || longest(e); // one wide value, higher is better
   const better = (e, v, than) => than != null && (power(e) ? v >= than - 0.05 : v <= than + 0.05);
-  const val = (e, v) => (longest(e) ? km(v) : power(e) ? watts(v) : clock(v));
+  const val = (e, v) => (e.kind === "ascent" ? meters(v) : e.kind === "grade" ? `${num(v, 1)} %` : longest(e) ? km(v) : e.kind === "speed" ? kmh(v) : power(e) ? watts(v) : clock(v));
   const speed = (e, t) => (power(e) ? "" : ride ? `${num((e.key / t) * 3.6, 1)} km/h` : `${clock(t / (e.key / 1000))} /km`);
-  const name = (e) => (longest(e) ? `<span data-tip="Longest distance in one activity">Max</span>`
-    : power(e) ? (e.key === 1200 ? "Power20" : "Power1h") : EFFORT_NAMES[e.key] || km(e.key));
+  const name = (e) => (e.kind === "grade" ? `<span data-tip="Steepest 1 km: the highest average grade over 1 km; altitude and distance jumps left out">Steepest</span>`
+    : e.kind === "ascent" ? `<span data-tip="Elevation gain of the whole activity">Ascent</span>`
+    : e.kind === "within" ? (e.key === 720 ? `<span data-tip="Longest distance run within 12 minutes (Cooper test)">Cooper</span>`
+      : `<span data-tip="Longest distance within ${durFull(e.key)}">Hour</span>`)
+    : longest(e) ? `<span data-tip="Longest distance in one activity">Distance</span>`
+    : e.kind === "speed" ? `<span data-tip="Top speed held for 1 minute (stretches with GPS jumps left out)">Speed1m</span>`
+    : power(e) ? (e.key === 1200 ? "Power20m" : "Power1h") : EFFORT_NAMES[e.key] || km(e.key));
   // a past best: time and speed, or a laurel when this activity is that best
   // a past best links to its activity; the tooltip says when it was set
   const recLink = (txt, date, id, tip, cls = "") => (id ? `<a class="effort-rec plain-link ${cls}" href="#/activity/${id}" data-tip="${tip}${date ? `: ${date}` : ""}">${txt}</a>`
     : `<span class="effort-rec ${cls}" data-tip="${tip}${date ? `: ${date}` : ""}">${txt}</span>`);
   // a new record: how long the previous one stood and by how much it is beaten
-  const pbTip = (e, tip, p) => recordTip(tip, e.value, p, longest(e) ? "km" : power(e));
+  const pbTip = (e, tip, p) => recordTip(tip, e.value, p, e.kind === "grade" ? "pct" : e.kind === "ascent" ? "m" : longest(e) ? "km" : e.kind === "speed" ? "kmh" : power(e));
   const cell = (e, rec, tip, date = "", id = null, prev = null) => (better(e, e.value, rec) ? `<span class="effort-rec effort-pb span2" data-tip="${pbTip(e, tip, prev)}">${LAUREL_SVG}</span>`
     : rec != null ? (power(e) ? recLink(val(e, rec), date, id, tip, "span2") : `${recLink(val(e, rec), date, id, tip)}<span class="effort-speed">${speed(e, rec)}</span>`)
     : `<span class="effort-rec${power(e) ? " span2" : ""}">–</span>${power(e) ? "" : "<span></span>"}`);
@@ -1728,13 +1788,13 @@ function effortsCard(efforts, compareKey, category, segs = []) {
   const segCell = (s, t, tip, b, p) => (t != null && s.effort.elapsed_s <= t + 0.05 ? `<span class="effort-rec effort-pb span2" data-tip="${recordTip(tip, s.effort.elapsed_s, segPrev(s, p), false)}">${LAUREL_SVG}</span>`
     : t != null ? `${recLink(clock(t), b?.start_time_utc ? localTime(b).slice(0, 10) : "", b?.activity_id, tip)}<span class="effort-speed">${segSpeed(s, t)}</span>` : `<span class="effort-rec">–</span><span></span>`);
   const segRows = segs.map((s, k) => `<div class="effort effort-seg" data-seg-effort="${k}"><span class="effort-name" title="Segment: ${esc(s.segment.name || "Segment")}">${esc(s.segment.name || "Segment")}</span>
-      <b>${clock(s.effort.elapsed_s)}</b><span class="effort-speed">${segSpeed(s, s.effort.elapsed_s)}</span>${segCell(s, s.year_best, "Best this year", s.year_best_effort, s.year_prev)}${segCell(s, s.all_best, "All-time best", s.all_best_effort, s.all_prev)}</div>`).join("");
-  return `<div class="card act-tile act-efforts"><h3 class="tile-title">${LAUREL_SVG}<span>Best efforts</span></h3>
-    <div class="efforts"><div class="effort effort-head"><span></span><span class="eh-now" data-tip="This activity">Activity</span><span class="eh-year" data-tip="Best this year: from 1 January to today">YTD</span><span class="eh-rec" data-tip="${long}">${short}</span></div>
+      <b>${clock(s.effort.elapsed_s)}</b><span class="effort-speed">${segSpeed(s, s.effort.elapsed_s)}</span>${segCell(s, s.year_best, yearTip, s.year_best_effort, s.year_prev)}${segCell(s, s.all_best, "All-time best", s.all_best_effort, s.all_prev)}</div>`).join("");
+  return `<div class="card act-tile act-efforts"><h3 class="tile-title"${indoor ? ` data-tip="Indoor rides (virtual, trainer): distances and top speed compared with indoor rides only, power with all rides"` : ""}>${LAUREL_SVG}<span>Best efforts${indoor ? " virtual" : ""}</span></h3>
+    <div class="efforts"><div class="effort effort-head"><span></span><span class="eh-now" data-tip="This activity">Activity</span><span class="eh-year" data-tip="${thisYear ? "Best this year: from 1 January to today" : `Best in the whole year ${year}`}">${thisYear ? "YTD" : year}</span><span class="eh-rec" data-tip="${long}">${short}</span></div>
     ${list.filter((e) => !power(e)).map((e) => row(e)).join("")}${segRows}${list.filter(power).map((e) => row(e)).join("")}</div></div>`;
   function row(e) {
     return `<div class="effort${better(e, e.value, e.record) ? " pb" : ""}" data-effort="${e.k}"><span class="effort-name">${name(e)}</span>
-        ${power(e) ? `<b class="span2">${val(e, e.value)}</b>` : `<b>${val(e, e.value)}</b><span class="effort-speed">${speed(e, e.value)}</span>`}${cell(e, e.year, "Best this year", e.yearDate, e.yearId, e.yearPrev)}${cell(e, e.record, long, e.recordDate, e.recordId, e.recordPrev)}</div>`;
+        ${power(e) ? `<b class="span2">${val(e, e.value)}</b>` : `<b>${val(e, e.value)}</b><span class="effort-speed">${speed(e, e.value)}</span>`}${cell(e, e.year, yearTip, e.yearDate, e.yearId, e.yearPrev)}${cell(e, e.record, long, e.recordDate, e.recordId, e.recordPrev)}</div>`;
   }
 }
 
@@ -1819,11 +1879,12 @@ function bindRouteHover(route) {
 
 // ---- Activity route: colour by a stream, kilometre markers, legend --------------------
 
-// Colour scales (low → high). HR: green to red like HR zones; power ends in violet.
+// Colour scales (low → high). HR: green to red like HR zones; power in the power zone colours
+// (grey, blue, green, yellow, red, violet, black).
 const ROUTE_SCALES = {
   speed: { label: "Speed", unit: "km/h", f: (v) => v * 3.6, dec: 1, stops: ["#1e3a8a", "#2563eb", "#22d3ee", "#a3e635", "#facc15"] },
   hr: { label: "Heart rate", unit: "bpm", f: (v) => v, dec: 0, stops: ["#2b9348", "#a7c957", "#f9c74f", "#f3722c", "#d00000"] },
-  power: { label: "Power", unit: "W", f: (v) => v, dec: 0, stops: ["#facc15", "#f97316", "#e11d48", "#a21caf", "#5b21b6"] },
+  power: { label: "Power", unit: "W", f: (v) => v, dec: 0, stops: ["#a3a9b3", "#4a90e2", "#43a047", "#f2c200", "#e53935", "#8e44ad", "#1f2126"] },
   cadence: { label: "Cadence", unit: "", f: (v) => v, dec: 0, stops: ["#a3e635", "#2dd4bf", "#0d9488", "#0e7490", "#1e3a8a"] },
   // Altitude like a relief map: lowland green, hills yellow, mountains brown.
   altitude: { label: "Altitude", unit: "m", f: (v) => v, dec: 0, any: true, stops: ["#1a9850", "#91cf60", "#fee08b", "#d8a35d", "#8c510a"] },
@@ -2491,7 +2552,6 @@ async function renderHeatmap(params) {
   const q = {};
   if (!isAll) q.person = CURRENT;
   Object.assign(q, filterQuery(params));
-  document.body.classList.add("fullmap");
   const [data] = await Promise.all([api("heatmap/tracks?" + new URLSearchParams(q)), (async () => { BASEMAPS ??= await api("basemaps"); })()]);
   const tracks = data.items.map((t) => ({ ...t, coords: lonLat(t.polyline) }));
   heat = { settings: loadMapSettings(), tracks, years: data.years, tileCache: new Map(), params, isAll, map: null };
@@ -2508,6 +2568,7 @@ async function renderHeatmap(params) {
         <div id="heat-kpis" ${s.kpis ? "" : "hidden"}></div>
       </div></div>
     </div>`;
+  document.body.classList.add("fullmap"); // now, before the map measures its box (the observer agrees)
   const head = view.querySelector(".float-bar");
   bindBadges(head);
   renderSettingsPanel();
@@ -2535,8 +2596,9 @@ async function renderHeatmap(params) {
   drawHeatLayers();
   map.on("click", "routes", (e) => {
     const items = [...new Map(e.features.map((f) => [f.properties.id, f.properties])).values()].slice(0, 6);
-    new maplibregl.Popup({ closeButton: false, maxWidth: "260px" }).setLngLat(e.lngLat)
-      .setHTML(items.map((p) => `<a href="#/activity/${p.id}">${esc(p.type)} · ${esc(p.day)}</a>${isAll ? ` <span class="hint">${esc(p.person)}</span>` : ""}`).join("<br>"))
+    // one flat row per activity: its type icon, type and day (and who, for everyone)
+    new maplibregl.Popup({ closeButton: false, maxWidth: "300px", className: "route-pop" }).setLngLat(e.lngLat)
+      .setHTML(items.map((p) => `<a class="route-pop-row" href="#/activity/${p.id}">${typeIcon(p.at, 16)}<span>${esc(p.type)}</span><span class="hint">${esc(p.day)}${isAll ? ` · ${esc(p.person)}` : ""}</span></a>`).join(""))
       .addTo(map);
   });
   map.on("mouseenter", "routes", () => { map.getCanvas().style.cursor = "pointer"; });
@@ -2735,7 +2797,7 @@ function drawHeatLayers() {
   // People later in the order are drawn first, so the first person ends up on top.
   const routes = [...heat.tracks].sort((a, b) => order(b.person_id) - order(a.person_id)).map((t) => ({
     type: "Feature",
-    properties: { id: t.id, day: t.day, type: typeLabel(t.activity_type), person: personLabel(t.person_id), pcolor: colorFor(t.person_id) },
+    properties: { id: t.id, day: t.day, at: t.activity_type, type: typeLabel(t.activity_type), person: personLabel(t.person_id), pcolor: colorFor(t.person_id) },
     geometry: { type: "LineString", coordinates: t.coords },
   }));
   map.addSource("routes", { type: "geojson", data: { type: "FeatureCollection", features: routes } });
@@ -2780,17 +2842,47 @@ function drawHeatLayers() {
 }
 
 // `dashed`: a segment line (dashed from the first frame); `ends`: one colour for both ends.
-async function showRouteMap(container, polyline, { offset = false, dashed = false, ends = null } = {}) {
+async function showRouteMap(container, polyline, { offset = false, dashed = false, ends = null, corridor = 0 } = {}) {
   const coords = lonLat(polyline);
   const map = await createMap(container, loadMapSettings().map, { bounds: boundsOf([coords]), reset: true });
   const accent = getComputedStyle(document.documentElement).getPropertyValue("--accent").trim();
   map.addSource("route", { type: "geojson", data: { type: "Feature", properties: {}, geometry: { type: "LineString", coordinates: coords } } });
   map.addLayer({ id: "route", type: "line", source: "route", layout: { "line-join": "round", "line-cap": dashed ? "butt" : "round" },
                  paint: { "line-color": accent, "line-width": 3.5, "line-offset": (ROUTE_OFFSET_PX = offset ? 2.2 : 0), ...(dashed ? { "line-dasharray": [1.4, 0.55] } : {}) } });
+  setCorridor(map, coords, corridor); // a segment's corridor (half width in m) under the line
   map.addSource("ends", { type: "geojson", data: { type: "FeatureCollection", features: [
     { type: "Feature", properties: { c: ends || "#3ecf8e" }, geometry: { type: "Point", coordinates: coords[0] } },
     { type: "Feature", properties: { c: ends || "#ff6b6b" }, geometry: { type: "Point", coordinates: coords[coords.length - 1] } }] } });
   map.addLayer({ id: "ends", type: "circle", source: "ends", paint: { "circle-radius": 5, "circle-color": ["get", "c"], "circle-stroke-width": 2, "circle-stroke-color": mapHalo() } });
+}
+
+// The corridor of a segment: a soft shadow 2 × half width metres wide around the line, hidden
+// with 0. Drawn opaque on a canvas in Web Mercator and shown see-through as one image, so the
+// shadow is even (a see-through map line darkens where it overlaps itself at the bends).
+function setCorridor(map, coords, halfWidth) {
+  if (!map?.getSource || !map.getSource("route")) return;
+  const layer = map.getLayer("corridor");
+  if (!(halfWidth > 0) || coords.length < 2) { if (layer) map.setLayoutProperty("corridor", "visibility", "none"); return; }
+  const R = Math.PI / 180;
+  const mx = (lon) => (lon + 180) / 360, my = (lat) => { const t = Math.sin(lat * R); return 0.5 - Math.log((1 + t) / (1 - t)) / (4 * Math.PI); };
+  const lonOf = (x) => x * 360 - 180, latOf = (y) => Math.atan(Math.sinh(Math.PI * (1 - 2 * y))) / R;
+  const lat0 = coords[Math.floor(coords.length / 2)][1];
+  const half = halfWidth / (40075016.686 * Math.cos(lat0 * R)); // in Mercator units
+  const xs = coords.map(([lon]) => mx(lon)), ys = coords.map(([, lat]) => my(lat));
+  const x0 = Math.min(...xs) - half * 1.5, x1 = Math.max(...xs) + half * 1.5, y0 = Math.min(...ys) - half * 1.5, y1 = Math.max(...ys) + half * 1.5;
+  const k = 2048 / Math.max(x1 - x0, y1 - y0);
+  const cv = Object.assign(document.createElement("canvas"), { width: Math.max(2, Math.ceil((x1 - x0) * k)), height: Math.max(2, Math.ceil((y1 - y0) * k)) });
+  const ctx = cv.getContext("2d");
+  ctx.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue("--accent").trim() || "#3b82f6";
+  ctx.lineWidth = 2 * half * k; ctx.lineJoin = "round"; ctx.lineCap = "round";
+  ctx.beginPath();
+  xs.forEach((x, i) => (i ? ctx.lineTo((x - x0) * k, (ys[i] - y0) * k) : ctx.moveTo((x - x0) * k, (ys[i] - y0) * k)));
+  ctx.stroke();
+  const img = { url: cv.toDataURL(), coordinates: [[lonOf(x0), latOf(y0)], [lonOf(x1), latOf(y0)], [lonOf(x1), latOf(y1)], [lonOf(x0), latOf(y1)]] };
+  if (map.getSource("corridor")) map.getSource("corridor").updateImage(img);
+  else map.addSource("corridor", { type: "image", ...img });
+  if (!layer) map.addLayer({ id: "corridor", type: "raster", source: "corridor", paint: { "raster-opacity": 0.2, "raster-fade-duration": 0 } }, "route");
+  else map.setLayoutProperty("corridor", "visibility", "visible");
 }
 
 // ---- Coming-soon pages --------------------------------------------------------------
@@ -3485,10 +3577,60 @@ function renderAlerts(alerts) {
     : "";
 }
 
+// Phones (narrow screens): the tabs and the header tools fold into a menu behind the
+// hamburger, the page title moves into the top bar, and each page header's badges (filters, options) fold behind an icon at its
+// right; the view switch stays visible. On wider screens neither button is shown.
+const menuBtn = document.getElementById("menu-btn");
+function setMenu(open) {
+  document.querySelector("header").classList.toggle("menu-open", open);
+  menuBtn.setAttribute("aria-expanded", String(open));
+}
+menuBtn.onclick = (e) => { e.stopPropagation(); setMenu(!document.querySelector("header").classList.contains("menu-open")); };
+// A tap outside the open menu only closes it (it does not also open what lies under it).
+document.addEventListener("click", (e) => {
+  if (!document.querySelector("header").classList.contains("menu-open") || e.target.closest("#menu-panel, #menu-btn")) return;
+  e.preventDefault();
+  e.stopPropagation();
+  setMenu(false);
+}, true);
+let headFiltersOpen = false;
+// On phones the page title sits in the top bar, between the app icon and the hamburger: a copy
+// of the page header's title, kept up to date with it.
+const pageTitle = document.getElementById("page-title");
+function addHeadFilterButton() {
+  const head = view.querySelector(".page-head");
+  const title = head?.querySelector(":scope > h2")?.innerHTML ?? "";
+  if (pageTitle.innerHTML !== title) pageTitle.innerHTML = title;
+  if (!head || head.querySelector(":scope > .head-filters")) return;
+  // a view switch wider than the phone scrolls; show its chosen button
+  const sw = head.querySelector(":scope > .switch:not([data-fit])"), on = sw?.querySelector(".on");
+  if (on && sw.scrollWidth > sw.clientWidth) {
+    sw.dataset.fit = "";
+    sw.scrollLeft = on.offsetLeft - sw.offsetLeft - (sw.clientWidth - on.offsetWidth) / 2;
+  }
+  if (!head.querySelector(":scope > .badges > *")) return;
+  head.classList.toggle("filters-open", headFiltersOpen);
+  const b = document.createElement("button");
+  b.className = "icon head-filters";
+  b.title = "Filters and options";
+  b.setAttribute("aria-label", "Filters and options");
+  b.innerHTML = ICON.sliders;
+  b.onclick = (e) => { e.stopPropagation(); headFiltersOpen = head.classList.toggle("filters-open"); };
+  head.append(b);
+}
+new MutationObserver(addHeadFilterButton).observe(view, { childList: true, subtree: true });
+window.addEventListener("hashchange", () => { headFiltersOpen = false; setMenu(false); });
+
 function setHeaderHeight() {
   document.documentElement.style.setProperty("--header-h", document.querySelector("header").offsetHeight + "px");
 }
 window.addEventListener("resize", setHeaderHeight, { passive: true });
+
+// The full-screen map look (body.fullmap) goes with the map page itself: switched in the same
+// moment the page content is replaced, so neither the page that is left nor the map's
+// floating header jumps while the next page loads.
+new MutationObserver(() => document.body.classList.toggle("fullmap", Boolean(view.querySelector(":scope > .heat-wrap"))))
+  .observe(view, { childList: true });
 
 let pageLoader = null;
 async function route() {
@@ -3497,10 +3639,9 @@ async function route() {
   // still there (a page that started drawing itself is left alone).
   clearTimeout(pageLoader);
   const shown = view.firstElementChild;
-  pageLoader = setTimeout(() => { if (view.firstElementChild === shown) view.innerHTML = `<div class="card page-loader">${loaderHtml()}</div>`; }, 400);
+  pageLoader = setTimeout(() => { if (view.firstElementChild === shown) view.innerHTML = `<div class="page-loader">${loaderHtml()}</div>`; }, 400);
   stopObservers();
   disposeMap();
-  document.body.classList.remove("fullmap");
   const [path, query] = (location.hash.slice(1) || "/activities").split("?");
   const params = Object.fromEntries(new URLSearchParams(query || ""));
   const parts = path.split("/").filter(Boolean);

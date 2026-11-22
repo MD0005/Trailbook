@@ -699,7 +699,7 @@ tr.filters-row .tpick { min-width: 150px; }
 .cal-wx > * { flex: none; }
 .cal-wx .wx-sky { width: 15px; height: 15px; }
 .cal-wind { display: inline-flex; align-items: center; gap: 1px; }
-.cal-wind svg { width: 10px; height: 10px; color: var(--fg); }
+.cal-wind svg { width: 12px; height: 12px; color: var(--fg); }
 @container (max-width: 200px) {
   .cal-rain { display: none; }
 }
@@ -1203,6 +1203,8 @@ a.chart-mark { cursor: pointer; }
 .act-hr .zone-bars { margin: auto 0; padding-bottom: 6px; }
 .act-surface { flex: 1 1 auto; display: flex; flex-direction: column; }
 .act-surface .surface-bar { margin-top: 4px; }
+.act-pzones { flex: 1 1 auto; display: flex; flex-direction: column; }
+.act-pzones .pz-strip { margin-top: 2px; }
 /* Road surface: one hatching per kind (chart strip, legend, shares) */
 .surface-swatch { display: inline-block; width: 14px; height: 9px; border-radius: 2px; vertical-align: middle; }
 .surface-swatch.s-paved { background: #6b7280; }
@@ -1211,6 +1213,20 @@ a.chart-mark { cursor: pointer; }
 .surface-swatch.s-unknown { background: #dfe2e7; }
 
 .surface-bar { display: flex; height: 10px; border-radius: 5px; overflow: hidden; gap: 1px; }
+/* Power in zones under the power curve: one bar like the surface bar, the share above and the
+   zone name below where they fit */
+:root { --zone-black: #1f2126; }
+:root[data-theme="dark"] { --zone-black: #05060a; }
+.pz-strip { display: grid; grid-template-rows: auto 10px auto; column-gap: 1px; margin-top: 8px; font-size: 10.5px; color: var(--muted);
+            font-variant-numeric: tabular-nums; }
+.pz-strip > span { min-width: 0; overflow: hidden; white-space: nowrap; text-align: center; }
+.pz-pct { color: color-mix(in srgb, var(--fg) 75%, transparent); line-height: 14px; }
+.pz-name { line-height: 14px; }
+.pz-seg { background: var(--zc); cursor: default; }
+.pz-seg.first { border-top-left-radius: 5px; border-bottom-left-radius: 5px; }
+.pz-seg.last { border-top-right-radius: 5px; border-bottom-right-radius: 5px; }
+.pz-strip .pz-seg:hover { filter: brightness(1.12); }
+:root[data-theme="dark"] .pz-seg { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--fg) 12%, transparent); }
 .surface-bar .surface-swatch { height: 100%; border-radius: 0; }
 .surface-list { display: grid; grid-template-columns: 1fr 1fr; gap: 3px 14px; margin-top: 8px; font-size: 11.5px; color: var(--muted); }
 .surface-list span { display: inline-flex; }
@@ -1853,5 +1869,125 @@ svg.tile-chart { width: 100%; height: 100%; display: block; }
 .chart-tag.inside .chart-ribbon { font-size: 11px; line-height: 14px; padding: 2px 8px 2px 6px; }
 .chart-ribbon-label { font-weight: 500; opacity: .85; margin-right: 5px; }
 .chart-tag.inside.off .chart-ribbon { background: var(--surface-2); color: var(--muted); box-shadow: none; }
-.charts.pairs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 16px; }
-@media (max-width: 1100px) { .charts.pairs { grid-template-columns: minmax(0, 1fr); } }
+/* Statistics › Records: tiles like the activity's top tiles - a table of best efforts (one width
+   for all) beside its curve, each pair one height */
+.rec-page { display: grid; grid-template-columns: minmax(0, var(--rec-table-w)) minmax(0, 1fr); --rec-table-w: 560px; gap: 12px; align-items: stretch; font-family: Roboto, system-ui, sans-serif; }
+@media (max-width: 900px) { .rec-page { grid-template-columns: minmax(0, 1fr); } .rec-page > div:empty { display: none; } }
+.rec-page > .card { margin: 0; padding: 12px 14px; min-width: 0; }
+.rec-tile:not(.rec-curve-tile) { min-width: 0; }
+.rec-seg-tile { width: var(--rec-table-w); max-width: 100%; justify-self: start; } /* as wide as the other tables */
+.rec-tile h3 .laurel { width: 18px; height: 18px; flex: none; } /* as large as the sport icon */
+.rec-tile h3 .rec-be { text-transform: uppercase; letter-spacing: .03em; }
+.rec-seg { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; }
+.rec-efforts .effort > .effort-name { min-width: 0; overflow: hidden; }
+.rec-efforts .rec-date { font-variant-numeric: tabular-nums; }
+.rec-efforts .effort > .rec-span2 { grid-column: span 2; justify-content: center; } /* no speed: the value in the middle */
+/* fixed columns: the same in every table tile, so the lines run at the same places from the
+   first tile to the last; the dividers are full lines through every row */
+.rec-efforts { grid-template-columns: 112px repeat(var(--rec-cols), minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 1.1fr)); gap: 0; margin: 0; }
+.rec-efforts .effort { padding-top: 0; padding-bottom: 0; }
+.rec-efforts .effort > * { align-self: stretch; display: flex; align-items: center; padding: 3px 0; }
+.rec-efforts .effort > .effort-name { padding-right: 6px; }
+.rec-efforts .effort > .effort-rec { justify-content: flex-end; padding-left: 8px; }
+.rec-efforts .effort-speed { justify-content: flex-end; padding-left: 6px; }
+.rec-efforts .effort-head .eh-col { grid-column: span 3; justify-self: stretch; justify-content: center; border-left: 1px solid var(--line); }
+.rec-efforts .effort > .effort-rec, .rec-efforts .effort > .effort-speed { justify-self: stretch; }
+.rec-curve-tile { display: flex; flex-direction: column; position: relative; }
+.rec-curve-tile .curve-box { flex: 1; min-height: 150px; }
+/* a duration / distance curve with the series pills on its right (Statistics › Records): the
+   column one width on the page, so the curves end evenly */
+.curve-box > .curve-row { position: absolute; inset: 0; display: flex; gap: 6px; }
+.curve-row > .curve-frame { flex: 1; min-width: 0; grid-template-rows: minmax(0, 1fr) auto; }
+.curve-tags { width: var(--curve-tags-w, 150px); flex: none; }
+.curve-tag-dash .chart-ribbon { box-shadow: none; }
+.chart-plot.clickable { cursor: pointer; }
+/* Calendar: hovering an activity shows its values in the middle of its bar chart, on the soft pill of the chart values */
+.cal-act-chart { position: relative; }
+.cal-facts { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); max-width: calc(100% - 8px); max-height: calc(100% - 4px);
+             overflow: hidden; text-align: center; line-height: 13px; padding: 2px 6px; border-radius: 6px; font-size: 10.5px; color: var(--fg);
+             background: color-mix(in srgb, var(--surface) 88%, transparent); box-shadow: 0 1px 5px rgba(0,0,0,.12); pointer-events: none;
+             font-variant-numeric: tabular-nums; width: max-content; opacity: 0; transition: opacity .12s; }
+.cal-act:hover .cal-facts { opacity: 1; }
+.cal-facts { white-space: nowrap; text-overflow: ellipsis; }
+.cal-facts > span + span::before { content: " · "; color: var(--muted); }
+@container (max-width: 140px) { .cal-facts .cal-f-load { display: none; } }
+/* Map: the activities under a click - flat rows with the type icon */
+.route-pop .maplibregl-popup-content { padding: 4px; font: 12.5px/1.3 Roboto, system-ui, sans-serif; }
+.route-pop-row { display: flex; align-items: center; gap: 7px; padding: 4px 8px; border-radius: 6px; color: var(--fg); white-space: nowrap; }
+.route-pop-row:hover { background: var(--surface-2); text-decoration: none; }
+.route-pop-row svg { width: 16px; height: 16px; flex: none; }
+.route-pop-row .hint { margin-left: auto; padding-left: 8px; font-size: 11.5px; }
+/* Segment › Edit: a slider with its value beside it */
+.opt-row:has(.seg-range) { align-items: start; } /* the slider at the label's first line */
+.seg-range { display: flex; align-items: center; gap: 10px; min-width: 220px; margin-top: -2px; }
+.seg-range input[type=range] { flex: 1; min-width: 0; accent-color: var(--accent); }
+.seg-range b { min-width: 44px; text-align: right; font-weight: 500; font-variant-numeric: tabular-nums; }
+
+/* ---- Phones: a compact header ----
+   Wider screens: the hamburger and the filters icon are not shown and the menu panel is
+   transparent to the layout (display: contents), so the header looks as before. */
+.menu-btn, .head-filters, .page-title { display: none; }
+.menu-panel { display: contents; }
+@media (max-width: 760px) {
+  /* top bar: the app icon on the left, the hamburger on the right */
+  header { flex-wrap: nowrap; gap: 8px; padding: 6px 12px; position: sticky; }
+  header .brand { margin-right: 0; flex: none; width: 34px; }
+  header .brand .logo { width: 28px; height: 28px; }
+  header .brand-name { display: none; }
+  .menu-btn { display: inline-flex; justify-content: center; width: 34px; margin-left: 0; flex: none; color: var(--fg); padding: 6px; }
+  .menu-btn svg { width: 22px; height: 22px; display: block; }
+  header.menu-open .menu-btn { background: var(--surface-2); }
+  /* the menu: tabs one under another, then the person and the tools */
+  .menu-panel { display: none; position: absolute; top: calc(100% + 4px); right: 8px; z-index: 40;
+                width: min(260px, calc(100vw - 16px)); max-height: calc(100dvh - 64px); overflow: auto;
+                flex-direction: column; gap: 8px; padding: 8px; border-radius: 12px;
+                background: var(--surface); border: 1px solid var(--line); box-shadow: 0 16px 40px rgba(0,0,0,.18); }
+  header.menu-open .menu-panel { display: flex; }
+  .menu-panel nav { flex-direction: column; gap: 2px; }
+  .menu-panel nav a { padding: 10px 12px; font-size: 15px; }
+  .menu-panel .tools { margin-left: 0; padding-top: 8px; border-top: 1px solid var(--line); }
+  .menu-panel .picker { margin-right: auto; }
+  .menu-panel .menu { left: 0; right: auto; }
+  .alerts { margin: 2px -12px -6px; padding: 8px 12px; }
+
+  main { padding: 8px 10px 16px; }
+  /* the page title in the top bar (a copy of the page header's title); an activity's or
+     segment's name cut short, its date small under it */
+  .page-title { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; column-gap: 8px; flex: 1 1 0; min-width: 0;
+                margin: 0; font-size: 17px; font-weight: 650; line-height: 1.25; text-align: center; }
+  .page-title > :not(.head-date) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .page-title > span:not(.head-date):not(:first-child) { flex: 0 1 auto; }
+  .page-title .head-date { flex: 1 0 100%; margin: 0; font-size: 11.5px; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .page-title svg { flex: none; width: 20px; height: 20px; }
+  /* page header: one row - the view switch as buttons and the filters icon at the right; the
+     badges (filters, options) only after the icon is pressed; with neither, no frame at all */
+  .page-head { top: calc(var(--header-h, 44px) + 6px); gap: 6px 8px; padding: 5px 6px; margin-bottom: 10px; min-height: 0; }
+  .page-head::after { top: -7px; bottom: -14px; left: -10px; right: -10px; }
+  .page-head > h2, .page-head > .spacer { display: none; }
+  .page-head:not(:has(> .switch, > .head-filters)) { display: none; }
+  .head-filters { display: inline-flex; order: 1; margin-left: auto; padding: 6px; color: var(--muted); }
+  .head-filters svg { width: 20px; height: 20px; }
+  .page-head.filters-open .head-filters { background: var(--surface-2); color: var(--accent); }
+  .page-head > .switch { flex: 1 1 0; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+  .page-head > .switch::-webkit-scrollbar { display: none; }
+  .page-head > .switch button { flex: 1 0 auto; justify-content: center; }
+  .page-head > .badges { order: 3; flex: 1 0 100%; display: none; }
+  .page-head.filters-open > .badges { display: flex; }
+  /* badge panels: across the whole screen under the top bar */
+  .badge-panel, .badge-panel.wide { position: fixed; left: 8px; right: 8px; top: calc(var(--header-h, 44px) + 8px);
+                                    width: auto; min-width: 0; max-height: calc(100dvh - var(--header-h, 44px) - 16px); }
+  .panel-grid, .opt-panel { min-width: 0; }
+  /* Statistics › Records: values and dates on one line; the table scrolls sideways under a
+     fixed first column (the distance names) */
+  .rec-efforts { grid-template-columns: max-content repeat(var(--rec-cols), max-content max-content max-content);
+                 overflow-x: auto; scrollbar-width: thin; }
+  .rec-efforts .effort > * { white-space: nowrap; }
+  .rec-efforts .effort > .effort-name { position: sticky; left: 0; z-index: 1; background: var(--surface); }
+  .rec-efforts .effort > .effort-rec { padding-left: 12px; }
+  /* Manual: a table wider than the card scrolls inside it, not the whole page */
+  .man-table { overflow-x: auto; }
+  .man-fit th.fit, .man-fit td.fit { padding-right: 12px; }
+  /* activity tiles: every row as wide as the screen */
+  .act-top > * { flex: 1 1 100% !important; }
+  .act-efforts .efforts { width: auto; }
+}
