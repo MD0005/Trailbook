@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.12
+
+### Fixed
+- Changing an activity's type between a ride and a virtual ride (or back) moves its best efforts
+  to the right records (outdoor or virtual).
+
 ## 0.1.11
 
 ### Added

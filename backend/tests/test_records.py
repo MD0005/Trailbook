@@ -286,3 +286,23 @@ def test_sensor_is_put_back_with_state_0(monkeypatch):
     assert not records.ensure_sensor() and sent == []
     monkeypatch.setattr(homeassistant, "has_state", lambda e: False)  # restarted: gone
     assert records.ensure_sensor() and sent == [(records.ENTITY_ID, "0")]
+
+
+def test_changing_the_type_moves_a_ride_between_outdoor_and_indoor_records(conn):
+    from trailbook import importer
+
+    _person(conn)
+    aid = _activity(conn, 100, seen=1, category="ride")
+    _effort(conn, aid, 600, kind="ride", key=10000)
+
+    def v():
+        return conn.execute(
+            f"SELECT v FROM {records.EFFORTS_SQL} WHERE activity_id = ? AND kind = 'ride'",
+            (aid,),
+        ).fetchone()["v"]
+
+    assert v() == 0
+    importer.set_activity_type(conn, aid, "virtual_ride")
+    assert v() == 1
+    importer.set_activity_type(conn, aid, "road_ride")
+    assert v() == 0

@@ -590,6 +590,15 @@ MIGRATIONS: list[str] = [
     ALTER TABLE segments ADD COLUMN match_width_m REAL;
     ALTER TABLE segments ADD COLUMN match_detour_m REAL;
     """,
+    # v37 — a type the person chose sets indoor too (records of virtual and indoor rides apart,
+    # run load by pace): activities changed before got the indoor flag of their file.
+    """
+    UPDATE activities SET indoor = activity_type IN ('treadmill_run', 'indoor_run',
+           'virtual_run', 'indoor_ride', 'spin', 'virtual_ride', 'pool_swim', 'indoor_walk',
+           'ski_indoor', 'gym_equipment', 'elliptical', 'stair_stepper', 'indoor_row',
+           'indoor_climb', 'esports'), analysis_version = 0
+    WHERE type_overridden = 1;
+    """,
 ]
 
 SCHEMA_VERSION = len(MIGRATIONS)

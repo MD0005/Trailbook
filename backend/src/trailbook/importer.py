@@ -985,6 +985,7 @@ def _store_activity(
         if current["type_overridden"]:
             values.pop("category")
             values.pop("activity_type")
+            values.pop("indoor")
         if current["name_overridden"] or p.title is None:
             # A file without a title (FIT) keeps the name the activity has: the user's, a
             # Strava title of the copy it replaces, or the Garmin Connect title.
@@ -1123,14 +1124,15 @@ def requeue_outdated(conn: sqlite3.Connection, everything: bool = False) -> int:
 
 
 def set_activity_type(conn: sqlite3.Connection, activity_id: int, type_key: str) -> None:
-    """User override of the activity type; the group follows the type."""
+    """User override of the activity type; the group and indoor follow the type (a ride made
+    virtual gets the indoor records, a virtual ride made a road ride the outdoor ones)."""
     t = sports.TYPES[type_key]
     conn.execute(
-        """UPDATE activities SET activity_type = ?, category = ?, type_overridden = 1,
+        """UPDATE activities SET activity_type = ?, category = ?, indoor = ?, type_overridden = 1,
                   analysis_version = 0, segments_version = 0, workout_version = 0,
                   workout_stats = NULL
            WHERE id = ?""",
-        (t.key, t.group, activity_id),
+        (t.key, t.group, int(t.indoor), activity_id),
     )
 
 

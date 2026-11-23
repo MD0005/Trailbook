@@ -371,7 +371,7 @@ Two levels, both defined in `backend/src/trailbook/sports.py` with EN and PL nam
 
 Mapping from FIT `sport`/`sub_sport`: exact pair → sub-sport that means the same under any
 sport (yoga, strength_training, padel, …) → sport default → `other`. A test checks that every
-FIT sport known to the SDK has a type. Each activity also has an `indoor` flag.
+FIT sport known to the SDK has a type. Each activity also has an `indoor` flag (a type the person picks sets it from that type).
 A ride or run without a sub-sport recorded by a virtual training app (the file creator's maker
 is Zwift, Tacx, Rouvy, Bkool, TrainerRoad…) is virtual: files edited by tools often lose the
 sub-sport.
