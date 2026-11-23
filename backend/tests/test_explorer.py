@@ -29,6 +29,16 @@ def test_tiles_of_track_fills_gaps_but_not_across_missing_gps():
     assert len(gap) == 2
 
 
+def test_a_line_cutting_a_corner_counts_that_tile():
+    # from the middle of tile (10, 10) to the middle of (11, 11), passing just right of the
+    # shared corner: it crosses (11, 10) - the old sampling skipped such a diagonal step
+    a, b = (10.5, 10.4), (11.5, 11.3)
+    assert explorer.walk_tiles(a, b) == [(11, 10), (11, 11)]
+    # in tile units straight down: one tile at a time
+    assert explorer.walk_tiles((3.5, 3.5), (3.5, 6.2)) == [(3, 4), (3, 5), (3, 6)]
+    assert explorer.walk_tiles((3.5, 3.5), (3.7, 3.9)) == []
+
+
 def test_max_square_and_cluster():
     block = {(x, y) for x in range(10, 14) for y in range(20, 24)}  # 4 x 4
     extra = {(14, 20), (30, 30)}

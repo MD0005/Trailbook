@@ -2355,6 +2355,28 @@ function tileOf(lat, lon, z) {
   return [Math.min(Math.max(x, 0), n - 1), Math.min(Math.max(y, 0), n - 1)];
 }
 
+// The position in tile units (not rounded): whole numbers are tile edges.
+function tileXY(lat, lon, z) {
+  const n = 2 ** z;
+  lat = Math.max(Math.min(lat, 85.0511), -85.0511);
+  const r = (lat * Math.PI) / 180;
+  return [((lon + 180) / 360) * n, ((1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2) * n];
+}
+// Every tile a straight segment passes through, in order (a grid walk: crossing an x or a y
+// edge, whichever comes first), so a line cutting the corner of a tile counts it too.
+function walkTiles([ax, ay], [bx, by], add) {
+  let x = Math.floor(ax), y = Math.floor(ay);
+  const ex = Math.floor(bx), ey = Math.floor(by), dx = bx - ax, dy = by - ay;
+  const sx = Math.sign(dx), sy = Math.sign(dy);
+  const tdx = dx ? Math.abs(1 / dx) : Infinity, tdy = dy ? Math.abs(1 / dy) : Infinity;
+  let tx = dx > 0 ? (x + 1 - ax) / dx : dx < 0 ? (ax - x) / -dx : Infinity;
+  let ty = dy > 0 ? (y + 1 - ay) / dy : dy < 0 ? (ay - y) / -dy : Infinity;
+  for (let guard = 0; (x !== ex || y !== ey) && guard < 100000; guard++) {
+    if (tx < ty) { x += sx; tx += tdx; } else { y += sy; ty += tdy; }
+    add(x, y);
+  }
+}
+
 function tileBounds(x, y, z) {
   const n = 2 ** z;
   const lon = (xx) => (xx / n) * 360 - 180;
@@ -2378,20 +2400,10 @@ function computeTiles(tracks, z) {
       else tiles.set(k, { x: tx, y: ty, visits: 1, first: t.day });
     };
     for (const [lon, lat] of t.coords) {
-      const [x, y] = tileOf(lat, lon, z);
-      add(x, y);
-      if (prev) {
-        const steps = Math.max(Math.abs(x - prev[2]), Math.abs(y - prev[3]));
-        if (steps > 1) {
-          const k = steps * 4;
-          for (let i = 1; i < k; i++) {
-            const f = i / k;
-            const [ix, iy] = tileOf(prev[1] + (lat - prev[1]) * f, prev[0] + (lon - prev[0]) * f, z);
-            add(ix, iy);
-          }
-        }
-      }
-      prev = [lon, lat, x, y];
+      const p = tileXY(lat, lon, z);
+      if (prev) walkTiles(prev, p, add); // every tile on the way, corners included
+      else add(Math.floor(p[0]), Math.floor(p[1]));
+      prev = p;
     }
   }
   return tiles;

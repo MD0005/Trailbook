@@ -27,6 +27,37 @@ def tile_of(lat: float, lon: float, zoom: int = ZOOM) -> Tile:
     return min(max(x, 0), n - 1), min(max(y, 0), n - 1)
 
 
+def tile_xy(lat: float, lon: float, zoom: int = ZOOM) -> tuple[float, float]:
+    """The position in tile units (not rounded): whole numbers are tile edges."""
+    n = 1 << zoom
+    lat = max(min(lat, 85.0511), -85.0511)
+    rad = math.radians(lat)
+    return (lon + 180.0) / 360.0 * n, (
+        1.0 - math.log(math.tan(rad) + 1.0 / math.cos(rad)) / math.pi
+    ) / 2.0 * n
+
+
+def walk_tiles(a: tuple[float, float], b: tuple[float, float]) -> list[Tile]:
+    """Every tile a straight segment passes through after its first (a grid walk: crossing an x
+    or a y edge, whichever comes first), so a line cutting a tile's corner counts it too."""
+    (ax, ay), (bx, by) = a, b
+    x, y, ex, ey = math.floor(ax), math.floor(ay), math.floor(bx), math.floor(by)
+    dx, dy = bx - ax, by - ay
+    sx, sy = (dx > 0) - (dx < 0), (dy > 0) - (dy < 0)
+    tdx = abs(1 / dx) if dx else math.inf
+    tdy = abs(1 / dy) if dy else math.inf
+    tx = (x + 1 - ax) / dx if dx > 0 else (ax - x) / -dx if dx < 0 else math.inf
+    ty = (y + 1 - ay) / dy if dy > 0 else (ay - y) / -dy if dy < 0 else math.inf
+    out: list[Tile] = []
+    while (x, y) != (ex, ey) and len(out) < 100_000:
+        if tx < ty:
+            x, tx = x + sx, tx + tdx
+        else:
+            y, ty = y + sy, ty + tdy
+        out.append((x, y))
+    return out
+
+
 def tile_bounds(x: int, y: int, zoom: int = ZOOM) -> tuple[float, float, float, float]:
     """(west, south, east, north) in degrees."""
     n = 1 << zoom
@@ -40,25 +71,19 @@ def tile_bounds(x: int, y: int, zoom: int = ZOOM) -> tuple[float, float, float, 
 def tiles_of_track(
     lats: list[float | None], lons: list[float | None], zoom: int = ZOOM
 ) -> set[Tile]:
-    """All tiles touched by a track, filling gaps where consecutive points skip tiles."""
+    """All tiles a track passes through: each point's tile and every tile on the straight line
+    to the next point (corners cut included)."""
     tiles: set[Tile] = set()
-    prev: tuple[float, float, Tile] | None = None
+    prev: tuple[float, float] | None = None
     for lat, lon in zip(lats, lons, strict=True):
         if lat is None or lon is None:
             prev = None  # GPS gap: do not invent a line across it
             continue
-        t = tile_of(lat, lon, zoom)
-        tiles.add(t)
+        tiles.add(tile_of(lat, lon, zoom))
+        p = tile_xy(lat, lon, zoom)
         if prev is not None:
-            plat, plon, pt = prev
-            steps = max(abs(t[0] - pt[0]), abs(t[1] - pt[1]))
-            if steps > 1:
-                # Sample the segment densely enough not to jump over a tile.
-                k = steps * 4
-                for i in range(1, k):
-                    f = i / k
-                    tiles.add(tile_of(plat + (lat - plat) * f, plon + (lon - plon) * f, zoom))
-        prev = (lat, lon, t)
+            tiles.update(walk_tiles(prev, p))
+        prev = p
     return tiles
 
 

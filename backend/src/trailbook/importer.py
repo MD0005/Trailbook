@@ -20,7 +20,7 @@ log = logging.getLogger("trailbook.import")
 TRACK_TOLERANCE_M = 5.0
 
 # Bump when the tile computation changes; activities are then re-tiled from stored streams.
-TILES_VERSION = 1
+TILES_VERSION = 2  # 2: tiles whose corner the line cuts count too
 WATCH_VERSION = 1  # watch thresholds read from the FIT file, see backfill_watch
 
 STATUSES = ("new", "imported", "skipped", "duplicate", "error", "missing", "removed")

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.15
+
+### Fixed
+- Explorer tiles and squares: a tile the route line passes through only at a corner now counts
+  as visited (the map, max square, new tiles, statistics).
+
 ## 0.1.14
 
 ### Changed

@@ -367,6 +367,13 @@ neighbour closer in heart rate, until none is shorter.
   Zealand). Apps with a made-up world placed at sea (Zwift): none.
 - Without GPS: none.
 
+## Visited tiles (Map › Explorer tiles, everywhere tiles count)
+
+- A tile is visited when the route line passes through it: the tile of every route point and
+  every tile on the straight line between two points, also when the line only cuts a corner
+  (a walk along the line from one tile edge to the next, `walkTiles` / `explorer.walk_tiles`).
+- Where the GPS signal is missing (no position), no line is drawn across the gap.
+
 ## New tiles (activity page)
 
 - The tiles of each size (as on Map › Explorer tiles) this activity's route touched before any
