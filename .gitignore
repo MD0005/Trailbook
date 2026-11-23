@@ -33,3 +33,7 @@ Thumbs.db
 # Packaging
 *.egg-info/
 build/
+
+# Windows build (windows/build.py)
+backend/src/trailbook/_version.py
+windows/out/

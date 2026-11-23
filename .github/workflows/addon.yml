@@ -98,3 +98,40 @@ jobs:
           docker buildx imagetools create \
             -t "ghcr.io/md0005/trailbook:$VERSION" -t ghcr.io/md0005/trailbook:latest \
             "ghcr.io/md0005/trailbook-aarch64:$VERSION" "ghcr.io/md0005/trailbook-amd64:$VERSION"
+
+  # The Windows app: Trailbook.exe and its installer, attached to a GitHub release of the
+  # version with its changelog section. The app offers that release as an update.
+  windows:
+    needs: [test, version]
+    if: needs.version.outputs.build == 'true'
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install -e "backend[desktop]"
+      - name: Inno Setup
+        shell: bash
+        run: |
+          if [ ! -f "/c/Program Files (x86)/Inno Setup 6/ISCC.exe" ]; then
+            choco install innosetup -y --no-progress
+          fi
+      - run: python windows/build.py
+      - name: Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          # the changelog section of this version, without its "## <version>" line
+          awk -v v="## $VERSION" '$0 == v {on=1; next} /^## / {on=0} on' trailbook/CHANGELOG.md > notes.md
+          installer="windows/out/Trailbook-Setup-$VERSION.exe"
+          if gh release view "v$VERSION" > /dev/null 2>&1; then
+            gh release upload "v$VERSION" "$installer" --clobber
+          else
+            gh release create "v$VERSION" "$installer" --title "Trailbook $VERSION" \
+              --notes-file notes.md --target "$GITHUB_SHA" --latest
+          fi

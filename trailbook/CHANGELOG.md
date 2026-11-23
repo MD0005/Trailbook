@@ -1,10 +1,12 @@
 # Changelog
 
-## 0.1.16
+## 0.1.17
 
 ### Added
 - A Windows app for use without Docker or Home Assistant: an installer on each GitHub release,
   an icon next to the clock, and one-click updates in Settings › General.
+
+## 0.1.16
 
 ### Changed
 - Statistics › Timeline: Countries lists every country with at least 2 % of the activities

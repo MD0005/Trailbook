@@ -99,9 +99,11 @@ export, FIT/GPX/TCX files) are there to bring in older history or a second devic
 
 ## Installation
 
-Two ways to run Trailbook, the same app in both:
+Three ways to run Trailbook, the same app in all of them:
 
 - **Home Assistant add-on** (recommended) — for Home Assistant OS and Supervised installs.
+- **Windows app** — no Docker, no Home Assistant: an installer for one PC. See
+  [Windows app](#windows-app).
 - **Docker** — for everyone else: no Home Assistant at all, or Home Assistant Container / Core,
   which have no add-ons. See [Without Home Assistant](#without-home-assistant-docker).
 
@@ -113,6 +115,19 @@ Or by hand:
 2. Click **⋮ › Repositories**, paste `https://github.com/MD0005/Trailbook` and click **Add**.
 3. Find **Trailbook** in the store and click **Install**.
 4. Click **Start**, then **Open web UI** (or turn on *Show in sidebar*).
+
+### Windows app
+
+1. Download `Trailbook-Setup-<version>.exe` from the newest
+   [release](https://github.com/MD0005/Trailbook/releases/latest) and run it. Windows may warn
+   about an unknown publisher (the installer is not signed): click **More info › Run anyway**.
+2. Trailbook starts and opens in the browser at `http://localhost:8099`. Its icon in the
+   notification area (next to the clock) opens it again or quits it.
+
+No administrator rights are needed. The data lives in `%LOCALAPPDATA%\Trailbook`; updating or
+uninstalling keeps it. A new version shows up in **Settings › General › Updates**: one click
+downloads it, installs it and restarts Trailbook. Imports and downloads run only while Trailbook
+runs; the installer can start it with Windows. It is reached from this PC only.
 
 ### Without Home Assistant (Docker)
 
