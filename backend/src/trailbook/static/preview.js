@@ -3115,7 +3115,7 @@ async function settingsGeneral(el, tab = "general") {
   const folderCards = `
     <div class="card">
       <h3>Watched folder <span class="title-note">(absolute path${s.allowed_roots ? `, inside ${esc(s.allowed_roots)}` : ""})</span></h3>
-      <input class="field-input" name="root" value="${esc(s.root || "")}" placeholder="/share/trailbook">
+      <input class="field-input" name="root" value="${esc(s.root || "")}" placeholder="${s.desktop ? "C:\\Users\\…\\Trailbook" : "/share/trailbook"}">
       <div class="card-row" style="margin-top:12px"><button class="primary" data-save="root">Save</button><span data-msg></span></div>
     </div>
     <div class="card">
@@ -3243,6 +3243,7 @@ async function settingsGeneral(el, tab = "general") {
     ${source === "folder" ? folderCards : source === "upload" ? uploadCard : garminCard}
     ${otherSourcesCard}
     ${icuCard}` : `
+    ${updateCardHtml(s.desktop ? UPDATE || await api("update").catch(() => null) : null)}
     <div class="card appearance">
       <h3>Appearance <span class="title-note">(saved per browser)</span></h3>
       <div class="appearance-grid">
@@ -3269,6 +3270,7 @@ async function settingsGeneral(el, tab = "general") {
     return settingsGeneral(el, tab);
   };
   bindBadges(el);
+  bindUpdateCard(el);
   el.querySelectorAll("[data-accent]").forEach((b) => b.onclick = () => {
     store.set("accent", b.dataset.accent);
     applyAccent();
@@ -3697,13 +3699,69 @@ async function settingsImport(el, params) {
 
 // The page header frame sticks right below the top bar, whose height changes when it wraps.
 // Banner under the header: Garmin keys refused for 12 h or more (garmin.key_alerts).
+// The Windows app only: the newest release (api/update), asked once per page load.
+let UPDATE = null, LAST_ALERTS = null;
 function renderAlerts(alerts) {
+  LAST_ALERTS = alerts;
   const el = document.getElementById("alerts");
   const keys = alerts?.keys || [];
-  el.hidden = !keys.length;
-  el.innerHTML = keys.length
-    ? `Garmin stopped accepting the key of ${keys.map((k) => `<b>${esc(k.label)}</b>`).join(", ")}, new activities are not downloaded. <a href="#/settings/data">Paste a new key in Settings › Data sources</a>`
-    : "";
+  const lines = [];
+  if (keys.length) lines.push(`Garmin stopped accepting the key of ${keys.map((k) => `<b>${esc(k.label)}</b>`).join(", ")}, new activities are not downloaded. <a href="#/settings/data">Paste a new key in Settings › Data sources</a>`);
+  if (UPDATE?.available && !location.hash.startsWith("#/settings/general") && location.hash !== "#/settings") lines.push(`Trailbook ${esc(UPDATE.latest)} is available. <a href="#/settings/general">Update in Settings › General</a>`);
+  el.hidden = !lines.length;
+  el.innerHTML = lines.join("<br>");
+}
+api("update").then((u) => { if (u.enabled) { UPDATE = u; renderAlerts(LAST_ALERTS); setHeaderHeight(); } }).catch(() => {});
+
+// Release notes (the changelog section): "### Added" headings and "- " lines.
+function releaseNotesHtml(md) {
+  const out = [];
+  let items = [];
+  const flush = () => { if (items.length) out.push(`<ul class="plain notes">${items.map((t) => `<li>${esc(t)}</li>`).join("")}</ul>`); items = []; };
+  for (const raw of (md || "").split(/\r?\n/)) {
+    const line = raw.trim();
+    if (line.startsWith("#")) { flush(); out.push(`<div class="panel-title">${esc(line.replace(/^#+\s*/, ""))}</div>`); }
+    else if (line.startsWith("- ")) items.push(line.slice(2));
+    else if (line && items.length) items[items.length - 1] += " " + line;
+  }
+  flush();
+  return out.join("");
+}
+
+// Settings › General, Windows app: the version, the newest release and one click to install it.
+function updateCardHtml(u) {
+  if (!u?.enabled) return "";
+  const body = u.available
+    ? `<div>${state(`Trailbook ${esc(u.latest)} is available`, "warn")} <span class="hint">You have ${esc(u.current)}.</span></div>
+       ${releaseNotesHtml(u.notes)}
+       <div class="badges" style="margin-top:12px"><div class="badge-wrap"><button class="badge" data-update-install>Update to ${esc(u.latest)}</button></div></div>`
+    : `<div>${u.error ? state("Could not look for updates", "warn") : state(`Trailbook ${esc(u.current)} is up to date`, "ok")}</div>
+       <div class="badges" style="margin-top:12px"><div class="badge-wrap"><button class="badge" data-update-check>Check now</button></div></div>`;
+  return `<div class="card" data-update-card><h3>Updates</h3>${body}<div data-update-msg style="margin-top:8px"></div></div>`;
+}
+function bindUpdateCard(el) {
+  const card = el.querySelector("[data-update-card]");
+  if (!card) return;
+  const msg = card.querySelector("[data-update-msg]");
+  const check = card.querySelector("[data-update-check]");
+  if (check) check.onclick = async () => {
+    msg.innerHTML = state("Looking…");
+    try { UPDATE = await api("update?check=1"); card.outerHTML = updateCardHtml(UPDATE); bindUpdateCard(el); }
+    catch (e) { msg.innerHTML = state(esc(e.message), "bad"); }
+  };
+  const install = card.querySelector("[data-update-install]");
+  if (install) install.onclick = async () => {
+    install.closest(".badges").hidden = true;
+    msg.innerHTML = state("Downloading the update…");
+    try { await api("update", { method: "POST" }); }
+    catch (e) { install.closest(".badges").hidden = false; msg.innerHTML = state(esc(e.message), "bad"); return; }
+    msg.innerHTML = state("Installing. Trailbook restarts and this page reloads by itself.");
+    const from = UPDATE.current;
+    const timer = setInterval(async () => {
+      const info = await api("info").catch(() => null);
+      if (info && info.version !== from) { clearInterval(timer); location.reload(); }
+    }, 2000);
+  };
 }
 
 // Phones (narrow screens): the tabs and the header tools fold into a menu behind the

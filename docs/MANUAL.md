@@ -410,10 +410,21 @@ neighbour closer in heart rate, until none is shorter.
 - **Window**: the last 7 days (today included) and the workouts planned for the next 3 days
   (today's only while no activity of its sport is done today). Only the next few days: a plan
   further ahead is an intention, and it would weigh as much as the week already done.
-- **Split**: easy = heart rate zones 1–2 and below, moderate = zone 3, hard = zones 4–5 (Garmin's
-  time in zones of each activity; activities without heart rate do not count). A planned step
-  by its target: heart rate and pace zones 1–2 / 3 / 4–5 (a pace target read as a zone from your
-  usual speed, as in the workout estimate), power zones 1–2 / 3 / 4–7; no target or rest = easy.
+- **Split** by the two thresholds the models are defined by: easy below the aerobic threshold
+  (LT1), moderate between it and the lactate threshold (LTHR), hard above LTHR. LTHR is the
+  activity's (the watch's, yours, or 90 % of the max HR); Garmin records no aerobic threshold, so
+  LT1 = 89 % of LTHR (LTHR 167 → LT1 149 bpm). The time comes from every second of the heart rate.
+  Backup, for an activity without a heart rate stream or a threshold: Garmin's time in zones —
+  zones 1–2 and below easy, 3–4 moderate, 5 hard. Activities without heart rate do not count.
+- A planned step by its target: heart rate by the middle of its range in bpm against the same
+  thresholds; pace (read as a zone from your usual speed, as in the workout estimate) and heart
+  rate without thresholds by zone 1–2 / 3–4 / 5; power zones 1–2 / 3–4 / 5–7; no target or
+  rest = easy.
+- **Form**: now, from the training done (planned workouts not counted). Under it the estimated
+  form after the planned workouts of the window: the fitness model run on with their estimated
+  loads, going into the day after the last one.
+- Why not Garmin's zones alone: their zone 4 ends near the lactate threshold, so it is mostly
+  between the thresholds (moderate), and most of zone 3 is below the aerobic threshold (easy).
 - **Models** (easy / moderate / hard): Polarized 80 / 5 / 15, Pyramidal 75 / 20 / 5, Threshold
   55 / 35 / 10.
 - **The next session**, the first rule that fits:

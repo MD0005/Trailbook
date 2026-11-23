@@ -167,7 +167,8 @@ performance condition, stamina and potential stamina. Streams without data are n
   flag beside it; the same series' dot at the same x is lit on every other chart of the page
   (e.g. the cumulative pair), with its flag.
 - X-axis: months (Jan … Dec, every month) or weeks (W1 … W53, every 1, 2, 4 or 8 weeks as they
-  fit) with half a period of room at both ends; Timeline: the date axis.
+  fit, always counted from W1: W1, W5, W9 … W53; a little room on the right so the last label
+  is whole) with half a period of room at both ends; Timeline: the date axis.
 - Compare years: on top three column charts side by side (a third of the width each):
   Distance, Activities and Elevation gain per year — a column per year (oldest left) in its
   series colour, split into running (bottom, full colour), cycling and other (top) in three

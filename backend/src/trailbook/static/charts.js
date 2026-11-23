@@ -111,8 +111,10 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, share
     const fit = Math.max(2, Math.floor(u.bbox.width / (devicePixelRatio || 1) / 34));
     const step = g.kind === "month" ? 1 : [1, 2, 4, 8].find((k) => (max - min) / k <= fit) || 13;
     const out = [];
-    for (let v = Math.ceil(min / step) * step || step; v <= max; v += step) if (v >= min) out.push(v);
-    if (g.kind === "week" && step > 1 && min <= 1) out.unshift(1);
+    // weeks count from W1 in even steps (W1, W3, W5 … or W1, W5, W9 …: with 53 weeks the last
+    // one gets a label too), months every one
+    const first = g.kind === "week" ? 1 + Math.max(0, Math.ceil((min - 1) / step)) * step : Math.ceil(min / step) * step || step;
+    for (let v = first; v <= max; v += step) if (v >= min) out.push(v);
     return out;
   };
   const fmtPeriod = (v, exact) => (g.kind === "month" ? (exact ? MONTHS_FULL[v - 1] : MONTHS_3[v - 1]) : `${exact ? "Week " : "W"}${v}`);
@@ -192,7 +194,7 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, share
     };
     const date = g.kind === "date";
     return {
-      width, height: s.height || CHART_H, padding: [8, 2, 0, 0],
+      width, height: s.height || CHART_H, padding: [8, period ? 14 : 2, 0, 0],
       scales: { x: { time: g.kind === "date", range: (u, mn, mx) => (g.range || (period ? [mn - 0.5, mx + 0.5] : s.bars ? barRange(mn, mx) : [mn, mx])) },
                 y: { dir: s.invert ? -1 : 1,
                      range: (u, mn, mx) => liftForSurface(u, s.yMin != null || s.yMax != null ? yRange(u, mn, mx) : uPlot.rangeNum(mn ?? 0, mx ?? 1, 0.1, true)) } },

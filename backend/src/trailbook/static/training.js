@@ -531,13 +531,25 @@ async function renderCalendar(params) {
 // Calendar › Next (docs/MANUAL.md › Next workout): the last 7 days and the plan of the next 7
 // split into easy / moderate / hard against the chosen model (per person), the form, and the
 // suggested next session with its reasons; notes when the plan pulls away from the model.
-const NEXT_LEVELS = [["easy", "Easy", "#43a047", "heart rate zones 1–2"], ["moderate", "Moderate", "#f2c200", "heart rate zone 3"], ["hard", "Hard", "#e53935", "heart rate zones 4–5"]];
+// [key, label, colour, what it is without thresholds (Garmin's zones, the backup)]
+const NEXT_LEVELS = [["easy", "Easy", "#43a047", "heart rate zones 1–2"], ["moderate", "Moderate", "#f2c200", "heart rate zones 3–4"], ["hard", "Hard", "#e53935", "heart rate zone 5"]];
+// with thresholds: the range of each level in bpm (LT1 estimated: Garmin records none)
+const nextRange = (k, [lt1, lthr]) => (k === "easy" ? `under ${num(lt1)} bpm, the aerobic threshold (89 % of the lactate threshold)`
+  : k === "moderate" ? `${num(lt1)}–${num(lthr)} bpm, between the aerobic and the lactate threshold` : `over ${num(lthr)} bpm, the lactate threshold`);
 const NEXT_KIND = { rest: "Rest day", easy: "Easy", long: "Long", tempo: "Tempo", intervals: "Intervals" };
 const ICON_NEXT = svg(`<path d="M5 12h12"/><path d="M13 7l5 5-5 5"/><path d="M5 5v14"/>`);
 // Form in words: what the zone means for the next session (zones as on Fitness › Form).
 const NEXT_FORM_NOTE = { Detraining: "Very fresh: fitness is slipping", Fresh: "Fresh: ready for a hard session",
   Neutral: "Neutral: neither fresh nor tired", Productive: "Tired from training: building fitness", Overreaching: "Very tired: rest first" };
-const NEXT_FORM_TIP = "Form = fitness minus fatigue (Fitness › Form). Above 0 fresher, below 0 more tired.";
+const NEXT_FORM_TIP = "Form now: fitness minus fatigue from the training done (Fitness › Form), planned workouts not counted. Above 0 fresher, below 0 more tired.";
+// Under the form: the estimated form after the planned workouts (their estimated loads), the
+// day after the last one.
+function formAfter(d) {
+  if (d.form_after == null) return "";
+  const v = `${d.form_after > 0 ? "+" : ""}${num(d.form_after, 0)}`;
+  const zone = FORM_ZONES.find(([lo, hi]) => d.form_after >= lo && d.form_after < hi);
+  return `<span class="stat-note nx-after" data-tip="${esc(`Estimated form after the planned workouts (to ${d.form_after_day}), from their estimated load; ${zone ? NEXT_FORM_NOTE[zone[2]].toLowerCase() : ""}`)}">Estimated after plan: <b>${v}</b></span>`;
+}
 async function renderNextPanel(box, today) {
   const model = UI.data["training-model"] || "polarized";
   const d = await api("suggest?" + new URLSearchParams({ ...personParam(), today, model })).catch(() => null);
@@ -546,7 +558,8 @@ async function renderNextPanel(box, today) {
   const total = sumOf(d.done) + sumOf(d.planned);
   const rows = NEXT_LEVELS.map(([k, label, color, tip]) => {
     const dn = total ? d.done[k] / total : 0, pl = total ? d.planned[k] / total : 0, tg = d.target[k];
-    return `<div class="nx-row" data-tip="${esc(`${label} (${tip}): ${hm(d.done[k])} done${d.planned[k] ? `, ${hm(d.planned[k])} planned` : ""} · the model asks ${num(tg * 100)} %`)}">
+    const what = d.limits ? nextRange(k, d.limits) : tip;
+    return `<div class="nx-row" data-tip="${esc(`${label} (${what}): ${hm(d.done[k])} done${d.planned[k] ? `, ${hm(d.planned[k])} planned` : ""} · the model asks ${num(tg * 100)} %`)}">
       <span class="nx-label">${label}</span><span class="nx-bar"><i style="width:${dn * 100}%;background:${color}"></i><b style="width:${pl * 100}%;--c:${color}"></b><u style="left:${tg * 100}%"></u></span>
       <span class="nx-val">${num((dn + pl) * 100)}%<small> / ${num(tg * 100)}%</small></span></div>`;
   }).join("");
@@ -557,7 +570,7 @@ async function renderNextPanel(box, today) {
     <div class="badges">${badgeHtml("cmodel", "Model", d.models[d.model], { panel: `<div class="opt-panel">${pickList("cmodel", Object.entries(d.models), d.model)}</div>`, right: true })}</div></div>
     <div class="stat-strip cal-next">
     <div class="stat-item nx-zones"><span class="stat-label">Last 7 days + next 3 planned</span>${rows}</div>
-    <div class="stat-item" data-tip="${esc(NEXT_FORM_TIP)}"><span class="stat-label">Form</span><span class="stat-value">${d.form == null ? "–" : (d.form > 0 ? "+" : "") + num(d.form, 0)}</span><span class="stat-note">${esc(zone ? NEXT_FORM_NOTE[zone[2]] : "")}</span></div>
+    <div class="stat-item" data-tip="${esc(NEXT_FORM_TIP)}"><span class="stat-label">Form</span><span class="stat-value">${d.form == null ? "–" : (d.form > 0 ? "+" : "") + num(d.form, 0)}</span><span class="stat-note">${esc(zone ? NEXT_FORM_NOTE[zone[2]] : "")}</span>${formAfter(d)}</div>
     <div class="stat-item nx-next"><span class="stat-label">Next training · ${when.toLowerCase()}</span><span class="stat-value">${n.sport && n.kind !== "rest" ? groupIcon(n.sport, 18) : ""}${esc(what)}${n.minutes ? ` <small>· ${num(n.minutes)} min</small>` : ""}</span>
       ${n.reasons.map((r) => `<span class="stat-note">${esc(r)}</span>`).join("")}${d.notes.map((r) => `<span class="stat-note nx-note">${esc(r)}</span>`).join("")}</div>
   </div></div>`;
@@ -1375,12 +1388,14 @@ const ICON_TILES_BIG = svg(`<rect x="4" y="4" width="16" height="16" rx="1.5"/>`
 const ICON_TILES_SMALL = svg(`<rect x="4" y="4" width="16" height="16" rx="1.5"/><path d="M9.3 4v16M14.7 4v16M4 9.3h16M4 14.7h16"/>`);
 const DIST_BANDS = {
   run: [[0, 5000, "Under 5 km"], [5000, 10000, "5–10 km"], [10000, 21097.5, "10 km – half"], [21097.5, 42195, "Half – marathon"], [42195, Infinity, "Marathon +"]],
-  ride: [[0, 50000, "Under 50 km"], [50000, 100000, "50–100 km"], [100000, 200000, "100–200 km"], [200000, Infinity, "200 km +"]],
+  ride: [[0, 25000, "Under 25 km"], [25000, 50000, "25–50 km"], [50000, 100000, "50–100 km"], [100000, 200000, "100–200 km"], [200000, Infinity, "200 km +"]],
 };
 const TEMP_BANDS = [[-Infinity, 0, "Below 0 °C"], [0, 10, "0–10 °C"], [10, 20, "10–20 °C"], [20, 30, "20–30 °C"], [30, Infinity, "30 °C +"]];
 // WMO weather codes (the hour's worst) → a few kinds
-const WEATHER_KINDS = [["Clear", (c) => c <= 1], ["Cloudy", (c) => c <= 3], ["Fog", (c) => c >= 45 && c <= 48],
-  ["Rain", (c) => (c >= 51 && c <= 67) || (c >= 80 && c <= 82)], ["Snow", (c) => (c >= 71 && c <= 77) || c === 85 || c === 86], ["Thunderstorm", (c) => c >= 95]];
+const WEATHER_KINDS = [["Clear", (c) => c <= 1, "sun"], ["Cloudy", (c) => c <= 3, "cloud"], ["Fog", (c) => c >= 45 && c <= 48, "fog"],
+  ["Rain", (c) => (c >= 51 && c <= 67) || (c >= 80 && c <= 82), "rain"], ["Snow", (c) => (c >= 71 && c <= 77) || c === 85 || c === 86, "snow"],
+  ["Thunderstorm", (c) => c >= 95, "storm"]];
+const skyLabel = (label, sky) => `<span class="tl-sky">${sky ? `<svg viewBox="0 0 24 24" fill="none" aria-hidden="true">${SKY_SVG[sky]}</svg>` : "<i></i>"}${label}</span>`;
 const EARTH_KM = 40075, MOON_KM = 384400;
 
 async function renderTimeline(params, sw) {
@@ -1481,26 +1496,33 @@ function tlHours(acts, onFoot) {
     const seen = new Set();
     for (let t = t0 - (t0 % 3600000); t < t1; t += 3600000) { const h = new Date(t).getUTCHours(); if (!seen.has(h)) { seen.add(h); per[h].push(a); } }
   }
-  return { items: per.map((l, h) => ({ label: String(h).padStart(2, "0"), value: l.length, color: SERIES_COLORS[h % SERIES_COLORS.length],
-    tip: tlTip(`${String(h).padStart(2, "0")}:00–${String((h + 1) % 24).padStart(2, "0")}:00`, l.length, l, onFoot) })), every: 3 };
+  return { items: per.map((l, h) => ({ label: `${String(h).padStart(2, "0")}:00`, value: l.length, color: SERIES_COLORS[h % SERIES_COLORS.length],
+    tip: tlTip(`${String(h).padStart(2, "0")}:00–${String((h + 1) % 24).padStart(2, "0")}:00`, l.length, l, onFoot) })), every: 3,
+    oneColor: true }; // an activity counts in every hour it spans: the hours add up to more
 }
 function tlDays(acts, onFoot) {
   const per = [...Array(7)].map(() => []);
   for (const a of acts) per[(new Date(localMs(a.start)).getUTCDay() + 6) % 7].push(a);
-  return { items: per.map((l, d) => ({ label: WEEKDAYS[d], value: l.length, color: SERIES_COLORS[d % SERIES_COLORS.length], tip: tlTip(WEEKDAYS_FULL[d], l.length, l, onFoot) })), every: 1 };
+  return { items: per.map((l, d) => ({ label: WEEKDAYS[d], value: l.length, color: SERIES_COLORS[d % SERIES_COLORS.length], tip: tlTip(WEEKDAYS_FULL[d], l.length, l, onFoot) })), every: 1, oneColor: true };
 }
-// A share chart's items: the biggest first, past 8 the rest as Other.
-function tlShares(groups, onFootOf = () => false) {
+// A share chart's items: the biggest first; past `most`, and those under `minShare` of all, the
+// rest as Other. Colours: the series
+// colours, then further hues (no colour twice on one ring).
+const shareColor = (k) => (k < SERIES_COLORS.length ? SERIES_COLORS[k] : `hsl(${(k * 67 + 20) % 360} 42% 62%)`);
+function tlShares(groups, onFootOf = () => false, most = 8, minShare = 0) {
   const list = [...groups].sort((p, q) => q[1].length - p[1].length);
-  const top = list.length > 8 ? [...list.slice(0, 7), ["Other", list.slice(7).flatMap(([, l]) => l)]] : list;
-  return { items: top.map(([label, l], k) => ({ label, value: l.length, color: SERIES_COLORS[k % SERIES_COLORS.length],
+  const all = list.reduce((t, [, l]) => t + l.length, 0) || 1;
+  const keep = Math.min(list.length > most ? most - 1 : most, list.filter(([, l]) => l.length / all >= minShare).length);
+  const top = keep < list.length ? [...list.slice(0, keep), ["Other", list.slice(keep).flatMap(([, l]) => l)]] : list;
+  return { items: top.map(([label, l], k) => ({ label, value: l.length, color: shareColor(k),
     tip: `${tlTip(label, l.length, l, onFootOf(l))}\nDistance <b>${km(l.reduce((t, a) => t + a.distance_m, 0))}</b>\nTime <b>${hours(l.reduce((t, a) => t + a.time_s, 0))}</b>` })) };
 }
 function tlTypes(acts) {
   const by = new Map();
   for (const a of acts) { const k = typeLabel(a.type); by.set(k, [...(by.get(k) || []), a]); }
-  return tlShares(by, (l) => l.every((a) => ON_FOOT.has(a.group)));
+  return { ...tlShares(by, (l) => l.every((a) => ON_FOOT.has(a.group))), middle: [by.size, by.size === 1 ? "type" : "types"] };
 }
+const TL_COUNTRIES = 20, TL_COUNTRY_MIN = 0.02; // countries one by one: up to 20, each at least 2 %
 function tlCountries(acts, names, withVirtual) {
   const by = new Map();
   for (const a of acts) {
@@ -1508,7 +1530,8 @@ function tlCountries(acts, names, withVirtual) {
     const k = a.country && (withVirtual || !virtual) ? names[a.country] || a.country : a.indoor || virtual ? "Indoor" : "No route";
     by.set(k, [...(by.get(k) || []), a]);
   }
-  return tlShares(by, (l) => l.every((a) => ON_FOOT.has(a.group)));
+  const n = [...by.keys()].filter((k) => k !== "Indoor" && k !== "No route").length; // real countries only
+  return { ...tlShares(by, (l) => l.every((a) => ON_FOOT.has(a.group)), TL_COUNTRIES, TL_COUNTRY_MIN), middle: [n, n === 1 ? "country" : "countries"] };
 }
 
 // Line or columns: one value per item, drawn at the card's own width (1 px = 1 px, so the text
@@ -1516,7 +1539,8 @@ function tlCountries(acts, names, withVirtual) {
 // (every `every`-th; long ones cut) and the x title.
 const niceStep = (v) => { const p = 10 ** Math.floor(Math.log10(v || 1)), f = v / p; return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 5 ? 5 : 10) * p; };
 const TL_H = 240;
-function tlBars({ items, every = 1, xTitle = "", yTitle = "Activities" }, line, W = 480) {
+// oneColor: every column in the series colour (hours, days); else each item its own (types).
+function tlBars({ items, every = 1, xTitle = "", yTitle = "Activities", oneColor = false }, line, W = 480) {
   const H = TL_H, L = 52, R = 8, T = 8, B = 40, max = Math.max(1, ...items.map((i) => i.value));
   const step = Math.max(1, niceStep(max / 4)), top = Math.ceil((max * 1.05) / step) * step;
   const pw = W - L - R, ph = H - T - B, cw = pw / items.length, X = (k) => L + cw * (k + 0.5), Y = (v) => T + ph * (1 - v / top);
@@ -1530,18 +1554,25 @@ function tlBars({ items, every = 1, xTitle = "", yTitle = "Activities" }, line, 
   const marks = line
     ? `<path d="${path}L${X(items.length - 1).toFixed(1)} ${Y(0)}L${X(0).toFixed(1)} ${Y(0)}Z" class="tl-area" style="--c:${c}"/><path d="${path}" class="tl-line" style="--c:${c}"/>
        ${items.map((it, k) => `<circle cx="${X(k)}" cy="${Y(it.value)}" r="2" class="tl-dot" style="--c:${c}"/>`).join("")}`
-    : items.map((it, k) => `<rect x="${X(k) - Math.min(28, cw * 0.36)}" y="${Y(it.value)}" width="${Math.min(56, cw * 0.72)}" height="${Math.max(0, Y(0) - Y(it.value))}" rx="2" class="tl-bar" style="--c:${it.color}"/>`).join("");
+    : items.map((it, k) => `<rect x="${X(k) - Math.min(28, cw * 0.36)}" y="${Y(it.value)}" width="${Math.min(56, cw * 0.72)}" height="${Math.max(0, Y(0) - Y(it.value))}" rx="2" class="tl-bar" style="--c:${oneColor ? c : it.color}"/>`).join("");
   const hits = items.map((it, k) => `<rect x="${X(k) - cw / 2}" y="${T}" width="${cw}" height="${ph}" class="tl-hit" data-tip-html="${esc(it.tip)}"/>`).join("");
   const titles = `<text x="12" y="${T + ph / 2}" transform="rotate(-90 12 ${T + ph / 2})" class="tl-atitle">${esc(yTitle)}</text>`
     + (xTitle ? `<text x="${L + pw / 2}" y="${H - 4}" class="tl-atitle">${esc(xTitle)}</text>` : "");
   return `<svg class="tl-svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">${grid}${marks}<rect x="${L + 0.5}" y="${T + 0.5}" width="${pw - 1}" height="${ph - 1}" class="tl-frame"/>${labels}${titles}${hits}</svg>`;
 }
 // Pie: a ring in the middle of the card, each slice labelled beside it (name and share) on a
-// short leader line; labels on one side pushed apart so they never overlap. The total inside.
-function tlPie({ items }, W = 480) {
-  const H = 300, total = items.reduce((t, i) => t + i.value, 0) || 1, cx = W / 2, cy = H / 2;
+// short leader line; labels on one side pushed apart so they never overlap. No total inside.
+// Slices under PIE_LABEL_MIN of the ring get no label (their tooltip still tells).
+const PIE_LABEL_MIN = 0.03;
+// middle: [count, word] in the ring (how many countries, types), or nothing (hours, days).
+function tlPie({ items, middle = null }, W = 480) {
+  const total = items.reduce((t, i) => t + i.value, 0) || 1;
+  // higher with many labels: the small slices often sit on one side, one label line each
+  const H = Math.max(300, items.filter((i) => i.value / total >= PIE_LABEL_MIN).length * 17 + 30), cx = W / 2, cy = H / 2;
   const R = Math.round(Math.min(96, Math.max(56, W * 0.17))), r = Math.round(R * 0.62); // narrow cards: room for the labels
-  let a0 = -Math.PI / 2;
+  // the biggest slice centred on the right: the rest fills the left from the bottom up, so
+  // their labels spread down the left side instead of fanning out from one spot
+  let a0 = -Math.PI * ((items.find((i) => i.value)?.value || 0) / total);
   const pt = (rad, a) => [cx + rad * Math.cos(a), cy + rad * Math.sin(a)];
   const p = (rad, a) => pt(rad, a).map((v) => v.toFixed(2)).join(" ");
   const slices = items.filter((i) => i.value).map((it) => {
@@ -1552,29 +1583,31 @@ function tlPie({ items }, W = 480) {
     return { it, d, mid, right: Math.cos(mid) >= 0 };
   });
   // labels at the slice's height, pushed apart (16 px) and kept inside the card on each side
+  const labelled = slices.filter((x) => x.it.value / total >= PIE_LABEL_MIN);
   for (const side of [true, false]) {
-    const list = slices.filter((x) => x.right === side).sort((a, b) => pt(R, a.mid)[1] - pt(R, b.mid)[1]);
+    const list = labelled.filter((x) => x.right === side).sort((a, b) => pt(R, a.mid)[1] - pt(R, b.mid)[1]);
     let y = -Infinity;
     for (const x of list) { x.ly = Math.max(pt(R + 14, x.mid)[1], y + 16, 10); y = x.ly; }
     const over = y - (H - 8);
     if (over > 0) for (const x of list) x.ly -= over;
   }
-  const labels = slices.map(({ it, mid, right, ly }) => {
+  const labels = labelled.map(({ it, mid, right, ly }) => {
     const [ax, ay] = pt(R + 2, mid), [ex, ey] = pt(R + 14, mid), lx = cx + (right ? 1 : -1) * (R + 30);
     return `<path d="M${ax.toFixed(1)} ${ay.toFixed(1)}L${ex.toFixed(1)} ${ey.toFixed(1)}L${lx.toFixed(1)} ${ly.toFixed(1)}" class="tl-leader"/>
-      <text x="${(lx + (right ? 4 : -4)).toFixed(1)}" y="${(ly + 4).toFixed(1)}" text-anchor="${right ? "start" : "end"}" class="tl-plab" data-tip-html="${esc(it.tip)}">${esc(it.label)} <tspan class="tl-pval">${num((it.value / total) * 100)}%</tspan></text>`;
+      <text x="${(lx + (right ? 4 : -4)).toFixed(1)}" y="${(ly + 4).toFixed(1)}" text-anchor="${right ? "start" : "end"}" class="tl-plab" data-tip-html="${esc(it.tip)}">${esc(it.label)} <tspan class="tl-pval">${num((it.value / total) * 100)}% (${num(it.value)})</tspan></text>`;
   }).join("");
   const arcs = slices.map(({ it, d }) => `<path d="${d}" class="tl-slice" style="--c:${it.color}" data-tip-html="${esc(it.tip)}"/>`).join("");
   return `<svg class="tl-svg tl-pie" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">${arcs}${labels}
-    <text x="${cx}" y="${cy + 2}" class="tl-pie-total">${num(total)}</text><text x="${cx}" y="${cy + 20}" class="tl-pie-sub">activities</text></svg>`;
+${middle ? `<text x="${cx}" y="${cy + 2}" class="tl-pie-total">${num(middle[0])}</text><text x="${cx}" y="${cy + 20}" class="tl-pie-sub">${esc(middle[1])}</text>` : ""}</svg>`;
 }
 
-// A breakdown: one table per section [heading html | null, rows [label, activities]], each
-// with its own heading and column heads (count, distance, share of the section's activities).
+// A breakdown: one table per section [heading html | null, rows [label html, activities]],
+// each with its column heads (count, distance, share of the section's activities) and its
+// heading in the first of them.
 function tlTable(title, icon, sections, tip) {
   const tables = sections.map(([headHtml, rows]) => {
     const n = rows.reduce((t, [, l]) => t + l.length, 0) || 1;
-    return `${headHtml ? `<h4 class="tl-sub">${headHtml}</h4>` : ""}<table class="data tl-table"><thead><tr><th></th><th class="num">Activities</th><th class="num">Distance</th><th class="num">Share</th></tr></thead>
+    return `<table class="data tl-table"><thead><tr><th class="tl-sub">${headHtml || ""}</th><th class="num">Activities</th><th class="num">Distance</th><th class="num">Share</th></tr></thead>
       <tbody>${rows.map(([label, l]) => `<tr${l.length ? "" : ' class="tl-zero"'}><td>${label}</td><td class="num">${num(l.length)}</td>
       <td class="num">${km(l.reduce((t, a) => t + a.distance_m, 0))}</td><td class="num">${num((l.length / n) * 100)}%</td></tr>`).join("")}</tbody></table>`;
   }).join("");
@@ -1597,11 +1630,12 @@ function tlWeatherTable(acts, what) {
   const out = acts.filter(isOutdoor), known = out.filter((a) => a.weather), unknown = out.filter((a) => !a.weather);
   if (!out.length) return `<div class="card-head"><h3 class="chart-title">${metricIcon(icon, 18)}<span>${title}</span></h3></div>${hint("No outdoor activities.")}`;
   const temp = TEMP_BANDS.map(([a, b, l]) => [l, known.filter((x) => x.weather[0] >= a && x.weather[0] < b)]);
-  const kind = WEATHER_KINDS.map(([l]) => [l, []]);
+  const kind = WEATHER_KINDS.map(([l, , sky]) => [skyLabel(l, sky), []]);
   for (const a of known) { const k = WEATHER_KINDS.findIndex(([, f]) => f(a.weather[1] ?? 0)); if (k >= 0) kind[k][1].push(a); }
   const unk = unknown.length ? [["Unknown", unknown]] : [];
   const tip = "Outdoor activities only (a route, not indoor, not virtual), from the weather of the hour and the area (not the watch's sensor). Unknown: its weather is still being fetched in the background (or the weather server had none).";
-  return what === "temp" ? tlTable(title, icon, [[null, [...temp, ...unk]]], tip) : tlTable(title, icon, [[null, [...kind, ...unk]]], tip);
+  const unkSky = unknown.length ? [[skyLabel("Unknown", null), unknown]] : [];
+  return what === "temp" ? tlTable(title, icon, [[null, [...temp, ...unk]]], tip) : tlTable(title, icon, [[null, [...kind, ...unkSky]]], tip);
 }
 
 // Explorer tiles: the Size badge drives the summary strip and both charts.

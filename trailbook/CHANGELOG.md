@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.1.16
+
+### Added
+- A Windows app for use without Docker or Home Assistant: an installer on each GitHub release,
+  an icon next to the clock, and one-click updates in Settings › General.
+
+### Changed
+- Statistics › Timeline: Countries lists every country with at least 2 % of the activities
+  (up to 20) before Other, and each ring label shows the number of activities next to the share.
+- Statistics › Timeline: weather kinds with their sky icons; Running and Cycling as the first
+  column head of their distance tables.
+- Statistics › Timeline › Distance breakdown: cycling also under 25 km and 25–50 km.
+- Statistics › Timeline: time of day and day of the week columns in one colour; rings label only
+  slices of at least 3 %; Countries shows the number of countries in its middle, Activity types
+  the number of types, the others nothing.
+- Calendar › Next workout: no line under the title.
+
+- Calendar › Next workout: easy / moderate / hard by the aerobic and the lactate threshold
+  (from the heart rate of each second); Garmin's zones only when there is no heart rate stream.
+- Calendar › Next workout: the estimated form after the planned workouts under the current form.
+
+### Fixed
+- Statistics › Compare years: week labels in even steps from W1 (no crowded W1, W2 at the
+  start) and the last week shown whole.
+
 ## 0.1.15
 
 ### Fixed

@@ -842,10 +842,12 @@ tr.filters-row .tpick { min-width: 150px; }
 .cal-next .nx-next { flex: 2 1 260px; }
 .cal-next .nx-next .stat-value { display: flex; align-items: center; gap: 6px; }
 .cal-next .nx-next .stat-value small { font-size: 12px; font-weight: 400; color: var(--muted); }
+.cal-next .nx-after { margin-top: 6px; }
+.cal-next .nx-after b { color: var(--fg); }
 .cal-next .nx-note { color: color-mix(in srgb, var(--plan, #8e44ad) 70%, var(--fg)); }
 /* the panel: a title with the Model badge, the strip under it (no frame of its own, nothing clipped) */
 .nx-head { display: flex; align-items: center; gap: 8px; padding-right: 12px; }
-.nx-panel .stat-strip.cal-next { border: 0; border-top: 1px solid var(--line); border-radius: 0 0 8px 8px; margin: 6px 0 0; overflow: visible; }
+.nx-panel .stat-strip.cal-next { border: 0; border-radius: 0 0 8px 8px; margin: 2px 0 0; overflow: visible; }
 .cal-year { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 14px; }
 .cal-mini { display: block; color: var(--fg); padding: 8px; border-radius: 8px; }
 .cal-mini:hover { background: var(--surface-2); text-decoration: none; }
@@ -2084,10 +2086,13 @@ svg.tile-chart { width: 100%; height: 100%; display: block; }
 /* Statistics › Timeline: half-width cards, two per row */
 .tl-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 16px; }
 .tl-grid3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-.tl-sub { display: flex; align-items: center; gap: 6px; margin: 10px 0 2px; font-size: 13px; font-weight: 600; }
-.tl-sub:first-of-type { margin-top: 0; }
-.tl-sub svg { width: 16px; height: 16px; }
-.tl-table + .tl-sub { margin-top: 16px; }
+/* a table's heading (Running, Cycling) in its first header cell, at the height of the column heads */
+.tl-table th.tl-sub { text-align: left; font-size: 13px; font-weight: 600; color: var(--fg); text-transform: none; letter-spacing: 0; white-space: nowrap; }
+.tl-table th.tl-sub svg { width: 16px; height: 16px; vertical-align: -3px; margin-right: 5px; }
+.tl-table + .tl-table { margin-top: 16px; }
+/* weather kinds: the sky icon before the name */
+.tl-sky { display: inline-flex; align-items: center; gap: 7px; }
+.tl-sky svg, .tl-sky i { width: 18px; height: 18px; flex: none; }
 /* Records: the row of a curve point being hovered (and the other way round) */
 .rec-efforts .effort.hot { background: color-mix(in srgb, var(--accent) 12%, transparent); }
 .tl-card { min-width: 0; }
@@ -2108,11 +2113,11 @@ svg.tile-chart { width: 100%; height: 100%; display: block; }
 .tl-pie { margin: 0 auto; }
 .tl-slice { fill: var(--c); stroke: var(--surface); stroke-width: 1.5; cursor: default; transition: opacity .15s; }
 .tl-pie:hover .tl-slice:not(:hover) { opacity: .55; }
+.tl-pie-total { font-size: 20px; font-weight: 700; fill: var(--fg); text-anchor: middle; }
+.tl-pie-sub { font-size: 11px; fill: var(--muted); text-anchor: middle; }
 .tl-leader { fill: none; stroke: var(--muted); stroke-width: 1; opacity: .6; }
 .tl-plab { font-size: 12px; fill: var(--fg); cursor: default; }
 .tl-pval { fill: var(--muted); font-variant-numeric: tabular-nums; }
-.tl-pie-total { font-size: 20px; font-weight: 700; fill: var(--fg); text-anchor: middle; }
-.tl-pie-sub { font-size: 11px; fill: var(--muted); text-anchor: middle; }
 /* chart kind and tile size: icons only */
 .icon-switch button { padding: 0 8px; }
 .tl-table { width: 100%; font-size: 12.5px; }

@@ -56,6 +56,7 @@ from . import (
     suggest,
     surface,
     tilechart,
+    update,
     weather,
     workout,
 )
@@ -368,8 +369,28 @@ def create_app(db_path: str | Path) -> Starlette:
                     "version": __version__,
                     "schema": db.schema_version(c),
                     "root": db.get_setting(c, "root"),
+                    "desktop": update.enabled(),
                 }
             )
+
+    # ---- updates of the Windows app ----------------------------------------------------
+
+    async def update_get(request: Request):
+        force = request.query_params.get("check") == "1"
+        return JSONResponse(await run_in_threadpool(update.status, force))
+
+    async def update_install(request: Request):
+        if not update.enabled():
+            raise HTTPException(404, "updates come from Home Assistant or Docker")
+        if job.running():
+            raise HTTPException(409, "An import is running; update when it has finished.")
+        data_dir = Path(db_path).resolve().parent
+        try:
+            installer = await run_in_threadpool(update.download, data_dir)
+        except update.UpdateError as exc:
+            raise HTTPException(502, str(exc)) from exc
+        update.run_installer(installer)
+        return Response(status_code=202)
 
     async def type_counts(request: Request):
         """Activities per type for one person (or everyone): filters list only used types."""
@@ -541,6 +562,7 @@ def create_app(db_path: str | Path) -> Starlette:
             "scan_interval_choices": list(scheduler.INTERVAL_CHOICES_MIN),
             "next_scan_at": due.strftime("%Y-%m-%dT%H:%M:%SZ") if due else None,
             "allowed_roots": os.environ.get("TRAILBOOK_ALLOWED_ROOTS"),
+            "desktop": update.enabled(),
             # road surface: "open" (when an activity is opened) or "background" (all, slowly)
             "surface_mode": db.get_setting(c, "surface_mode") or "background",
             "surface_progress": surface.progress(c),
@@ -2487,6 +2509,8 @@ def create_app(db_path: str | Path) -> Starlette:
 
     routes = [
         Route("/api/info", info),
+        Route("/api/update", update_get),
+        Route("/api/update", update_install, methods=["POST"]),
         Route("/api/types", types),
         Route("/api/types/counts", type_counts),
         Route("/api/time-range", time_range),

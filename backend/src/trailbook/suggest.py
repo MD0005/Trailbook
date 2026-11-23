@@ -1,11 +1,16 @@
 """Calendar › Next: what the next session could be (docs/MANUAL.md › Next workout).
 
 The last 7 days of training and the workouts planned for the next 3 days are split into three
-intensities by heart rate zone — easy (zones 1–2 and below), moderate (zone 3), hard (zones
-4–5); planned steps by their target (planner.estimate) — and compared with the share an
-intensity model asks for. With the form (fitness model), the days since the last hard session
-and the last long one, it picks a rest day or an easy, long, tempo or interval session and a
-sport, and says what to change in the plan when the plan pulls the week away from the model.
+intensities by the two thresholds the models are defined by: easy below the aerobic threshold
+(LT1), moderate between it and the lactate threshold (LTHR), hard above it. LTHR is the
+activity's (watch, the person's, or estimated from the max HR: analysis.activity_thresholds);
+Garmin records no aerobic threshold, so LT1 = LT1_SHARE × LTHR. Done time comes from each
+second of the heart rate; an activity without a heart rate stream or a threshold falls back to
+Garmin's zones (easy 1–2, moderate 3–4, hard 5). Planned steps the same way (planner.estimate)
+— and compared with the share an intensity model asks for. With the form (fitness model), the
+days since the last hard session and the last long one, it picks a rest day or an easy, long,
+tempo or interval session and a sport, and says what to change in the plan when the plan pulls
+the week away from the model.
 
 Only activities with time in heart rate zones count for the split (strength without a strap,
 for example, does not); the session is suggested in an endurance sport (ENDURANCE).
@@ -17,7 +22,7 @@ import json
 import sqlite3
 from datetime import date, timedelta
 
-from . import analysis, planner
+from . import analysis, planner, streams
 
 # Share of easy / moderate / hard time each model asks for.
 MODELS = {
@@ -38,16 +43,38 @@ LONG_S = planner.LONG_S  # a long session: at least this long
 # Sports a session can be suggested in (the split counts every activity with heart rate).
 ENDURANCE = frozenset({"run", "ride", "swim", "walk", "hike", "winter", "water"})
 PLAN_OFF = 0.10  # the plan pulls an intensity this far past the model: say so
+LT1_SHARE = 0.89  # aerobic threshold as a share of the lactate threshold HR (not in Garmin's data)
+
+
+def limits(th: analysis.Thresholds) -> tuple[float, float] | None:
+    """(LT1, LTHR) in bpm, or None without a lactate threshold."""
+    return (th.lthr * LT1_SHARE, th.lthr) if th.lthr else None
+
+
+def _by_limits(conn: sqlite3.Connection, activity_id: int, lims: tuple) -> list[float] | None:
+    """Seconds easy / moderate / hard from the heart rate stream, or None without one."""
+    ch = {
+        r["channel"]: streams.decode(r["encoding"], r["data"])
+        for r in conn.execute(
+            """SELECT channel, encoding, data FROM streams
+               WHERE activity_id = ? AND channel IN ('time', 'hr')""",
+            (activity_id,),
+        )
+    }
+    if not any(ch.get("hr") or []):
+        return None
+    t = analysis.time_in_stream_zones(ch.get("time") or [], ch["hr"], [*lims, float("inf")])
+    return [float(x) for x in t[:3]] if any(t) else None
 
 
 def _split(zones_json: str | None) -> list[float] | None:
-    """Seconds easy / moderate / hard from Garmin's time in heart rate zones (below zone 1 and
-    zones 1–2 / zone 3 / zones 4 and up)."""
+    """Seconds easy / moderate / hard from Garmin's time in heart rate zones, the backup (below
+    zone 1 and zones 1–2 / zones 3–4 / zone 5)."""
     z = (json.loads(zones_json) if zones_json else {}).get("hr") or {}
     t = [float(x or 0) for x in z.get("times") or []]
     if not any(t):
         return None
-    return [sum(t[:3]), sum(t[3:4]), sum(t[4:])]
+    return [sum(t[:3]), sum(t[3:5]), sum(t[5:])]
 
 
 def _median(xs: list[float]) -> float | None:
@@ -63,15 +90,22 @@ def suggest(
     first, last = today - timedelta(days=WINDOW_DAYS - 1), today + timedelta(days=PLAN_DAYS)
     day = analysis.LOCAL_DAY_SQL
     acts = conn.execute(
-        f"""SELECT {day} AS day, category, time_s, zones FROM activities
+        f"""SELECT *, {day} AS day FROM activities
             WHERE person_id = ? AND {day} BETWEEN ? AND ? ORDER BY start_time_utc""",
         (person_id, (today - timedelta(days=SPORT_DAYS - 1)).isoformat(), today.isoformat()),
     ).fetchall()
     week = [a for a in acts if a["day"] >= first.isoformat()]
     done = [0.0, 0.0, 0.0]
     hard_days = set()
+    cache: dict = {}
+    lims_now, by_lims = None, 0  # the latest limits (shown), activities split by them
     for a in week:
-        sp = _split(a["zones"])
+        lims = limits(analysis.activity_thresholds(conn, a, cache))
+        sp = _by_limits(conn, a["id"], lims) if lims else None
+        if sp:
+            lims_now, by_lims = lims, by_lims + 1
+        else:
+            sp = _split(a["zones"])
         if sp:
             done = [x + y for x, y in zip(done, sp, strict=True)]
             if sp[2] >= HARD_MIN_S:
@@ -81,6 +115,10 @@ def suggest(
 
     # planned: from today (today's only while no activity of its sport is done) to PLAN_DAYS ahead
     ctx = planner.context(conn, person_id)
+    if lims_now is None:  # no activity this week split by them: the person's current limits
+        lims_now = limits(analysis.Thresholds(**_current(conn, person_id)))
+    for c in ctx.values():
+        c["limits"] = lims_now  # heart rate steps by the thresholds too
     plans = []
     for r in conn.execute(
         """SELECT id, day, name, sport, target, steps FROM planned_workouts
@@ -95,7 +133,7 @@ def suggest(
         est = planner.estimate(w, ctx)
         plans.append({"id": r["id"], "day": r["day"], "name": r["name"], "sport": r["sport"],
                       "kind": est["kind"], "split": est["intensity"],
-                      "duration_s": est["duration_s"]})  # fmt: skip
+                      "duration_s": est["duration_s"], "load": est["load"]})  # fmt: skip
     planned = [sum(p["split"][k] for p in plans) for k in range(3)]
     long_planned = any(p["duration_s"] >= LONG_S for p in plans)
 
@@ -103,6 +141,15 @@ def suggest(
     series = analysis.fitness_series(loads, until=today) if loads else []
     point = next((d for d in reversed(series) if d["date"] <= today.isoformat()), None)
     form = point["tsb"] if point else None
+    # the form going into the day after the last planned workout, with their estimated loads
+    form_after = None
+    if plans and loads:
+        ahead = dict(loads)
+        for p in plans:
+            ahead[p["day"]] = ahead.get(p["day"], 0.0) + p["load"]
+        after = date.fromisoformat(max(p["day"] for p in plans)) + timedelta(days=1)
+        projected = analysis.fitness_series(ahead, until=after)
+        form_after = next((d["tsb"] for d in projected if d["date"] == after.isoformat()), None)
 
     # the day it is for: today, or tomorrow when something is done today
     for_day = today + timedelta(days=1) if sports_today else today
@@ -187,10 +234,26 @@ def suggest(
         "done": dict(zip(LEVELS, [round(x) for x in done], strict=True)),
         "planned": dict(zip(LEVELS, [round(x) for x in planned], strict=True)),
         "form": round(form, 1) if form is not None else None,
+        "form_after": round(form_after, 1) if form_after is not None else None,
+        "form_after_day": max(p["day"] for p in plans) if plans else None,
         "window": [first.isoformat(), last.isoformat()],
         "plans": [{k: p[k] for k in ("id", "day", "name", "sport", "kind")} for p in plans],
         "next": {"day": for_day.isoformat(), "kind": kind,
                  "sport": sport if kind != "rest" else None, "minutes": minutes,
                  "reasons": reasons},
         "notes": notes,
+        "limits": [round(x) for x in lims_now] if lims_now else None,
+        "by_limits": by_lims, "activities": sum(1 for a in week if a["zones"] or a["id"]),
     }  # fmt: skip
+
+
+def _current(conn: sqlite3.Connection, person_id: str) -> dict:
+    """The person's thresholds today (latest activity's), as Thresholds fields."""
+    row = conn.execute(
+        "SELECT * FROM activities WHERE person_id = ? ORDER BY start_time_utc DESC LIMIT 1",
+        (person_id,),
+    ).fetchone()
+    if row is None:
+        return {}
+    th = analysis.activity_thresholds(conn, row)
+    return {"lthr": th.lthr}

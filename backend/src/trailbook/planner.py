@@ -304,6 +304,13 @@ def pace_zone(speed: float, usual: float) -> float:
     return float(len(table))
 
 
+def _zone_bpm(bounds: list, z: float) -> float:
+    """A point on the zone scale (1.0 = start of zone 1, 1.5 = its middle) in bpm."""
+    z = min(max(z, 1.0), float(len(bounds) - 1) + 0.999)
+    k = int(z)
+    return bounds[k - 1] + (bounds[k] - bounds[k - 1]) * (z - k)
+
+
 def _interp(table: tuple, z: float) -> float:
     z = min(max(z, 1.0), float(len(table)))
     lo = int(math.floor(z))
@@ -359,12 +366,23 @@ def estimate(w: dict, ctx: dict) -> dict:
         lo, hi = (round(span[0], 3), round(span[1], 3)) if span else (None, None)
         blocks.append([round(x / total, 4), round((x + sec) / total, 4), lo, hi, typ])
         x += sec
-    # seconds easy / moderate / hard (suggest.py): heart rate and pace zones 1–2 / 3 / 4–5,
-    # power zones 1–2 / 3 / 4–7; a step without a target and a rest count as easy
+    # seconds easy / moderate / hard (suggest.py): a heart rate step by the thresholds when
+    # known (c["limits"] = LT1, LTHR in bpm: its middle in bpm against them), else heart rate
+    # and pace zones 1–2 / 3–4 / 5, power zones 1–2 / 3–4 / 5–7; a step without a target and a
+    # rest count as easy
     split = [0.0, 0.0, 0.0]
-    for sec, _, zlo, zhi, typ, _, _ in rows:
-        z = 1 if typ == "rest" else int(min(max((zlo + zhi) / 2, 1.0), 7.0))
-        split[0 if z <= 2 else 1 if z == 3 else 2] += sec
+    lims = c.get("limits") if kind == "hr" and bounds else None
+    for sec, _, zlo, zhi, typ, _, span in rows:
+        mid = (zlo + zhi) / 2
+        if typ == "rest":
+            k = 0
+        elif lims and span:  # span: zone z = z - 1 … z, so its middle + 1 on the zone scale
+            bpm = _zone_bpm(bounds, (span[0] + span[1]) / 2 + 1)
+            k = 0 if bpm < lims[0] else 1 if bpm < lims[1] else 2
+        else:
+            z = int(min(max(mid, 1.0), 7.0))
+            k = 0 if z <= 2 else 1 if z <= 4 else 2
+        split[k] += sec
     return {
         "duration_s": round(total),
         "intensity": [round(x) for x in split],

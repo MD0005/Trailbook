@@ -63,8 +63,10 @@ class ImportJob:
         with self._lock:
             if self._proc is not None and self._proc.poll() is None:
                 return False
+            # The Windows exe is its own interpreter: with arguments it runs the CLI.
+            entry = [] if getattr(sys, "frozen", False) else ["-m", "trailbook.cli"]
             cmd = [
-                sys.executable, "-m", "trailbook.cli", "--db", self.db_path,
+                sys.executable, *entry, "--db", self.db_path,
                 command, *args, "--low-priority", "--quiet",
             ]  # fmt: skip
             # stdout stays the server's: the job's log lines reach the add-on's log too

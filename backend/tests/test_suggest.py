@@ -23,10 +23,11 @@ def _act(c, day, cat, secs, zones=None, load=50):
 def test_split_and_suggestions(tmp_path):
     c = db.connect(tmp_path / "t.db")
     c.execute("INSERT INTO persons (id, label) VALUES ('anna', 'Anna')")
+    # the backup without a heart rate stream: zones 1-2 (and below) / 3-4 / 5
     assert suggest._split(json.dumps({"hr": {"times": [10, 20, 30, 40, 50, 60, 0]}})) == [
         60,
-        40,
-        110,
+        90,
+        60,
     ]
     # four easy runs in the week, one ride in the month: no long session yet
     for d in ("2026-11-17", "2026-11-19", "2026-11-21", "2026-11-22"):
@@ -43,7 +44,7 @@ def test_split_and_suggestions(tmp_path):
     out = suggest.suggest(c, "anna", date(2026, 11, 23))
     assert out["next"]["kind"] == "intervals"
     # a hard session today: the next is for tomorrow and easy
-    _act(c, "2026-11-23", "run", 3000, [0, 600, 600, 600, 1200, 0, 0])
+    _act(c, "2026-11-23", "run", 3000, [0, 600, 600, 600, 0, 1200, 0])
     out = suggest.suggest(c, "anna", date(2026, 11, 23), "pyramidal")
     assert out["next"]["day"] == "2026-11-24" and out["next"]["kind"] in ("easy", "rest")
     assert out["model"] == "pyramidal" and out["target"]["moderate"] == 0.2
@@ -62,4 +63,40 @@ def test_plan_counts_three_days_ahead(tmp_path):
         )
     out = suggest.suggest(c, "anna", date(2026, 11, 23))
     assert [p["day"] for p in out["plans"]] == ["2026-11-26"]
+    assert out["form_after"] is None  # no training done yet: no fitness model to run on
+    _act(c, "2026-11-20", "run", 3600, [0, 3600, 0, 0, 0, 0, 0], load=80)
+    out = suggest.suggest(c, "anna", date(2026, 11, 23))
+    assert out["form_after_day"] == "2026-11-26" and out["form_after"] is not None
+    assert out["form_after"] != out["form"]  # the plan's load moves it
     assert out["window"] == ["2026-11-17", "2026-11-26"]
+
+
+def test_split_by_thresholds(tmp_path):
+    from trailbook import planner, streams
+
+    c = db.connect(tmp_path / "t.db")
+    c.execute("INSERT INTO persons (id, label) VALUES ('anna', 'Anna')")
+    _act(c, "2026-11-22", "ride", 1500, [0, 0, 0, 0, 0, 1500, 0])  # zones say: all hard
+    aid = c.execute("SELECT id FROM activities").fetchone()[0]
+    c.execute("UPDATE activities SET watch_lthr = 170 WHERE id = ?", (aid,))
+    # 10 min at 140 (under LT1 = 0.89 x 170 = 151), 10 min at 160, 5 min at 175 (over LTHR)
+    hr = [140.0] * 600 + [160.0] * 600 + [175.0] * 301
+    for name, values in (("time", [float(i) for i in range(len(hr))]), ("hr", hr)):
+        enc, blob = streams.encode(values)
+        c.execute(
+            "INSERT INTO streams (activity_id, channel, encoding, length, data) VALUES (?,?,?,?,?)",
+            (aid, name, enc, len(values), blob),
+        )
+    out = suggest.suggest(c, "anna", date(2026, 11, 23))
+    assert out["done"] == {"easy": 600, "moderate": 600, "hard": 300}  # the stream, not the zones
+    assert out["limits"] == [151, 170] and out["by_limits"] == 1
+    # a planned zone 4 step (Garmin's 153-168 here): between the thresholds, so moderate
+    ctx = {"ride": {"hr": [95, 112, 131, 153, 168, 187], "power": None, "speed": 8.0,
+                    "limits": (151.3, 170.0)}}  # fmt: skip
+    step = {"type": "active", "length": {"kind": "time", "value": 600}, "target": {"zone": [4, 4]}}
+    w = {"name": "t", "sport": "ride", "target": "hr", "steps": [step]}
+    assert planner.estimate(w, ctx)["intensity"] == [0, 600, 0]
+    del ctx["ride"]["limits"]  # no thresholds: the zones, 3-4 moderate
+    assert planner.estimate(w, ctx)["intensity"] == [0, 600, 0]
+    step["target"] = {"zone": [5, 5]}
+    assert planner.estimate(w, ctx)["intensity"] == [0, 0, 600]
