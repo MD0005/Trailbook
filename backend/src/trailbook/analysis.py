@@ -36,8 +36,9 @@ from . import countries, streams
 # v5: power over pauses, up to 5 h; v6: watch FTP per sport, FTP corrected per activity;
 # v7: top speed (rides), distance within a time (Cooper 12 min, the hour), biggest climb and
 # steepest 1 km (runs and rides); v8: time in heart rate / power zones from the streams when
-# the file has none (virtual rides), with borrowed zone limits; the country of the route
-ANALYSIS_VERSION = 8
+# the file has none (virtual rides), with borrowed zone limits; the country of the route;
+# v9: top speed also from smart recording (samples up to 12 s apart)
+ANALYSIS_VERSION = 9
 
 # Best efforts (SPEC §7.5). Pace: metres → best time in s. Power / HR: seconds → best mean.
 # Ride: kilometres → best time in s (kind "ride"). Efforts also keep where they happened
@@ -86,7 +87,7 @@ SPEED_ACCEL_MS2 = 3.0  # speed changing faster than this per second: a jump, not
 SPEED_AGREE_MS, SPEED_AGREE_SHARE = 1.5, 0.15  # distance and the device's speed agree within
 SPEED_TRACK_SHARE = 0.10  # the window's distance and the track's length agree within
 SPEED_PAD_S = 5  # seconds next to a doubtful one are not trusted either
-SPEED_STEP_S = 5  # samples further apart: no speed for that stretch
+SPEED_STEP_S = 12  # samples further apart: no speed for that stretch (smart recording: 1-10 s)
 MAX_GAP_S = 10  # longer gaps in a stream break a window (pause, lost signal)
 
 DEFAULT_HR_REST = 60

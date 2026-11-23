@@ -171,11 +171,18 @@ performance condition, stamina and potential stamina. Streams without data are n
 - Compare years: on top three column charts side by side (a third of the width each):
   Distance, Activities and Elevation gain per year — a column per year (oldest left) in its
   series colour, split into running (bottom, full colour), cycling and other (top) in three
-  shades of it; the total over the column, the split on hover. Hovering a year dims the other
+  shades of it; the total over the column, hovering a part shows that part only (year, kind,
+  value, share). The same frame and axes as every chart: the plot framed, a y axis with nice
+  steps and a dashed grid, the y title with the unit and the years under the x axis with the
+  title Year (plain HTML, not uPlot). Hovering a year dims the other
   columns of all three and fades the other years' lines on every chart below
   (`api.emphasize(label)`).
   Then four pairs of charts (per period, then cumulative), each the full width, one under the
-  other, and Steps per period (daily data, no running total, the Type filter does not apply).
+  other, and Steps per period and their running total (daily data, the Type filter does not apply).
+  The per-period charts (not the running totals) have a **Max** pill among the year pills, at
+  its height (pushed aside like them when they would overlap): the highest week or month of all
+  years in that year's colour; hovering it marks the point and the tooltip names the period and
+  the year.
   Titles: an icon and "<metric> per week | month", the running totals "…, cumulative"; the
   cumulative charts are 25 % higher (325 px). The current year's running total goes on dashed
   and level from its last week to the end of the year (`extend` on a line). Hovering a dot of a
@@ -190,9 +197,10 @@ performance condition, stamina and potential stamina. Streams without data are n
   frame, fills, dashed comparison) — over the distances for speed (labels 400m, 1k, 1mi, 5k…,
   HM, M; tooltip pace and speed on foot), over the durations for power; the main series is the
   best in the Time filter (or of all time), the all-time best dashed; a click on a point opens
-  its activity; a dot per value; the series pills on the right as on every chart (label and
-  value inside, at the height of the last value, pushed apart when they would overlap) in a
-  column of one width (150 px), so the curves end evenly.
+  its activity; a dot per value; the series pills on the right (the series name only — one
+  number for a whole curve would mislead —, at the height of the last value, pushed apart when
+  they would overlap) in a column of one width (150 px), so the curves end evenly. Hovering a
+  point lights its row in the table beside it, and hovering a row shows its point.
   Hover flag, compact: the distance or duration, then one line per series — value, name, date
   (pace only on foot). They fill the height of
   the table tile beside them.
@@ -214,7 +222,8 @@ equally); hovering one marks its point. A pinned value shows every series of the
 
 - **Fitness and fatigue** (396 px) — fitness (muted steel blue `#6f8fbf`) filled (or a plain line, Options), fatigue a
   line; pills: Fitness and Fatigue at the end of the period, Max fitness (highest in the period)
-  and Max fatigue (highest 7-day average, Manual › Fitness) at their heights. The pill columns of
+  and Max fatigue (highest 7-day average, Manual › Fitness) at their heights; hovering Max
+  fitness marks its day, hovering Max fatigue draws those 7 days of the fatigue line thick. The pill columns of
   all charts of a group are one width, so the plots end at the same x. No daily load. Under its x axis
   a strip of **activity icons** (type icon on its day; icons closer than ~35 px share one spot (about three a month over a year; more when zoomed in)
   with a count; hovering shades the days the icon stands for on the chart (first to last day)

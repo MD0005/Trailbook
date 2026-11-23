@@ -11,12 +11,18 @@ grid is 9-25 km anyway. Times are UTC. Recent days come from the forecast API (i
      "points": n}
 
 Hourly and area values: an estimate for the hour and the area, not the exact street.
+
+Every activity outdoors gets its weather in the background (newest first, BATCH activities
+STEP_S apart, then BATCH_PAUSE_S), not only the ones opened. A server that fails is left alone
+for COOLDOWN_S, doubled with every further failure up to COOLDOWN_MAX_S; a success takes one
+step back.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import math
 import sqlite3
 import time
 import urllib.error
@@ -34,6 +40,41 @@ LONG_M = 30_000
 USER_AGENT = f"Trailbook/{__version__} (self-hosted training log; weather)"
 HOURLY = "temperature_2m,wind_speed_10m,wind_direction_10m,rain,precipitation,weather_code"
 TIMEOUT_S = 30
+BATCH = 20
+STEP_S = 3.0
+BATCH_PAUSE_S = 120.0  # ~600 activities an hour at most, 1-3 requests each: far below the limits
+COOLDOWN_S = 600.0
+COOLDOWN_MAX_S = 6 * 3600.0
+# Outdoors for sure: a route, not marked indoor, not virtual (an app's world has no weather).
+OUTDOORS = "has_gps = 1 AND indoor = 0 AND COALESCE(activity_type, '') NOT LIKE 'virtual%'"
+_cool = {"until": 0.0, "fails": 0}
+
+
+def cooldown_left(now: float | None = None) -> float:
+    """Seconds until the weather server may be asked again (0: now)."""
+    return max(0.0, _cool["until"] - (time.time() if now is None else now))
+
+
+def _failed(now: float | None = None) -> float:
+    _cool["fails"] += 1
+    wait = min(COOLDOWN_S * 2 ** (_cool["fails"] - 1), COOLDOWN_MAX_S)
+    _cool["until"] = (time.time() if now is None else now) + wait
+    return wait
+
+
+def _answered() -> None:
+    _cool["until"], _cool["fails"] = 0.0, max(0, _cool["fails"] - 1)
+
+
+def next_missing(conn: sqlite3.Connection) -> int | None:
+    """The newest activity outdoors without its weather (or with an older kind of it)."""
+    row = conn.execute(
+        f"""SELECT id FROM activities WHERE {OUTDOORS}
+            AND (weather IS NULL OR json_extract(weather, '$.version') IS NOT ?)
+            ORDER BY start_time_utc DESC LIMIT 1""",
+        (WEATHER_VERSION,),
+    ).fetchone()
+    return row["id"] if row else None
 
 
 def _points(conn: sqlite3.Connection, activity_id: int) -> list[tuple[float, float, float]]:
@@ -95,6 +136,9 @@ def compute(conn: sqlite3.Connection, activity_id: int) -> dict | None:
             return cached if cached.get("points") else None
     start = datetime.strptime(row["start_time_utc"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
     points = _points(conn, activity_id)
+    left = cooldown_left() if points else 0.0
+    if left:  # the server failed lately: not asked again before the cooldown ends
+        raise OSError(f"weather server busy, next try in {math.ceil(left / 60)} min")
     result: dict = {"version": WEATHER_VERSION, "points": 0}
     if points:
         recent = datetime.now(UTC) - start < timedelta(days=FORECAST_DAYS_BACK)
@@ -107,8 +151,13 @@ def compute(conn: sqlite3.Connection, activity_id: int) -> dict | None:
                 if got and got.get("temperature_2m") is not None:
                     hours.append(got)
         except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
-            logging.getLogger("trailbook.weather").warning("Weather server not available: %s", exc)
+            wait = _failed()
+            logging.getLogger("trailbook.weather").warning(
+                "Weather of activity %s: server not available (%s), next try in %d min",
+                activity_id, exc, math.ceil(wait / 60),
+            )  # fmt: skip
             raise OSError(f"weather server: {exc}") from exc
+        _answered()
         if hours:
             temps = [x["temperature_2m"] for x in hours]
             first = hours[0]

@@ -158,7 +158,7 @@ data can be trusted:
 
 | Check | Limit |
 |---|---|
-| samples apart | at most 5 s |
+| samples apart | at most 12 s (smart recording writes a sample every 1–10 s) |
 | speed | at most 80 km/h |
 | change of speed | at most 3 m/s per second (more is a jump of the position) |
 | the device's own speed (Doppler or a sensor) | within 1,5 m/s or 15 % |
@@ -398,10 +398,11 @@ neighbour closer in heart rate, until none is shorter.
   unbroken vertical / horizontal line of visited tiles; Most visited = the visits of the most
   visited tile; One activity = the most tiles one activity visited.
 
-## Next workout (Calendar › Next)
+## Next workout (Calendar › Next workout)
 
-- **Window**: the last 7 days (today included) and the workouts planned for the next 7 (today's
-  only while no activity of its sport is done today).
+- **Window**: the last 7 days (today included) and the workouts planned for the next 3 days
+  (today's only while no activity of its sport is done today). Only the next few days: a plan
+  further ahead is an intention, and it would weigh as much as the week already done.
 - **Split**: easy = heart rate zones 1–2 and below, moderate = zone 3, hard = zones 4–5 (Garmin's
   time in zones of each activity; activities without heart rate do not count). A planned step
   by its target: heart rate and pace zones 1–2 / 3 / 4–5 (a pace target read as a zone from your

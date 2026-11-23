@@ -2,7 +2,8 @@
 
 One asyncio task that sleeps until the next scan is due; it costs no CPU while waiting.
 The interval comes from the `scan_interval_min` setting (0 = off) and is counted from
-the end of the last import run, so restarting the server does not trigger extra scans.
+the end of the last import run, so restarting the server does not trigger extra scans -
+except after an update whose analysis is newer: that run starts right away.
 """
 
 from __future__ import annotations
@@ -12,7 +13,7 @@ import logging
 from contextlib import closing
 from datetime import UTC, datetime, timedelta
 
-from . import db, garmin, jobs
+from . import analysis, db, garmin, jobs
 
 log = logging.getLogger("trailbook.scheduler")
 
@@ -50,6 +51,12 @@ def next_scan_at(conn) -> datetime | None:
     if progress.get("state") == "failed" and progress.get("finished_at"):
         ends.append(progress["finished_at"])
     if not ends:
+        return datetime.now(UTC)
+    # after an update with a new analysis (analysis.ANALYSIS_VERSION): the run that redoes it
+    # (country, zones, best efforts...) at once, not an interval later
+    if conn.execute(
+        "SELECT 1 FROM activities WHERE analysis_version < ? LIMIT 1", (analysis.ANALYSIS_VERSION,)
+    ).fetchone():
         return datetime.now(UTC)
     last = max(_parse(t) for t in ends)
     return last + timedelta(minutes=minutes)

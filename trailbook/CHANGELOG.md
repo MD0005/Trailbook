@@ -1,5 +1,46 @@
 # Changelog
 
+## 0.1.14
+
+### Changed
+- Map tiles come in two sizes: Squares (the former large squares) and Explorer tiles; medium
+  and small squares are gone.
+- Statistics › Compare years: the year columns have a frame, axes and axis titles; hovering a
+  part of a column shows that part only.
+- Fitness: hovering Max fatigue draws its 7 days of the fatigue line thick instead of a point.
+- Statistics › Compare years: Steps also as a running total.
+- Statistics › Compare years: a Max pill on the charts per week or month (the best period of all
+  years; hovering marks it).
+- Statistics › Timeline: time of day and day of the week charts with a frame, axes and axis
+  titles and small points; the chart kind is picked with three icons in each card.
+- Statistics › Timeline: activity types and countries as a centred ring with a label beside each
+  slice.
+- Statistics › Timeline: the tile charts switch between Squares and Explorer tiles with icons on
+  each card; new tiles per period are columns, the running total a filled line.
+- Statistics › Timeline: Distance, Weather and Temperature breakdown as three cards in a row;
+  running and cycling distances are separate tables.
+- Statistics › Records: hovering a result lights its point on the curve beside it, and hovering
+  a point lights its row.
+- Statistics › Records: the curve pills show only the series name (All time high), no longer a
+  single value that looked like an average.
+- Activity route: markers every 1, 5, 10 or 25 km; long routes start with every 10 km (from
+  50 km) or every 25 km (from 125 km).
+- Calendar: the Next panel is now Next workout, with a title, the Model badge beside it (its list no
+  longer cut off), the form explained in words and the suggestion under Next training.
+- Calendar › Next workout: the intensity split counts the plan of the next 3 days, not 7.
+- After an update that recomputes the analysis (countries, zones, records), it runs right away
+  instead of with the next hourly import.
+
+### Added
+- Weather is fetched in the background for every outdoor activity, not only the ones opened, so
+  Statistics › Timeline › Weather breakdown is complete.
+
+### Fixed
+- Road surface: long routes no longer fail on the map server, one failing activity no longer
+  blocks the others, and a server failing now and then is left alone longer.
+- Top speed over 1 minute: rides recorded in smart mode (a sample every few seconds) now get
+  their real best minute instead of a too low one or none.
+
 ## 0.1.13
 
 ### Added

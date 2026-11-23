@@ -58,20 +58,27 @@ def test_refused_server_cools_down(monkeypatch):
 
     from trailbook import surface
 
-    surface._answered()
+    def reset():
+        surface._cool.update(until=0.0, fails=0)
+        surface._failed.clear()
+
+    reset()
     assert surface.cooldown_left() == 0
     assert surface._refused(None, now=1000) == surface.COOLDOWN_S
     assert surface.cooldown_left(now=1000) == surface.COOLDOWN_S
     assert surface._refused(None, now=1000) == 2 * surface.COOLDOWN_S  # doubled
+    surface._answered()  # one step back, not a reset: the next refusal waits 2x again
+    assert surface.cooldown_left() == 0
+    assert surface._refused(None, now=1000) == 2 * surface.COOLDOWN_S
     assert surface._refused(10**6, now=1000) == surface.COOLDOWN_MAX_S  # capped
-    surface._answered()
+    reset()
     assert surface._refused(5000, now=0) == 5000  # Retry-After wins when longer
-    surface._answered()
+    reset()
 
     calls = []
 
-    def refuse(points, url):
-        calls.append(url)
+    def refuse(points, url, chunk):
+        calls.append(chunk)
         raise surface.Refused("HTTP 502 Bad Gateway")
 
     monkeypatch.setattr(surface, "fetch_ways", refuse)
@@ -89,5 +96,11 @@ def test_refused_server_cools_down(monkeypatch):
     for _ in range(3):
         with pytest.raises(OSError):
             surface.compute(Conn(), 1)
-    assert len(calls) == 1  # asked once, then left alone
-    surface._answered()
+    assert calls == [surface.CHUNK]  # asked once, then left alone
+    # the failed activity waits (1 h) while others go on; its next try asks in half the size
+    assert surface.waiting() == [1]
+    surface._cool["until"] = 0.0
+    with pytest.raises(OSError):
+        surface.compute(Conn(), 1)
+    assert calls == [surface.CHUNK, surface.CHUNK // 2]
+    reset()

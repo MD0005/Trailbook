@@ -61,6 +61,14 @@ def _no_background_surface(monkeypatch):
     monkeypatch.setattr(surface, "next_missing", lambda conn: None)
 
 
+@pytest.fixture(autouse=True)
+def _no_background_weather(monkeypatch):
+    """Weather in the background is always on; tests never reach the weather server."""
+    from trailbook import weather
+
+    monkeypatch.setattr(weather, "next_missing", lambda conn: None)
+
+
 @pytest.fixture
 def conn(tmp_path):
     c = db.connect(tmp_path / "test.db")

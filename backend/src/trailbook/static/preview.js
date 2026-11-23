@@ -1226,7 +1226,7 @@ async function renderActivity(id) {
   const mode = "plain", kmOn = true; // fixed defaults on every visit
   const laps = lapSource(a, chartX, st); // 1 km laps: the device auto-laps, else from the streams
   // grouped by 1 km (runs) or 5 km (rides, long activities); device laps without a distance
-  const lapsN = laps.options.includes(routeKmStep(a)) ? routeKmStep(a) : laps.options[0];
+  const lapsN = laps.options.includes(lapKmStep(a)) ? lapKmStep(a) : laps.options[0];
   const X_KINDS = [chartX?.distance && ["distance", "Distance"], ["time", "Elapsed time"], chartX?.timer && ["timer", "Timer time"], ["percent", "Percent"]].filter(Boolean);
   const xKind = X_KINDS[0][0];
   // Averaging of the power and cadence lines (one choice for both): remembered per person, default 10 s.
@@ -1257,7 +1257,7 @@ async function renderActivity(id) {
     ${a.description ? `<div class="card act-description">${esc(a.description)}</div>` : ""}
     ${track ? `<div class="card route-card"><div class="card-head"><h3 class="tile-title">${metricIcon("route", 18)}<span>Route</span></h3><span class="spacer"></span>
         <div class="badges">${badgeHtml("route-color", "Data", routeModeLabel(mode), { panel: `<div class="opt-panel">${pickList("route-color", ROUTE_MODES.map(([k, l]) => [k, l]), mode, () => "", routeModeIcon)}</div>`, right: true })}
-        ${badgeHtml("route-km", "Markers", kmOn ? `Every ${routeKmStep(a)} km` : "None", { panel: `<div class="opt-panel">${pickList("route-km", [["off", "None"], ["on", `Every ${routeKmStep(a)} km`]], kmOn ? "on" : "off")}</div>`, right: true })}</div></div>
+        ${badgeHtml("route-km", "Markers", kmOn ? `Every ${routeKmStep(a)} km` : "None", { panel: `<div class="opt-panel">${pickList("route-km", [["off", "None"], ...routeKmSteps(a).map((k) => [String(k), `Every ${k} km`])], kmOn ? String(routeKmStep(a)) : "off")}</div>`, right: true })}</div></div>
       <div class="route-wrap"><div id="route-map" class="map"></div>
         <div class="route-overlays">${a.activity_type?.startsWith("virtual_") ? `<div class="route-virtual" data-tip="Virtual: ridden or run on a trainer or treadmill in an app; the route is the app's.">Virtual</div>` : ""}<div class="route-weather" data-weather hidden></div><div class="route-legend" id="route-legend" hidden></div></div></div></div>` : ""}
     ${available.length && chartX ? `<div class="charts" data-charts></div>` : ""}
@@ -1420,7 +1420,7 @@ async function renderActivity(id) {
   };
   // Charts (docs/CHARTS.md): synced with each other and with the route map.
   let charts = null;
-  const route = track ? { a, st, mode, km: kmOn, sections } : null;
+  const route = track ? { a, st, mode, km: kmOn ? routeKmStep(a) : 0, sections } : null;
   // lines moved, added or removed: the Intervals layer of the map follows
   if (sections) sections.onChange = (at) => { if (route?.mode === "intervals") drawActivityRoute(route); saveLines("intervals", at); };
   if (climbs) climbs.onChange = (at) => saveLines("hills", at);
@@ -1507,7 +1507,7 @@ async function renderActivity(id) {
       saveUi("activity-route-offset", routeOffset);
       setRouteOffset(routeOffset);
     });
-    pickBadge("route-km", (v) => (v === "on" ? `Every ${routeKmStep(a)} km` : "None"), (v) => { route.km = v === "on"; draw(); });
+    pickBadge("route-km", (v) => (v === "off" ? "None" : `Every ${v} km`), (v) => { route.km = v === "off" ? 0 : Number(v); draw(); });
   }
   loadCompare();
   // Weather during the activity (Open-Meteo, cached after the first time): a widget on the map.
@@ -1901,8 +1901,15 @@ const ROUTE_SCALES = {
   // Altitude like a relief map: lowland green, hills yellow, mountains brown.
   altitude: { label: "Altitude", unit: "m", f: (v) => v, dec: 0, any: true, stops: ["#1a9850", "#91cf60", "#fee08b", "#d8a35d", "#8c510a"] },
 };
-// Bikes and long activities: a marker every 5 km, otherwise every km.
-const routeKmStep = (a) => (a.category === "ride" || (a.distance_m || 0) >= 40000 ? 5 : 1);
+// Laps: every 5 km for bikes and long activities, otherwise every km.
+const lapKmStep = (a) => (a.category === "ride" || (a.distance_m || 0) >= 40000 ? 5 : 1);
+// Route markers, any sport: every 25 km from 125 km, every 10 km from 50 km, else as the laps.
+// The choices: 1, 5, 10 and 25 km (rides from 5 km) while they give at least two markers.
+const routeKmStep = (a) => { const d = a.distance_m || 0; return d >= 125000 ? 25 : d >= 50000 ? 10 : lapKmStep(a); };
+const routeKmSteps = (a) => {
+  const def = routeKmStep(a), d = a.distance_m || 0;
+  return [1, 5, 10, 25].filter((k) => k === def || (!(a.category === "ride" && k === 1) && k * 2000 <= d));
+};
 const ROUTE_ICON = { speed: "speed", hr: "avg_heart_rate", power: "power", cadence: "cadence", altitude: "altitude", surface: "route", intervals: "interval_time" };
 // Easy's time above the tempo line on the heart rate chart: a colour that stands out on the red line.
 const EASY_OVER_COLOR = "#b42318";
@@ -2112,11 +2119,11 @@ function drawActivityRoute(route) {
                    paint: { "line-color": ["get", "c"], "line-width": 3.5, "line-offset": ROUTE_OFFSET_PX,
                             "line-opacity": 1, "line-opacity-transition": { duration: 180 } } }, "ends");
   }
-  // Kilometre markers: a numbered dot every 1 or 5 km.
+  // Kilometre markers: a numbered dot every route.km km (0: none).
   (route.markers || []).forEach((m) => m.remove());
   route.markers = [];
   if (route.km) {
-    const step = routeKmStep(route.a) * 1000;
+    const step = route.km * 1000;
     let next = step;
     for (const x of pts) {
       if (x.d < next) continue;
@@ -2177,7 +2184,7 @@ const RAMPS = {
   viridis: ["#440154", "#3b528b", "#21918c", "#5ec962", "#fde725"],
   magma: ["#1c1044", "#6b1d81", "#c63d73", "#fb8761", "#fcfdbf"],
 };
-const TILE_SIZES = [[13, "Large squares"], [14, "Explorer tiles"], [16, "Medium squares"], [17, "Small squares"]];
+const TILE_SIZES = [[13, "Squares"], [14, "Explorer tiles"]];
 
 function defaultMapSettings() {
   return {
@@ -2197,7 +2204,9 @@ function loadMapSettings() {
   if (!s) try { s = JSON.parse(store.get("map-settings-v3") || "null"); } catch (e) { s = null; }
   const tab = { layer: TAB.layer || "heatmap", kpis: TAB.kpis ?? false }; // not saved: fixed per visit
   if (!s) return { ...d, ...tab };
-  return { ...d, ...s, ...tab, map: { ...d.map, ...s.map }, heatmap: { ...d.heatmap, ...s.heatmap }, tiles: { ...d.tiles, ...s.tiles } };
+  const tiles = { ...d.tiles, ...s.tiles };
+  if (!TILE_SIZES.some(([z]) => z === tiles.zoom)) tiles.zoom = d.tiles.zoom; // a size no longer offered
+  return { ...d, ...s, ...tab, map: { ...d.map, ...s.map }, heatmap: { ...d.heatmap, ...s.heatmap }, tiles };
 }
 
 function saveMapSettings(s) {
@@ -2623,7 +2632,7 @@ async function renderHeatmap(params) {
   map.on("mouseleave", "routes", () => { map.getCanvas().style.cursor = ""; });
   map.on("moveend", () => {
     const sel = view.querySelector('select[name="tiles.zoom"]');
-    if (sel) [...sel.options].forEach((o) => { const z = Number(o.value); o.textContent = `${TILE_SIZES.find(([k]) => k === z)[1]} · ${num(tileWidthKm(z, map.getCenter().lat), z >= 16 ? 2 : 1)} km`; });
+    if (sel) [...sel.options].forEach((o) => { const z = Number(o.value); o.textContent = `${TILE_SIZES.find(([k]) => k === z)[1]} · ${num(tileWidthKm(z, map.getCenter().lat), 1)} km`; });
   });
 }
 
@@ -2643,7 +2652,7 @@ function renderSettingsPanel() {
     + row("Gradient", rampPicker("heatmap.ramp", H.ramp), !glow)
     + row("Line width", `<input type="range" min="1" max="6" step="0.5" value="${H.width}" name="heatmap.width">`)
     + row("Overlap", `<input type="range" min="0.1" max="0.9" step="0.05" value="${H.intensity}" name="heatmap.intensity">`);
-  const tilesBody = row("Tile size", pickList("tiles.zoom", TILE_SIZES.map(([z, l]) => [z, `${l} · ${num(tileWidthKm(z, lat), z >= 16 ? 2 : 1)} km`]), T.zoom))
+  const tilesBody = row("Tile size", pickList("tiles.zoom", TILE_SIZES.map(([z, l]) => [z, `${l} · ${num(tileWidthKm(z, lat), 1)} km`]), T.zoom))
     + row("Style", pickList("tiles.style", [["coverage", "Coverage"], ["heat", "By number of visits"]], T.style))
     + row("Tile colour", colorPicker("tiles.color", T.color), byVisits)
     + row("Gradient", rampPicker("tiles.ramp", T.ramp), !byVisits)
@@ -2863,7 +2872,7 @@ function drawHeatLayers() {
 // activity of the person did (virtual ones count, as on the map), on a map with the route.
 // Computed here from the earlier routes that come near (earlier-tracks); shown only when there
 // is a new tile. The size picker lists only sizes with new tiles, the largest first.
-const NEW_TILE_NOUN = { 13: "large square", 14: "explorer tile", 16: "medium square", 17: "small square" };
+const NEW_TILE_NOUN = { 13: "square", 14: "explorer tile" };
 async function newTilesCard(view, a, track) {
   const box = view.querySelector("[data-new-tiles]");
   if (!box) return;

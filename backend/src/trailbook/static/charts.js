@@ -34,7 +34,10 @@ const fillAlpha = (a) => (dark() ? a * 0.65 : a);
 //              invert: true (higher values lower), yMin / yMax: values the y range always includes,
 //              ySplits: [v] (y grid and labels exactly there, e.g. at the zone limits), height (px),
 //              fmt: (v) => text (values on the y axis, the flag, pins), points: true (a dot per value),
-//              tags: [{ label, value, color, mark }]  value pills on the right at the height of their
+//              bars: true (columns instead of a line, half a period of room at both ends),
+//              headHtml: controls at the right of the card title (bound by the caller),
+//              tags: [{ label, value, color, mark, values, range: [i0, i1] }]  value pills on the right at the height of their
+//              value; hovering marks the point i of `values`, or with `range` draws that stretch of `values` thick;
 //              value (instead of stats / legend), pushed apart so they never overlap }]
 //   kind "month" (x = 1…12) or "week" (x = week of the year): periods of a year (Statistics)
 //   multi: true - every series is in `lines` (no main one): a dot per value (points), the
@@ -44,6 +47,8 @@ const fillAlpha = (a) => (dark() ? a * 0.65 : a);
 //              on every chart of the group, the pill stays grey
 //   marks: [{ x, icon, tip, href }] icons in a strip under the x axis (marksHidden: start hidden)
 //   hidden: [key] charts built but not shown (api.show(key, on) toggles one without a rebuild)
+//   stats on a chart with tags: pills under the tag column (Statistics: Max); a stat's mark
+//   { i, values, color } is the point i of those values, the pill in that colour
 //   mark: what hovering the stat highlights - "max" | "min" (a point), "up" | "down" (the climbs or
 //   descents), { ranges: [[i0, i1]] }, a number (a line at that value, e.g. an average)
 //   targets: workout step targets (sample index range, low and high value), drawn dashed
@@ -114,6 +119,8 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, share
   const MONTHS_FULL = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
   const fmtX = (v, exact = false, incr = 1) => (v == null ? "" : g.kind === "month" || g.kind === "week" ? fmtPeriod(Math.round(v), exact) : g.kind === "date" ? fmtDate(v) : g.kind === "distance" ? (exact ? `${num(v, 2)} km` : num(v, stepDec(incr)))
     : g.kind === "percent" ? `${num(v, exact ? 1 : 0)}${exact ? " %" : ""}` : fmtTime(v, exact));
+  // columns over x values: half the step between the first two values of room at both ends
+  const barRange = (mn, mx) => { const v = xs(), h = v.length > 1 ? (v[1] - v[0]) / 2 : 1; return [mn - h, mx + h]; };
   const fmtY = (s, v) => (v == null ? "–" : s.fmt ? s.fmt(v) : `${num(v, s.dec)}${s.unit ? " " + s.unit : ""}`);
   const zoneOf = (s, v) => (v == null ? null : s.zones?.find((z) => v >= z.lo && v < z.hi) || null);
   const colorAt = (s, v) => zoneOf(s, v)?.color || s.color;
@@ -126,10 +133,12 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, share
     const side = s.tags ? s.tags.map((t, k) => (s.tagsInside
       ? `<div class="chart-stat chart-tag inside${t.off ? " off" : ""}" data-tag="${k}" data-tip="${esc(t.tip || `${t.label}: ${t.text} · click to ${t.off ? "show" : "hide"}`)}"><span class="chart-ribbon" style="--c:${t.color}"><span class="chart-ribbon-label">${t.label}</span>${t.text}</span></div>`
       : `<div class="chart-stat chart-tag" data-tag="${k}"${t.tip ? ` data-tip="${esc(t.tip)}"` : ""}><span class="chart-stat-label">${t.label}</span><span class="chart-ribbon" style="--c:${t.color}">${t.text}</span></div>`)).join("")
-      : (s.lines?.length && s.legend !== false ? [{ label: s.label, color: s.color }, ...s.lines].map((l) => `<div class="chart-legend-item"><i style="background:${l.color}${l.dash ? ";opacity:.9" : ""}" class="${l.dash ? "dash" : ""}"></i>${l.label}</div>`).join("") : "")
-      + (s.stats || []).map(([l, v, , tip], k) => (v == null || v === "–" ? "" :
-        `<div class="chart-stat" data-stat="${k}" data-tip="${esc(tip || statTip(l, s))}"><span class="chart-stat-label">${l}</span><span class="chart-ribbon" style="--c:${s.color}">${v}</span></div>`)).join("");
-    el.innerHTML = `<div class="card-head"><h3 class="chart-title" data-tip="${esc(s.tip)}">${s.iconHtml || (s.icon ? metricIcon(s.icon, 18) : "")}<span>${s.title || s.label}</span></h3></div>
+      : (s.lines?.length && s.legend !== false ? [{ label: s.label, color: s.color }, ...s.lines].map((l) => `<div class="chart-legend-item"><i style="background:${l.color}${l.dash ? ";opacity:.9" : ""}" class="${l.dash ? "dash" : ""}"></i>${l.label}</div>`).join("") : "");
+    // with tags: a pill like theirs (label inside), placed at its value's height among them
+    const statPills = (s.stats || []).map(([l, v, m, tip], k) => (v == null || v === "–" ? "" : s.tags
+      ? `<div class="chart-stat chart-tag chart-tag-stat${s.tagsInside ? " inside" : ""}" data-stat="${k}" data-tip="${esc(tip || statTip(l, s))}"><span class="chart-ribbon" style="--c:${m?.color || s.color}"><span class="chart-ribbon-label">${l}</span>${v}</span></div>`
+      : `<div class="chart-stat" data-stat="${k}" data-tip="${esc(tip || statTip(l, s))}"><span class="chart-stat-label">${l}</span><span class="chart-ribbon" style="--c:${m?.color || s.color}">${v}</span></div>`)).join("");
+    el.innerHTML = `<div class="card-head"><h3 class="chart-title" data-tip="${esc(s.tip)}">${s.iconHtml || (s.icon ? metricIcon(s.icon, 18) : "")}<span>${s.title || s.label}</span></h3>${s.headHtml ? `<span class="spacer"></span>${s.headHtml}` : ""}</div>
       <div class="chart-row">
         <div class="chart-frame">
           ${hasSec(s) ? `<div class="chart-sections" style="height:${18 + 14 * (secOf(s).lines || 2)}px"><div class="sec-cells"></div><span class="sec-ball sec-add" hidden>+</span></div>` : ""}
@@ -138,7 +147,7 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, share
           ${s.marks ? `<div class="chart-marks"${s.marksHidden ? " hidden" : ""}></div>` : ""}
           ${xt ? `<div class="chart-xlabel" data-tip="${esc(xt[1])}">${xt[0]}</div>` : ""}
         </div>
-        <div class="chart-stats${s.tags ? " chart-tags" : ""}">${side}</div>
+        <div class="chart-stats${s.tags ? " chart-tags" : ""}">${side}${statPills}</div>
       </div>`;
     el.hidden = g.hidden.has(s.key);
     return el;
@@ -184,7 +193,7 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, share
     const date = g.kind === "date";
     return {
       width, height: s.height || CHART_H, padding: [8, 2, 0, 0],
-      scales: { x: { time: g.kind === "date", range: (u, mn, mx) => (g.range || (period ? [mn - 0.5, mx + 0.5] : [mn, mx])) },
+      scales: { x: { time: g.kind === "date", range: (u, mn, mx) => (g.range || (period ? [mn - 0.5, mx + 0.5] : s.bars ? barRange(mn, mx) : [mn, mx])) },
                 y: { dir: s.invert ? -1 : 1,
                      range: (u, mn, mx) => liftForSurface(u, s.yMin != null || s.yMax != null ? yRange(u, mn, mx) : uPlot.rangeNum(mn ?? 0, mx ?? 1, 0.1, true)) } },
       legend: { show: false },
@@ -194,7 +203,9 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, share
         points: { ...(s.multi ? { show: false } : {}), size: 10, width: 2, stroke: cssVar("--surface") || "#fff",
                   fill: (u, si) => (si === 1 ? colorAt(s, s.values[u.cursor.idx]) : s.lines[si - 2].color) },
       },
-      series: [{}, { label: s.label, stroke: s.multi ? "transparent" : s.zones ? zoneStroke : s.color, width: s.zones ? 2.4 : 2, fill: (s.fill ?? !(multi || s.zones)) ? grad : undefined, points: s.points ? { show: true, size: 6, width: 0, fill: s.color } : { show: false }, spanGaps: true }, ...extra],
+      series: [{}, s.bars
+        ? { label: s.label, stroke: s.color, width: 0, fill: withAlpha(s.color, 0.8), paths: uPlot.paths.bars({ size: [0.72, 64], gap: 1 }), points: { show: false } }
+        : { label: s.label, stroke: s.multi ? "transparent" : s.zones ? zoneStroke : s.color, width: s.zones ? 2.4 : 2, fill: (s.fill ?? !(multi || s.zones)) ? grad : undefined, points: s.points ? { show: true, size: 6, width: 0, fill: s.color } : { show: false }, spanGaps: true }, ...extra],
       axes: [
         { font: CHART_FONT, stroke: muted, space: 46, size: date ? 32 : 18, gap: 2, border: { show: true, stroke: axis, width: 1 },
           grid: { show: false }, ticks: { stroke: axis, size: 3, width: 1 },
@@ -311,16 +322,18 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, share
     const box = u._tb?.tags;
     if (!box || !s.tags) return;
     const items = [...box.querySelectorAll("[data-tag]")];
+    const statEls = [...box.querySelectorAll(".chart-tag-stat")]; // e.g. Max: at its value too
     // the column is as wide as the widest pill of the group (no empty strip on the right, and
     // every plot of the group ends at the same x); with `shared` of every group of the page
     const store = shared || g;
-    const tw = store.tagW = Math.max(store.tagW || 0, Math.ceil(Math.max(0, ...items.map((el) => el.offsetWidth))));
+    const tw = store.tagW = Math.max(store.tagW || 0, Math.ceil(Math.max(0, ...[...items, ...statEls].map((el) => el.offsetWidth))));
     box.style.width = `${tw}px`;
     const off = u.over.getBoundingClientRect().top - box.getBoundingClientRect().top;
     // pills with the label inside are lower; a hidden series' pill keeps its height (grey)
     const h = s.tagsInside ? 20 : 32, step = h + (s.tagsInside ? 2 : 3), lo = 0, hi = box.clientHeight - h;
-    const want = items.map((el, k) => {
-      const v = s.tags[k].value;
+    const statValue = (el) => { const m = s.stats[el.dataset.stat][2]; return m?.values ? m.values[m.i] : null; };
+    const want = [...items, ...statEls].map((el) => {
+      const v = el.dataset.tag != null ? s.tags[el.dataset.tag].value : statValue(el);
       const y = v == null ? 0 : off + u.valToPos(Math.min(u.scales.y.max, Math.max(u.scales.y.min, v)), "y") - (s.tagsInside ? h / 2 : h - 8); // ribbon centre on the value
       return { el, y };
     }).sort((p, q) => p.y - q.y);
@@ -736,7 +749,7 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, share
       const c = m.color || s.color;
       for (const [a, b] of m.ranges) {
         ctx.fillStyle = withAlpha(c, 0.2);
-        ctx.fillRect(X(a), top, Math.max(2 * dpr, X(b) - X(a)), height);
+        if (!m.bold) ctx.fillRect(X(a), top, Math.max(2 * dpr, X(b) - X(a)), height);
         ctx.beginPath(); ctx.lineWidth = 3.5 * dpr; ctx.strokeStyle = c;
         for (let i = a; i <= b; i++) if (s.values[i] != null) ctx.lineTo(X(i), Y(s.values[i]));
         ctx.stroke();
@@ -771,6 +784,7 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, share
     const v = s.values;
     if (typeof mark === "number") return { y: mark };
     if (mark?.ranges) return mark;
+    if (mark?.values) return { i: mark.i, s: { ...s, color: mark.color || s.color, values: mark.values } }; // a point of one line
     if (mark === "max" || mark === "min") {
       let best = null;
       for (let i = 0; i < v.length; i++) if (v[i] != null && (best == null || (mark === "max" ? v[i] > v[best] : v[i] < v[best]))) best = i;
@@ -956,7 +970,9 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, share
         st.onmouseenter = () => {
           if (t.i == null || t.mark === false) return; // a latest value: its point is the line's end, next to the pill
           const vals = t.values || s.values;
-          g.mark = { i: t.i, u, s: { ...s, color: t.color, values: vals } }; st.classList.add("on"); u.redraw(false);
+          g.mark = t.range ? { ranges: [t.range], bold: true, u, s: { ...s, color: t.color, values: vals } } // a stretch: the line drawn thick
+            : { i: t.i, u, s: { ...s, color: t.color, values: vals } };
+          st.classList.add("on"); u.redraw(false);
         };
         st.onmouseleave = () => { g.mark = null; st.classList.remove("on"); u.redraw(false); };
       });
@@ -1215,7 +1231,16 @@ function curveChart(root, { points, color, unit, label, compareLabel, onHover = 
     if (tags) placeCurveTags();
   });
   ro.observe(holder);
-  return { destroy() { ro.disconnect(); u.destroy(); } };
+  return {
+    destroy() { ro.disconnect(); u.destroy(); },
+    // show(key): the point of that key as when hovered (crosshair, dot, tooltip); null hides it
+    show(key) {
+      const i = key == null ? -1 : pts.findIndex((p) => p.key === key);
+      const v = i >= 0 ? (pts[i].value ?? pts[i].compare) : null;
+      if (i < 0 || v == null) { u.setCursor({ left: -10, top: -10 }); return; }
+      u.setCursor({ left: u.valToPos(i, "x"), top: u.valToPos(v, "y") });
+    },
+  };
   // The pills at the last value of each series (pushed apart when they would overlap).
   function placeCurveTags() {
     const box = root.querySelector(".curve-tags");
@@ -1223,7 +1248,8 @@ function curveChart(root, { points, color, unit, label, compareLabel, onHover = 
     const last = pts[pts.length - 1];
     const grey = "#8a8f98";
     const items = [[mainLabel, last.value, color], [compareLabel, last.compare, grey]].filter(([, v]) => v != null);
-    box.innerHTML = items.map(([l, v, c], k) => `<div class="chart-stat chart-tag inside${k ? " curve-tag-dash" : ""}" data-tip="${esc(`${l}: ${fmtVal(v, last)} at ${keyFull(last.key)}`)}"><span class="chart-ribbon" style="--c:${c}"><span class="chart-ribbon-label">${esc(l)}</span>${num(v, v < 100 ? 1 : 0)} ${unit}</span></div>`).join("");
+    // the series name only: one number for a whole curve would mislead (the values are on hover)
+    box.innerHTML = items.map(([l, , c], k) => `<div class="chart-stat chart-tag inside${k ? " curve-tag-dash" : ""}" data-tip="${esc(`${l}: hover the curve or a row of the table for the values`)}"><span class="chart-ribbon" style="--c:${c}">${esc(l)}</span></div>`).join("");
     const off = u.over.getBoundingClientRect().top - box.getBoundingClientRect().top, h = 20, step = 22;
     const ys = items.map(([, v]) => off + u.valToPos(Math.min(u.scales.y.max, Math.max(u.scales.y.min, v)), "y") - h / 2);
     if (ys.length === 2 && Math.abs(ys[0] - ys[1]) < step) { // overlap: both give way equally

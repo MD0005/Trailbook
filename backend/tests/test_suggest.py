@@ -47,3 +47,19 @@ def test_split_and_suggestions(tmp_path):
     out = suggest.suggest(c, "anna", date(2026, 11, 23), "pyramidal")
     assert out["next"]["day"] == "2026-11-24" and out["next"]["kind"] in ("easy", "rest")
     assert out["model"] == "pyramidal" and out["target"]["moderate"] == 0.2
+
+
+def test_plan_counts_three_days_ahead(tmp_path):
+    c = db.connect(tmp_path / "t.db")
+    c.execute("INSERT INTO persons (id, label) VALUES ('anna', 'Anna')")
+    step = {"type": "active", "length": {"kind": "time", "value": 2400}, "target": {"zone": [2, 2]}}
+    for day in ("2026-11-26", "2026-11-28"):  # in 3 days: counts; in 5: too far ahead
+        c.execute(
+            """INSERT INTO planned_workouts (person_id, day, name, sport, target, steps,
+                                             created_at, updated_at)
+               VALUES ('anna', ?, ?, 'run', 'hr', ?, '', '')""",
+            (day, f"Easy {day}", json.dumps([step])),
+        )
+    out = suggest.suggest(c, "anna", date(2026, 11, 23))
+    assert [p["day"] for p in out["plans"]] == ["2026-11-26"]
+    assert out["window"] == ["2026-11-17", "2026-11-26"]

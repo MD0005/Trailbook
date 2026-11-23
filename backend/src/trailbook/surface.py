@@ -31,17 +31,22 @@ MATCH_M = 25  # a way further away than this does not count
 QUERY_STEP_M = 100  # route points sent to the server: one every this many metres
 SAMPLE_STEP_M = 20  # track points matched: one every this many metres
 BOX_POINTS = 10  # route points per box (about 1 km)
-CHUNK = 150  # boxes per server request
+CHUNK = 30  # boxes per server request (~30 km: a long route in one query times out, HTTP 502/504)
+CHUNK_GAP_S = 2.0  # pause between the requests of one route
 TIMEOUT_S = 120
 # Being kind to the public server: the background run fetches BATCH activities STEP_S apart,
 # then pauses BATCH_PAUSE_S (an import that finishes starts the next batch at once). A server
 # that refuses (429, 5xx, no answer) is left alone for COOLDOWN_S, doubled with every further
-# refusal up to COOLDOWN_MAX_S (or as long as its Retry-After says); a success resets it.
+# refusal up to COOLDOWN_MAX_S (or as long as its Retry-After says); a success takes one step
+# back (not a reset: a server failing now and then keeps a long cooldown). An activity that
+# failed waits ACTIVITY_RETRY_S (1 h, 4 h, then a day) so the others go on, and is asked in
+# smaller requests (CHUNK halved per failure).
 BATCH = 10
 STEP_S = 20.0
 BATCH_PAUSE_S = 600.0
 COOLDOWN_S = 600.0
 COOLDOWN_MAX_S = 6 * 3600.0
+ACTIVITY_RETRY_S = (3600.0, 4 * 3600.0, 24 * 3600.0)
 
 PAVED = {"asphalt", "paved", "concrete", "concrete:plates", "concrete:lanes", "paving_stones",
          "sett", "cobblestone", "unhewn_cobblestone", "metal", "wood", "chipseal", "bricks",
@@ -199,6 +204,19 @@ class Refused(OSError):
 
 
 _cool = {"until": 0.0, "fails": 0}  # one server per add-on: one cooldown for all callers
+_failed: dict[int, tuple[int, float]] = {}  # activity id -> (failures, not before) (this run)
+
+
+def _activity_failed(activity_id: int, now: float | None = None) -> None:
+    n = _failed.get(activity_id, (0, 0.0))[0] + 1
+    wait = ACTIVITY_RETRY_S[min(n, len(ACTIVITY_RETRY_S)) - 1]
+    _failed[activity_id] = (n, (time.time() if now is None else now) + wait)
+
+
+def waiting(now: float | None = None) -> list[int]:
+    """Activities that failed lately and wait for their next try."""
+    t = time.time() if now is None else now
+    return [a for a, (_, until) in _failed.items() if until > t]
 
 
 def cooldown_left(now: float | None = None) -> float:
@@ -215,7 +233,7 @@ def _refused(retry_after: float | None, now: float | None = None) -> float:
 
 
 def _answered() -> None:
-    _cool["until"], _cool["fails"] = 0.0, 0
+    _cool["until"], _cool["fails"] = 0.0, max(0, _cool["fails"] - 1)
 
 
 def _retry_after(exc: urllib.error.HTTPError) -> float | None:
@@ -225,11 +243,13 @@ def _retry_after(exc: urllib.error.HTTPError) -> float | None:
         return None
 
 
-def fetch_ways(points: list[tuple[float, float, float]], url: str) -> list[dict]:
+def fetch_ways(
+    points: list[tuple[float, float, float]], url: str, chunk: int = CHUNK
+) -> list[dict]:
     """Ways with a highway tag near the route, from an Overpass server.
 
     The route is cut into ~1 km pieces; each piece is a small box (padded by MATCH_M) and one
-    request asks for the ways in all boxes of up to CHUNK pieces at once.
+    request asks for the ways in all boxes of up to `chunk` pieces at once.
     """
     route, last = [], -1e9
     for lat, lon, d in points:
@@ -247,8 +267,10 @@ def fetch_ways(points: list[tuple[float, float, float]], url: str) -> list[dict]
         boxes.append(f"{min(lats) - pad_lat:.5f},{min(lons) - pad_lon:.5f},"
                      f"{max(lats) + pad_lat:.5f},{max(lons) + pad_lon:.5f}")  # fmt: skip
     ways: dict[int, dict] = {}
-    for k in range(0, len(boxes), CHUNK):
-        union = "".join(f"way[highway]({b});" for b in boxes[k : k + CHUNK])
+    for k in range(0, len(boxes), chunk):
+        if k:
+            time.sleep(CHUNK_GAP_S)
+        union = "".join(f"way[highway]({b});" for b in boxes[k : k + chunk])
         query = f"[out:json][timeout:90];({union});out tags geom;"
         req = urllib.request.Request(
             url, data=("data=" + urllib.request.quote(query)).encode(),
@@ -298,16 +320,19 @@ def compute(conn: sqlite3.Connection, activity_id: int) -> dict | None:
     if left:  # the server refused lately: not asked again before the cooldown ends
         raise OSError(f"map data server busy, next try in {math.ceil(left / 60)} min")
     url = db.get_setting(conn, "overpass_url") or OVERPASS_URL
+    fails = _failed.get(activity_id, (0, 0.0))[0]
     try:
-        ways = fetch_ways(points, url)
+        ways = fetch_ways(points, url, max(5, CHUNK >> fails))
     except (Refused, json.JSONDecodeError) as exc:
         wait = _refused(getattr(exc, "retry_after", None))
+        _activity_failed(activity_id)
         logging.getLogger("trailbook.surface").warning(
             "Road surface of activity %s: map data server not available (%s), next try in %d min",
             activity_id, exc, math.ceil(wait / 60),
         )  # fmt: skip
         raise OSError(f"map data server: {exc}") from exc
     _answered()
+    _failed.pop(activity_id, None)
     runs = match(points, ways)
     result = {"version": SURFACE_VERSION, "runs": runs, "shares": shares(runs)}
     conn.execute(
@@ -331,10 +356,14 @@ OUTDOORS = "has_gps = 1 AND COALESCE(activity_type, '') NOT LIKE 'virtual%'"
 
 
 def next_missing(conn: sqlite3.Connection) -> int | None:
-    """The newest activity with a route outdoors whose surface is not known yet."""
+    """The newest activity with a route outdoors whose surface is not known yet (one that
+    failed lately waits for its next try)."""
+    skip = waiting()
     row = conn.execute(
         f"""SELECT id FROM activities WHERE {OUTDOORS} AND surface IS NULL
-           ORDER BY start_time_utc DESC LIMIT 1"""
+           AND id NOT IN ({",".join("?" * len(skip))})
+           ORDER BY start_time_utc DESC LIMIT 1""",
+        skip,
     ).fetchone()
     return row["id"] if row else None
 

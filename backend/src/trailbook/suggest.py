@@ -1,6 +1,6 @@
 """Calendar › Next: what the next session could be (docs/MANUAL.md › Next workout).
 
-The last 7 days of training and the workouts planned for the next 7 days are split into three
+The last 7 days of training and the workouts planned for the next 3 days are split into three
 intensities by heart rate zone — easy (zones 1–2 and below), moderate (zone 3), hard (zones
 4–5); planned steps by their target (planner.estimate) — and compared with the share an
 intensity model asks for. With the form (fitness model), the days since the last hard session
@@ -27,7 +27,8 @@ MODELS = {
 }
 DEFAULT_MODEL = "polarized"
 LEVELS = ("easy", "moderate", "hard")
-WINDOW_DAYS = 7  # days back (today included) and days ahead
+WINDOW_DAYS = 7  # days back (today included)
+PLAN_DAYS = 3  # planned workouts this many days ahead (and today's): what is about to happen
 SPORT_DAYS = 28  # the usual mix of sports
 HARD_MIN_S = 10 * 60  # a day with this much hard time was a hard day
 REST_FORM = -30  # form below this: rest
@@ -59,7 +60,7 @@ def suggest(
 ) -> dict:
     model = model if model in MODELS else DEFAULT_MODEL
     name, target = MODELS[model]
-    first, last = today - timedelta(days=WINDOW_DAYS - 1), today + timedelta(days=WINDOW_DAYS)
+    first, last = today - timedelta(days=WINDOW_DAYS - 1), today + timedelta(days=PLAN_DAYS)
     day = analysis.LOCAL_DAY_SQL
     acts = conn.execute(
         f"""SELECT {day} AS day, category, time_s, zones FROM activities
@@ -78,7 +79,7 @@ def suggest(
     long_done = any((a["time_s"] or 0) >= LONG_S for a in week)
     sports_today = {a["category"] for a in week if a["day"] == today.isoformat()}
 
-    # planned: from today (today's only while no activity of its sport is done) to a week ahead
+    # planned: from today (today's only while no activity of its sport is done) to PLAN_DAYS ahead
     ctx = planner.context(conn, person_id)
     plans = []
     for r in conn.execute(

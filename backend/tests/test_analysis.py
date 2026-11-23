@@ -323,6 +323,17 @@ def test_top_speed_clean_ride():
     assert v == pytest.approx(12.0, abs=0.05) and 200 <= start <= 240
 
 
+def test_top_speed_smart_recording():
+    # a sample every 8 s at a steady 7 m/s, 1 min at 9 m/s in the middle
+    ride = _ride(900, lambda s: 9.0 if 400 <= s < 460 else 7.0)
+    t, d, lat, lon, sp = ([x[k] for k in range(0, 900, 8)] for x in ride)
+    v, _ = analysis.top_speed_at(t, d, 60, lat, lon, sp)
+    assert v == pytest.approx(9.0, abs=0.3)
+    # samples 20 s apart: too far to trust
+    t, d = ([x[k] for k in range(0, 900, 20)] for x in ride[:2])
+    assert analysis.top_speed_at(t, d, 60) is None
+
+
 def test_top_speed_ignores_gps_jumps():
     t, d, lat, lon, sp = _ride(600, lambda s: 8.0)
     # a jump of the position: 150 m in one second, then back on track

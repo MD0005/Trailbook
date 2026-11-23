@@ -69,6 +69,12 @@ def test_next_scan_time(conn, tmp_path):
         finished_at="2026-01-01T13:00:00Z",
     )  # fmt: skip
     assert scheduler.next_scan_at(conn) == finished + timedelta(minutes=90)
+    # an update with a newer analysis: the run that redoes it is due at once
+    write(tmp_path / "alice" / "a.fit", make_fit(49, serial=111, created=T0))
+    importer.scan(conn, tmp_path)
+    importer.run_queue(conn, tmp_path)
+    conn.execute("UPDATE activities SET analysis_version = 0")
+    assert scheduler.next_scan_at(conn) <= datetime.now(UTC)
     db.set_setting(conn, "scan_interval_min", "0")
     assert scheduler.next_scan_at(conn) is None
 

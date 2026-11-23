@@ -279,7 +279,7 @@ def _workout_filter(q) -> tuple[list[str], list]:
 
 
 # New tiles: earlier routes are looked at when they reach this close to the activity's box
-# (degrees; a large square, zoom 13, is up to ~0.044° wide).
+# (degrees; a square, zoom 13, is up to ~0.044° wide).
 BOX_MARGIN = 0.05
 
 
@@ -2629,6 +2629,54 @@ def create_app(db_path: str | Path) -> Starlette:
             except TimeoutError:
                 pass
 
+    # Weather for every activity outdoors in the background, newest first, in batches
+    # (weather.BATCH activities weather.STEP_S apart, then a pause); a failing server is left
+    # alone for its cooldown (weather.cooldown_left). Nothing left: one look an hour (an import
+    # brings new ones).
+    async def weather_loop():
+        in_batch = 0
+        while True:
+            wait = 3600.0
+            left = weather.cooldown_left()
+            if left:
+                wait = left
+            else:
+                with closing(conn()) as c:
+                    aid = weather.next_missing(c)
+                if aid is None:
+                    in_batch = 0
+                    if job.running():
+                        wait = 60.0
+                else:
+
+                    def work(aid=aid):
+                        with closing(conn()) as c2:
+                            weather.compute(c2, aid)
+
+                    try:
+                        await run_in_threadpool(work)
+                        in_batch += 1
+                    except OSError:  # logged by weather.compute, cooldown set
+                        in_batch = 0
+                    except Exception:  # noqa: BLE001 - keep the loop alive
+                        log.exception("Weather of activity %s failed", aid)
+                        with closing(conn()) as c3:  # not this one again in a loop
+                            none = {"version": weather.WEATHER_VERSION, "points": 0}
+                            c3.execute(
+                                "UPDATE activities SET weather = ? WHERE id = ?",
+                                (json.dumps(none), aid),
+                            )
+                            c3.commit()
+                        in_batch = 0
+                    left = weather.cooldown_left()
+                    if left:
+                        wait = left
+                    elif in_batch >= weather.BATCH:
+                        in_batch, wait = 0, weather.BATCH_PAUSE_S
+                    else:
+                        wait = weather.STEP_S
+            await asyncio.sleep(wait)
+
     # Planned workouts to intervals.icu: sleeps until the next send is due (or a change wakes
     # it); nothing to send = one look an hour.
     async def plan_loop():
@@ -2700,6 +2748,7 @@ def create_app(db_path: str | Path) -> Starlette:
     async def lifespan(app):
         sched.start()
         surface_task = asyncio.create_task(surface_loop(), name="trailbook-surface")
+        weather_task = asyncio.create_task(weather_loop(), name="trailbook-weather")
         plan_task = asyncio.create_task(plan_loop(), name="trailbook-plans")
         files_task = asyncio.create_task(files_loop(), name="trailbook-icu-files")
         ha_task = (
@@ -2709,6 +2758,7 @@ def create_app(db_path: str | Path) -> Starlette:
         )
         yield
         surface_task.cancel()
+        weather_task.cancel()
         plan_task.cancel()
         files_task.cancel()
         if ha_task:
