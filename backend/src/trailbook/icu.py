@@ -68,6 +68,13 @@ class Client:
         self.transport = transport or urllib_transport
 
     def call(self, method: str, path: str, data=None):
+        raw = self.call_raw(method, path, data)
+        try:
+            return json.loads(raw) if raw else None
+        except ValueError:
+            return None
+
+    def call_raw(self, method: str, path: str, data=None) -> bytes:
         body = None
         headers = dict(self.headers)
         if data is not None:
@@ -77,15 +84,12 @@ class Client:
         if status in (401, 403):
             raise IcuError("intervals.icu refused the API key", status)
         if status == 404 and method == "DELETE":
-            return None
+            return b""
         if status >= 400:
             snippet = re.sub(r"\s+", " ", raw[:160].decode("utf-8", "replace")).strip()
             raise IcuError(f"intervals.icu: HTTP {status}" + (f" {snippet}" if snippet else ""),
                            status)  # fmt: skip
-        try:
-            return json.loads(raw) if raw else None
-        except ValueError:
-            return None
+        return raw or b""
 
     def athlete(self) -> dict:
         return self.call("GET", "/athlete/0") or {}

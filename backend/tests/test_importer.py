@@ -466,3 +466,24 @@ def test_device_names_are_readable():
     assert device_name("garmin", "hrm_dual") == "HRM-Dual"
     assert device_name("favero_electronics", "assioma_uno") == "Assioma Uno"
     assert device_name("garmin", 3592) is None
+
+
+def test_training_app_lists_its_sensors():
+    from trailbook.fitfile import devices
+
+    msgs = {
+        "file_id_mesgs": [{"manufacturer": "tacx", "garmin_product": "tacx_training_app_android"}],
+        "device_info_mesgs": [
+            {"device_index": "creator", "manufacturer": "tacx",
+             "garmin_product": "tacx_training_app_android", "serial_number": 1},
+            {"device_index": 1, "manufacturer": "favero_electronics", "device_type": 17,
+             "product_name": "favero_electronics - Ant - 46602", "serial_number": 2},
+            {"device_index": 2, "manufacturer": "tacx", "device_type": 17,
+             "product_name": "Tacx - Ant - 16218", "serial_number": 3},
+            {"device_index": 3, "manufacturer": "garmin",
+             "product_name": "Garmin - HRM-Dual:837217", "serial_number": 4},
+        ],
+    }  # fmt: skip
+    got = [(d["kind"], d["name"]) for d in devices(msgs)]
+    assert got == [("app", "Tacx Training app"), ("power_meter", "Power meter"),
+                   ("hr_strap", "HRM-Dual"), ("trainer", "Smart trainer")]  # fmt: skip

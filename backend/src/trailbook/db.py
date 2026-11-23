@@ -599,6 +599,37 @@ MIGRATIONS: list[str] = [
            'indoor_climb', 'esports'), analysis_version = 0
     WHERE type_overridden = 1;
     """,
+    # v38 — files from intervals.icu prepared for download (icufiles.py): per person on/off and
+    # the first day looked at; one row per intervals.icu activity looked at, so none is fetched
+    # twice. state: ready (file waiting) / delete (downloaded, still to be removed from
+    # intervals.icu) / done / skipped (not a file to prepare).
+    """
+    ALTER TABLE icu_accounts ADD COLUMN files_on INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE icu_accounts ADD COLUMN files_from TEXT;
+    CREATE TABLE icu_files (
+        person_id   TEXT NOT NULL REFERENCES persons(id) ON DELETE CASCADE,
+        icu_id      TEXT NOT NULL,
+        name        TEXT,
+        start_local TEXT,
+        state       TEXT NOT NULL,
+        path        TEXT,
+        error       TEXT,
+        created_at  TEXT NOT NULL,
+        PRIMARY KEY (person_id, icu_id)
+    );
+    """,
+    # v39 — training apps list their sensors without a source type (fitfile.devices): the
+    # files of virtual activities are imported again to get them.
+    """
+    UPDATE files SET status = 'new'
+    WHERE status = 'imported' AND activity_id IN (
+        SELECT id FROM activities WHERE activity_type LIKE 'virtual%');
+    """,
+    # v40 — the country of the route (ISO 3166 alpha-3 as in static/regions; NULL: no GPS, at
+    # sea or an app's made-up world), set by the analysis (countries.py).
+    """
+    ALTER TABLE activities ADD COLUMN country TEXT;
+    """,
 ]
 
 SCHEMA_VERSION = len(MIGRATIONS)

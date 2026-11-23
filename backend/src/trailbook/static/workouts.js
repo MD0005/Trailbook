@@ -1,4 +1,4 @@
-// Trailbook — planned workouts: Settings › Workouts (the intervals.icu key), the tray of workout
+// Trailbook — planned workouts: Settings › Workouts API (the intervals.icu key), the tray of workout
 // templates above the calendar, the workout creator, and the planned workouts in the calendar.
 // Server side: planner.py (workouts, estimates), icu.py (intervals.icu → Garmin).
 
@@ -128,7 +128,7 @@ function woSuggestName(w, est) {
 const planSyncIcon = (p) => (p.sync ? `<span class="cal-sync-off" title="${esc(p.sync)}">${ICON_SYNC_OFF}</span>` : "");
 const plannedFlag = (p) => `<span class="cal-planned" title="Planned: ${esc(p.name)} · ${esc(dur(p.estimate.duration_s))} · ${esc(workoutLabel(p.estimate.kind))}">${ICON_PLANNED}</span>`;
 
-// ---- Settings › Workouts ----------------------------------------------------------------------
+// ---- Settings › Workouts API ----------------------------------------------------------------------
 
 async function settingsWorkouts(el) {
   const [{ accounts }] = await Promise.all([api("icu"), api("persons").then((p) => { PERSONS = p; })]);

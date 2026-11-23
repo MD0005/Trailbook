@@ -191,6 +191,8 @@ const OWN_ICONS = {
   // mountain profile with an arrow up / down
   total_ascent: `<path d="M2.5 20 9 9.5l3.5 5.5 2-2.5 5 7.5Z" ${iconLine()}/><path d="M18.5 9.5V3M16 5.5 18.5 3 21 5.5" ${iconLine()}/>`,
   total_descent: `<path d="M2.5 20 9 9.5l3.5 5.5 2-2.5 5 7.5Z" ${iconLine()}/><path d="M18.5 3v6.5M16 7l2.5 2.5L21 7" ${iconLine()}/>`,
+  // explorer tiles: a grid of squares, one of them filled (a new tile)
+  tiles: `<rect x="3.5" y="3.5" width="7" height="7" rx="1.2" ${iconLine()}/><rect x="13.5" y="3.5" width="7" height="7" rx="1.2" ${iconLine()}/><rect x="3.5" y="13.5" width="7" height="7" rx="1.2" ${iconLine()}/><rect x="13.5" y="13.5" width="7" height="7" rx="1.2" fill="currentColor" stroke="currentColor" stroke-width="2.1" stroke-linejoin="round"/>`,
   // speedometer
   avg_pace: `<path d="M4.2 18.5a8.8 8.8 0 1 1 15.6 0" ${iconLine()}/><path d="M12 15.5 16.5 10" ${iconLine()}/><circle cx="12" cy="15.5" r="1.9" fill="currentColor"/><path d="M12 6.5v1.6M6.4 9.3l1.1 1.1M17.6 9.3l-1.1 1.1" ${iconLine(1.8)}/>`,
 };
@@ -309,15 +311,20 @@ function setupTheme() {
 const PAGE_SIZE = 50;
 // Waiting: a cyclist riding along a road (wheels turning, the road passing under), with a small
 // label. Used while a page takes long to load and at the end of lists that load more on scroll.
+// Waiting: a road cyclist leaning to the bar, the wheels turning, the legs pedalling round the
+// crank (knee worked out from thigh and shin length; frames made by a small script, SMIL).
 function loaderHtml(label = "Loading…") {
   return `<div class="loader" role="status" aria-live="polite">
     <svg class="loader-bike" viewBox="0 0 72 44" aria-hidden="true">
       <line class="loader-road" x1="0" y1="40.5" x2="72" y2="40.5"/>
       <g class="loader-ride">
-        <g class="loader-wheel"><circle cx="18" cy="30" r="9"/><path d="M18 21v18M9 30h18M11.6 23.6l12.8 12.8M24.4 23.6 11.6 36.4"/></g>
-        <g class="loader-wheel"><circle cx="54" cy="30" r="9"/><path d="M54 21v18M45 30h18M47.6 23.6l12.8 12.8M60.4 23.6 47.6 36.4"/></g>
-        <path class="loader-frame" d="M18 30 28 18h15l11 12M28 18l8 12H18M36 30l7-12M26 14h6M43 18l-1-5h5"/>
-        <path class="loader-rider" d="M29 14l9-6 5 5M38 8l-6 9 4 6"/><circle class="loader-head" cx="40" cy="4.5" r="3"/>
+        <path class="loader-leg far" d="M29.6 12.6L37.1 22.5L28.4 31L31 31.3"><animate attributeName="d" dur="0.9s" repeatCount="indefinite" values="M29.6 12.6L37.1 22.5L28.4 31L31 31.3;M29.6 12.6L38.2 21.5L28.8 29.2L31.4 29.5;M29.6 12.6L39.4 20.2L29.7 27.7L32.3 28;M29.6 12.6L40.4 18.7L31.2 26.8L33.8 27.1;M29.6 12.6L41.1 17.3L33 26.4L35.6 26.7;M29.6 12.6L41.4 16.5L34.8 26.8L37.4 27.1;M29.6 12.6L41.3 16.6L36.3 27.7L38.9 28;M29.6 12.6L40.9 17.6L37.2 29.2L39.8 29.5;M29.6 12.6L40.2 19.1L37.6 31L40.2 31.3;M29.6 12.6L39 20.7L37.2 32.8L39.8 33.1;M29.6 12.6L37.5 22.1L36.3 34.3L38.9 34.6;M29.6 12.6L36.1 23.1L34.8 35.2L37.4 35.5;M29.6 12.6L35.3 23.6L33 35.6L35.6 35.9;M29.6 12.6L35.1 23.7L31.2 35.2L33.8 35.5;M29.6 12.6L35.5 23.5L29.7 34.3L32.3 34.6;M29.6 12.6L36.2 23.1L28.8 32.8L31.4 33.1;M29.6 12.6L37.1 22.5L28.4 31L31 31.3"/></path>
+        <g class="loader-wheel"><circle cx="16" cy="31" r="9"/><path d="M16 22v18M7 31h18M9.6 24.6l12.8 12.8M22.4 24.6 9.6 37.4"/></g>
+        <g class="loader-wheel"><circle cx="56" cy="31" r="9"/><path d="M56 22v18M47 31h18M49.6 24.6l12.8 12.8M62.4 24.6 49.6 37.4"/></g>
+        <path class="loader-frame" d="M16 31H33L30.4 19ZM30.4 19H49M33 31 48.6 23.2M49 19l-.5 4.2L56 31M30.4 19l-.9-5.6M26.6 13.4h5.4M49 19l1.6-3.6h3q1.6 0 1.6 1.7v1.8"/>
+        <path class="loader-crank" d="M28.4 31L37.6 31"><animate attributeName="d" dur="0.9s" repeatCount="indefinite" values="M28.4 31L37.6 31;M28.8 29.2L37.2 32.8;M29.7 27.7L36.3 34.3;M31.2 26.8L34.8 35.2;M33 26.4L33 35.6;M34.8 26.8L31.2 35.2;M36.3 27.7L29.7 34.3;M37.2 29.2L28.8 32.8;M37.6 31L28.4 31;M37.2 32.8L28.8 29.2;M36.3 34.3L29.7 27.7;M34.8 35.2L31.2 26.8;M33 35.6L33 26.4;M31.2 35.2L34.8 26.8;M29.7 34.3L36.3 27.7;M28.8 32.8L37.2 29.2;M28.4 31L37.6 31"/></path>
+        <path class="loader-rider" d="M29.6 12.6Q35.6 6.4 43.2 7.6M43.2 7.6 47 11.4 53.4 15.4"/><circle class="loader-head" cx="47" cy="4.2" r="3"/>
+        <path class="loader-leg" d="M29.6 12.6L40.2 19.1L37.6 31L40.2 31.3"><animate attributeName="d" dur="0.9s" repeatCount="indefinite" values="M29.6 12.6L40.2 19.1L37.6 31L40.2 31.3;M29.6 12.6L39 20.7L37.2 32.8L39.8 33.1;M29.6 12.6L37.5 22.1L36.3 34.3L38.9 34.6;M29.6 12.6L36.1 23.1L34.8 35.2L37.4 35.5;M29.6 12.6L35.3 23.6L33 35.6L35.6 35.9;M29.6 12.6L35.1 23.7L31.2 35.2L33.8 35.5;M29.6 12.6L35.5 23.5L29.7 34.3L32.3 34.6;M29.6 12.6L36.2 23.1L28.8 32.8L31.4 33.1;M29.6 12.6L37.1 22.5L28.4 31L31 31.3;M29.6 12.6L38.2 21.5L28.8 29.2L31.4 29.5;M29.6 12.6L39.4 20.2L29.7 27.7L32.3 28;M29.6 12.6L40.4 18.7L31.2 26.8L33.8 27.1;M29.6 12.6L41.1 17.3L33 26.4L35.6 26.7;M29.6 12.6L41.4 16.5L34.8 26.8L37.4 27.1;M29.6 12.6L41.3 16.6L36.3 27.7L38.9 28;M29.6 12.6L40.9 17.6L37.2 29.2L39.8 29.5;M29.6 12.6L40.2 19.1L37.6 31L40.2 31.3"/></path>
       </g>
     </svg>
     <span class="hint">${label}</span></div>`;
@@ -1234,14 +1241,14 @@ async function renderActivity(id) {
   let routeOffset = UI.data["activity-route-offset"] ?? true;
   const optionsPanel = `<div class="opt-panel">${track ? row(optLabel("Route lines", "Where the route runs twice (out and back): side by side or on top"),
       pickList("route-offset", [["on", "Side by side"], ["off", "On top"]], routeOffset ? "on" : "off")) : ""}
-      ${row(optLabel("X axis", "Charts along distance, time or % of the activity"), pickList("chart-x", X_KINDS, xKind))}
+      ${row(optLabel("X-axis", "Charts along distance, time or % of the activity"), pickList("chart-x", X_KINDS, xKind))}
       ${hasPower ? row(optLabel("Smoothing", "Power and cadence lines: rolling average"), pickList("power-avg", POWER_AVG, powerAvg)) : ""}
       ${(a.best_efforts || []).length ? row(optLabel("Compare with", "Your best from this period, in best efforts and the power curve"), pickList("compare", COMPARE, compare)) : ""}</div>`;
   const chartsPanel = `<div class="opt-panel"><div class="checks checks-col">${available.map((x) =>
     `<label class="check"><input type="checkbox" data-chart-key="${x.key}" ${isShown(x.key) ? "checked" : ""}> ${metricIcon(x.icon, 16)} ${esc(x.label)}</label>`).join("")}</div></div>`;
   view.innerHTML = `
     ${backLink(`#/activities`, "Activities")}
-    <div class="page-head"><h2 class="tb-activity-name">${typeIcon(a.activity_type, 24)}<span>${esc(a.name || typeLabel(a.activity_type))}</span><span class="head-date">${localTime(a)}${a.connect?.locationName ? ` · ${esc(a.connect.locationName)}` : ""}</span></h2>
+    <div class="page-head"><h2 class="tb-activity-name">${typeIcon(a.activity_type, 24)}<span>${esc(a.name || typeLabel(a.activity_type))}</span><span class="head-date">${localTime(a)}${a.connect?.locationName ? ` · ${esc(a.connect.locationName)}` : ""}${a.country_name ? ` · ${esc(a.country_name)}` : ""}</span></h2>
       <div class="badges">${available.length && chartX ? `${badgeHtml("charts", "Charts", `${visibleSeries().length} of ${available.length}`, { panel: chartsPanel })}
           ${badgeHtml("chart-options", "Options", "", { panel: optionsPanel })}` : ""}
         ${badgeHtml("edit", "Edit", "", { panel: editPanel })}${track ? `<div class="badge-wrap"><button class="badge" data-go="#/segments/new/activity?id=${id}&from=activity">Create segment</button></div>` : ""}</div><span class="spacer"></span>
@@ -1258,6 +1265,7 @@ async function renderActivity(id) {
     ${laps.options.length ? `<div class="card"><div class="card-head"><h3>Laps</h3><span class="spacer"></span>
         <div class="badges">${badgeHtml("laps-n", "Group", lapsLabel(lapsN), { panel: `<div class="opt-panel">${pickList("laps-n", laps.options.map((n) => [n, lapsLabel(n)]), lapsN)}</div>`, right: true })}</div></div>
       <div data-laps>${lapsTable(a, laps, lapsN)}</div></div>` : ""}
+    ${track ? `<div class="card" data-new-tiles hidden></div>` : ""}
     <div class="card"><h3>Source files</h3>
       ${a.files.map((f) => `<div>${esc(f.rel_path)}${f.zip_member ? " › " + esc(f.zip_member) : ""} ${state(f.status)}${f.imported_at ? ` <span class="hint">imported ${browserTime(f.imported_at)}</span>` : ""}</div>`).join("") || hint("None")}</div>`;
   bindBadges(view);
@@ -1486,7 +1494,7 @@ async function renderActivity(id) {
   if (track) {
     route.charts = charts;
     const draw = () => drawActivityRoute(route);
-    showRouteMap("route-map", track.polyline, { offset: routeOffset }).then(() => { route.ready = true; bindRouteHover(route); draw(); }).catch((e) => {
+    showRouteMap("route-map", track.polyline, { offset: routeOffset }).then(() => { route.ready = true; bindRouteHover(route); draw(); newTilesCard(view, a, track); }).catch((e) => {
       document.getElementById("route-map").outerHTML = state("Map unavailable: " + esc(e.message), "bad") + trackSvg(track.polyline);
     });
     pickBadge("route-color", routeModeLabel, (v) => { route.mode = v; draw(); });
@@ -1638,12 +1646,16 @@ function zoneBars(a, kind) {
   }).reverse().join("")}${lowFirst && d.times[0] / total >= 0.01 ? `<div class="zone-row zone-below" style="--zc:var(--muted)" data-tip="Below zone 1 (under ${num(b[0])} ${unitLabel}): ${clock(d.times[0])}">
       <span class="zone-name">–</span><span class="zone-bar"><span style="width:${Math.min(100, (d.times[0] / max) * 100)}%"></span></span>${kind === "power" ? `<span class="zone-time">${clock(d.times[0])}</span>` : ""}<span class="zone-pct">${num((d.times[0] / total) * 100)}%</span></div>` : ""}</div>`;
 }
+// The file had no time in zones (virtual rides): counted from the line, with the zones of the
+// nearest activity that has them.
+function computedZonesTip(a, kind) {
+  let from = null;
+  try { const z = JSON.parse(a.zones || "{}")[kind]; if (z?.computed) from = z.from; } catch { from = null; }
+  return from ? ` data-tip="Counted from the ${kind === "hr" ? "heart rate" : "power"}, with the zones of your activity of ${esc(from.slice(0, 10))}"` : "";
+}
 function hrZonesCard(a) {
   const bars = zoneBars(a, "hr");
-  let from = null;
-  try { const z = JSON.parse(a.zones || "{}").hr; if (z?.computed) from = z.from; } catch { from = null; }
-  // the file had no time in zones (virtual rides): counted from the heart rate line
-  const tip = from ? ` data-tip="Counted from the heart rate, with the zones of your activity of ${esc(from.slice(0, 10))}"` : "";
+  const tip = computedZonesTip(a, "hr");
   return bars ? `<div class="card act-tile act-hr"><h3 class="tile-title"${tip}>${metricIcon("time_in_hr_zone", 18)}<span>Heart rate in zones</span></h3>${bars}</div>` : "";
 }
 // Road surface: outdoors only - a virtual route is an app's world, not a road.
@@ -1669,7 +1681,7 @@ function powerCard(a, efforts) {
 // Power in zones: a small tile of its own (like Surface) with the zones as one bar.
 function powerZonesCard(a) {
   const strip = a.category === "ride" ? powerZoneStrip(a) : "";
-  return strip ? `<div class="card act-tile act-pzones"><h3 class="tile-title">${metricIcon("time_in_power_zone", 18)}<span>Power in zones</span></h3>${strip}</div>` : "";
+  return strip ? `<div class="card act-tile act-pzones"><h3 class="tile-title"${computedZonesTip(a, "power")}>${metricIcon("time_in_power_zone", 18)}<span>Power in zones</span></h3>${strip}</div>` : "";
 }
 // Time in power zones as one bar (as wide as the surface bar's tile allows): each zone its share
 // in fixed colours, Z1 grey … Z7 black; the share over a zone and its name under it only where
@@ -2135,8 +2147,10 @@ function loadMapLibre() {
 }
 
 let activeMap = null;
+const EXTRA_MAPS = []; // further maps on the page (createMap `extra`), removed with the main one
 function disposeMap() {
   if (activeMap) { activeMap.remove(); activeMap = null; }
+  EXTRA_MAPS.splice(0).forEach((m) => m.remove());
 }
 
 // Base maps offered by the server (fetched once).
@@ -2228,7 +2242,10 @@ const CONTINENT = [[2, 40], [24, 52]];
 async function createMap(container, mapSettings, opts = {}) {
   const ml = await loadMapLibre();
   BASEMAPS ??= await api("basemaps");
-  disposeMap();
+  // `extra`: a second map on the page (Activity › New tiles); the main one stays.
+  const extra = opts.extra;
+  delete opts.extra;
+  if (!extra) disposeMap();
   // Start directly at the data (no jump from a world view = no flicker).
   const start = opts.bounds ? { bounds: opts.bounds, fitBoundsOptions: opts.fitBoundsOptions || { padding: 40, maxZoom: 15 } } : { center: [10, 50], zoom: 3 };
   const zoomOffset = opts.zoomOffset || 0, focus = opts.focus, withReset = opts.reset, keepTone = opts.keepTone;
@@ -2236,11 +2253,12 @@ async function createMap(container, mapSettings, opts = {}) {
   // Route maps (activity, segment, segment creator): the fixed tone of the theme (routeTone).
   // The Map tab (keepTone) shows exactly the tone of its options.
   const tone = () => (keepTone ? mapSettings.tone : routeTone());
-  const map = activeMap = new ml.Map({ container, style: baseStyle({ ...mapSettings, tone: tone() }), attributionControl: false,
+  const map = new ml.Map({ container, style: baseStyle({ ...mapSettings, tone: tone() }), attributionControl: false,
                                        fadeDuration: 0, ...start, ...opts });
+  if (extra) EXTRA_MAPS.push(map); else activeMap = map;
   // Light / dark switched while the map is open: the base tone and the outlines follow.
   const watch = new MutationObserver(() => {
-    if (activeMap !== map) { watch.disconnect(); return; }
+    if (activeMap !== map && !EXTRA_MAPS.includes(map)) { watch.disconnect(); return; }
     if (map.getLayer("base")) {
       const paint = toneOf(tone());
       TONE_PROPS.forEach((p) => map.setPaintProperty("base", p, paint[p] ?? TONE_DEFAULTS[p]));
@@ -2253,22 +2271,22 @@ async function createMap(container, mapSettings, opts = {}) {
   if (zoomOffset) {
     // Zoom out from the data, but never further than the CONTINENT view on this screen.
     // When even the data does not fit at that level, centre on `focus`.
-    const fitZ = activeMap.getZoom();
-    const floor = activeMap.cameraForBounds(CONTINENT, { padding: 20 })?.zoom ?? 3;
+    const fitZ = map.getZoom();
+    const floor = map.cameraForBounds(CONTINENT, { padding: 20 })?.zoom ?? 3;
     const zoom = Math.max(fitZ + zoomOffset, floor);
-    activeMap.jumpTo(fitZ < floor && focus ? { zoom, center: focus } : { zoom });
+    map.jumpTo(fitZ < floor && focus ? { zoom, center: focus } : { zoom });
   }
   // bottom corners stack the newer control on top: attribution first, so it sits under +/-
-  activeMap.addControl(new ml.AttributionControl({ compact: false }), "bottom-right"); // small, below the buttons
-  activeMap.addControl(new ml.NavigationControl({ showCompass: false }), "bottom-right"); // buttons: bottom right
-  activeMap.addControl(new ml.ScaleControl({ unit: "metric", maxWidth: 110 }), "bottom-left"); // scale: bottom left
-  if (!document.body.classList.contains("fullmap")) activeMap.addControl(new ml.FullscreenControl(), "top-right");
+  map.addControl(new ml.AttributionControl({ compact: false }), "bottom-right"); // small, below the buttons
+  map.addControl(new ml.NavigationControl({ showCompass: false }), "bottom-right"); // buttons: bottom right
+  map.addControl(new ml.ScaleControl({ unit: "metric", maxWidth: 110 }), "bottom-left"); // scale: bottom left
+  if (!document.body.classList.contains("fullmap")) map.addControl(new ml.FullscreenControl(), "top-right");
   const reset = withReset ? new MapResetControl() : null;
-  if (reset) activeMap.addControl(reset, "top-right");
-  await new Promise((resolve) => activeMap.on("load", resolve));
-  activeMap.resize();
+  if (reset) map.addControl(reset, "top-right");
+  await new Promise((resolve) => map.on("load", resolve));
+  map.resize();
   reset?.home();
-  return activeMap;
+  return map;
 }
 
 // Reset view: the refresh pictogram of the charts in a block like Fullscreen (top right),
@@ -2841,6 +2859,52 @@ function drawHeatLayers() {
   renderHeatKpis();
 }
 
+// Activity › New tiles: the tiles of each size this activity visited before any earlier
+// activity of the person did (virtual ones count, as on the map), on a map with the route.
+// Computed here from the earlier routes that come near (earlier-tracks); shown only when there
+// is a new tile. The size picker lists only sizes with new tiles, the largest first.
+const NEW_TILE_NOUN = { 13: "large square", 14: "explorer tile", 16: "medium square", 17: "small square" };
+async function newTilesCard(view, a, track) {
+  const box = view.querySelector("[data-new-tiles]");
+  if (!box) return;
+  const earlier = await api(`activities/${a.id}/earlier-tracks`).catch(() => null);
+  if (!earlier || !box.isConnected) return;
+  const coords = lonLat(track.polyline);
+  const before = earlier.items.map((p) => ({ coords: lonLat(p), day: "" }));
+  const sizes = TILE_SIZES.map(([z, label]) => {
+    const seen = computeTiles(before, z);
+    const tiles = [...computeTiles([{ coords, day: "" }], z).entries()].filter(([k]) => !seen.has(k)).map(([, t]) => t);
+    return { z, label, tiles };
+  }).filter((x) => x.tiles.length);
+  if (!sizes.length) return;
+  let cur = sizes[0];
+  const countText = (x) => `${num(x.tiles.length)} new ${NEW_TILE_NOUN[x.z]}${x.tiles.length === 1 ? "" : "s"}`;
+  box.hidden = false;
+  box.innerHTML = `<div class="card-head"><h3 class="tile-title">${metricIcon("tiles", 18)}<span>New tiles</span></h3><span class="spacer"></span>
+      <div class="badges">${badgeHtml("new-tiles", "Size", cur.label, { panel: `<div class="opt-panel">${pickList("new-tiles", sizes.map((x) => [x.z, `${x.label} · ${num(x.tiles.length)}`]), cur.z)}</div>`, right: true })}</div></div>
+    <div class="route-wrap"><div id="new-tiles-map" class="map"></div>
+      <div class="route-overlays new-tiles-count"><div class="route-virtual" data-new-count>${countText(cur)}</div></div></div>`;
+  bindBadges(box);
+  const corners = cur.tiles.flatMap((t) => { const [w, so, e, n] = tileBounds(t.x, t.y, cur.z); return [[w, so], [e, n]]; });
+  const map = await createMap("new-tiles-map", loadMapSettings().map, { bounds: boundsOf([coords, corners]), reset: true, extra: true });
+  const color = getComputedStyle(document.documentElement).getPropertyValue("--accent").trim() || "#0f766e";
+  const data = () => ({ type: "FeatureCollection", features: cur.tiles.map((t) => tileFeature(t, cur.z)) });
+  map.addSource("tiles", { type: "geojson", data: data() });
+  map.addLayer({ id: "tiles-fill", type: "fill", source: "tiles", paint: { "fill-color": color, "fill-opacity": 0.32 } });
+  map.addLayer({ id: "tiles-line", type: "line", source: "tiles", paint: { "line-color": color, "line-opacity": 0.6, "line-width": 0.8 } });
+  map.addSource("route", { type: "geojson", data: { type: "Feature", properties: {}, geometry: { type: "LineString", coordinates: coords } } });
+  map.addLayer({ id: "route", type: "line", source: "route", layout: { "line-join": "round", "line-cap": "round" },
+    paint: { "line-color": document.documentElement.dataset.theme === "dark" ? "#ffffff" : "#1b1e25", "line-opacity": 0.7, "line-width": 1.6 } });
+  box.querySelectorAll('[data-pick="new-tiles"]').forEach((b) => b.onclick = () => {
+    box.querySelectorAll('[data-pick="new-tiles"]').forEach((x) => { x.classList.toggle("on", x === b); x.setAttribute("aria-checked", x === b); });
+    cur = sizes.find((x) => x.z === Number(b.dataset.value));
+    box.querySelector('[data-badge-value="new-tiles"]').textContent = cur.label;
+    box.querySelector("[data-new-count]").textContent = countText(cur);
+    map.getSource("tiles").setData(data());
+    document.onclick?.();
+  });
+}
+
 // `dashed`: a segment line (dashed from the first frame); `ends`: one colour for both ends.
 async function showRouteMap(container, polyline, { offset = false, dashed = false, ends = null, corridor = 0 } = {}) {
   const coords = lonLat(polyline);
@@ -2933,9 +2997,9 @@ async function renderCompare(params) {
 
 const SETTINGS_TABS = [
   ["general", "General", svg(`<path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/>`)],
-  ["data", "Data", svg(`<ellipse cx="12" cy="5.5" rx="7.5" ry="2.5"/><path d="M4.5 5.5v13c0 1.4 3.4 2.5 7.5 2.5s7.5-1.1 7.5-2.5v-13"/><path d="M4.5 12c0 1.4 3.4 2.5 7.5 2.5s7.5-1.1 7.5-2.5"/>`)],
+  ["data", "Data sources", svg(`<ellipse cx="12" cy="5.5" rx="7.5" ry="2.5"/><path d="M4.5 5.5v13c0 1.4 3.4 2.5 7.5 2.5s7.5-1.1 7.5-2.5v-13"/><path d="M4.5 12c0 1.4 3.4 2.5 7.5 2.5s7.5-1.1 7.5-2.5"/>`)],
   ["people", "People", svg(`<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.8-3.6 3.4-5.5 6.5-5.5s5.7 1.9 6.5 5.5"/><path d="M16 4.5a3.5 3.5 0 0 1 0 7M18 14.8c2 .7 3.2 2.5 3.6 5.2"/>`)],
-  ["workouts", "Workouts", svg(`<rect x="3" y="12" width="4" height="8" rx="1"/><rect x="10" y="5" width="4" height="15" rx="1"/><rect x="17" y="9" width="4" height="11" rx="1"/>`)],
+  ["workouts", "Workouts API", svg(`<rect x="3" y="12" width="4" height="8" rx="1"/><rect x="10" y="5" width="4" height="15" rx="1"/><rect x="17" y="9" width="4" height="11" rx="1"/>`)],
   ["import", "Imported", svg(`<path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 17v3h16v-3"/>`)],
   ["backup", "Backup", svg(`<path d="M4 7h16v13H4z"/><path d="M2 4h20v3H2z"/><path d="M10 11h4"/>`)],
   ["log", "Log", svg(`<path d="M6 3h9l4 4v14H6z"/><path d="M15 3v4h4"/><path d="M9 11h7M9 15h7M9 19h4"/>`)],
@@ -3001,7 +3065,8 @@ async function settingsLog(el) {
 // General (appearance, road surface) and Data (sources: Garmin Connect, upload, folder, Strava)
 // share one function; `tab` picks the cards.
 async function settingsGeneral(el, tab = "general") {
-  const [s, devices, garminState] = await Promise.all([api("settings"), api("devices"), api("garmin")]);
+  const [s, devices, garminState, icuFiles] = await Promise.all([api("settings"), api("devices"), api("garmin"),
+    tab === "data" ? api("icu-files").catch(() => ({ persons: {} })) : { persons: {} }]);
   PERSONS = await api("persons");
   const people = realPeople();
   const accounts = garminState.accounts || {};
@@ -3059,8 +3124,7 @@ async function settingsGeneral(el, tab = "general") {
 
   const otherSourcesCard = `
     <div class="card">
-      <h3>Other sources <span class="title-note">(one-time import, e.g. history from before Garmin)</span></h3>
-      <div class="panel-title">Strava</div>
+      <h3>Other sources: Strava <span class="title-note">(one-time import, e.g. history from before Garmin)</span></h3>
       <ol class="plain steps">
         <li>Strava (web) › Settings › My Account › <b>Download or Delete Your Account</b> › Request your archive.</li>
         <li>Upload the ZIP from the e-mail, or single .fit, .gpx and .tcx files (also .gz).</li>
@@ -3072,6 +3136,30 @@ async function settingsGeneral(el, tab = "general") {
         <button class="primary" data-strava-upload>Upload and import</button>
       </div>
       <div data-strava-msg style="margin-top:8px"></div>
+    </div>`;
+
+  // intervals.icu: on/off per person with a key, and the files waiting for their download.
+  const ON_OFF = [["on", "On"], ["off", "Off"]];
+  const icuRow = (p) => {
+    const f = icuFiles.persons[p.id];
+    const v = f.on ? "on" : "off";
+    return `<div class="garmin-person" data-iperson="${esc(p.id)}">
+      <div class="garmin-head">
+        <span class="garmin-who">${avatar(p, 20)} <b>${esc(p.label)}</b></span>
+        <div class="badges">${badgeHtml("icu-on-" + p.id, "Check", ON_OFF.find(([k]) => k === v)[1],
+          { panel: `<div class="opt-panel">${pickList("icu-on-" + p.id, ON_OFF, v)}</div>` })}</div>
+        ${f.on ? `<span class="hint">Next check at ${browserTime(icuFiles.next_check)}</span>` : ""}
+        ${f.status === "auth_error" ? state("key refused", "bad") : ""}
+      </div>
+      ${f.files.length ? `<div class="badges icu-files">${f.files.map((x) =>
+        `<button class="badge" data-ifile="${esc(x.id)}"><span class="badge-label">Download</span><span class="badge-value">${esc(x.name || x.id)}</span></button>`).join("")}</div>` : ""}
+    </div>`;
+  };
+  const icuPeople = people.filter((p) => icuFiles.persons[p.id]);
+  const icuCard = `
+    <div class="card">
+      <h3>Other sources: Intervals.icu</h3>
+      <div class="garmin-people">${icuPeople.map(icuRow).join("") || hint("Add the intervals.icu API key first (Settings › Workouts API).")}</div>
     </div>`;
 
   const GSTATE = { new: ["not tested", "warn"], ok: ["connected", "ok"], error: ["paused", "warn"], auth_error: ["key refused", "bad"] };
@@ -3132,7 +3220,8 @@ async function settingsGeneral(el, tab = "general") {
       <span data-source-msg></span>
     </div>
     ${source === "folder" ? folderCards : source === "upload" ? uploadCard : garminCard}
-    ${otherSourcesCard}` : `
+    ${otherSourcesCard}
+    ${icuCard}` : `
     <div class="card appearance">
       <h3>Appearance <span class="title-note">(saved per browser)</span></h3>
       <div class="appearance-grid">
@@ -3158,6 +3247,7 @@ async function settingsGeneral(el, tab = "general") {
     api("garmin/alerts").then((a) => { renderAlerts(a); setHeaderHeight(); }).catch(() => {});
     return settingsGeneral(el, tab);
   };
+  bindBadges(el);
   el.querySelectorAll("[data-accent]").forEach((b) => b.onclick = () => {
     store.set("accent", b.dataset.accent);
     applyAccent();
@@ -3248,6 +3338,24 @@ async function settingsGeneral(el, tab = "general") {
       out.innerHTML = state("Started — progress in Settings › Imported", "ok");
     } catch (e) { out.innerHTML = state(esc(e.message), "bad"); }
   };
+  el.querySelectorAll("[data-iperson]").forEach((box) => {
+    const pid = box.dataset.iperson, name = "icu-on-" + pid;
+    box.querySelectorAll(`[data-pick="${name}"]`).forEach((b) => b.onclick = async () => {
+      document.onclick?.();
+      try { await api("icu-files/" + encodeURIComponent(pid), { method: "PUT", body: JSON.stringify({ on: b.dataset.value === "on" }) }); }
+      catch (e) { alert(e.message); }
+      reload();
+    });
+    box.querySelectorAll("[data-ifile]").forEach((b) => b.onclick = () => {
+      const a = document.createElement("a");
+      a.href = `api/icu-files/${encodeURIComponent(pid)}/${encodeURIComponent(b.dataset.ifile)}`;
+      a.download = "";
+      document.body.append(a);
+      a.click();
+      a.remove();
+      b.remove();
+    });
+  });
   const sup = el.querySelector("[data-strava-upload]");
   if (sup) sup.onclick = async () => {
     const out = el.querySelector("[data-strava-msg]");
@@ -3573,7 +3681,7 @@ function renderAlerts(alerts) {
   const keys = alerts?.keys || [];
   el.hidden = !keys.length;
   el.innerHTML = keys.length
-    ? `Garmin stopped accepting the key of ${keys.map((k) => `<b>${esc(k.label)}</b>`).join(", ")}, new activities are not downloaded. <a href="#/settings/data">Paste a new key in Settings › Data</a>`
+    ? `Garmin stopped accepting the key of ${keys.map((k) => `<b>${esc(k.label)}</b>`).join(", ")}, new activities are not downloaded. <a href="#/settings/data">Paste a new key in Settings › Data sources</a>`
     : "";
 }
 

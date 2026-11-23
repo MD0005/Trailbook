@@ -672,6 +672,31 @@ def is_virtual_app(file_id: dict, device_infos: list[dict]) -> bool:
     return bool(makers & VIRTUAL_APP_MAKERS)
 
 
+_EXTERNAL_SOURCES = ("antplus", "bluetooth", "bluetooth_low_energy")
+# Makers whose sensor in a training app's list is a power meter (pedals, cranks).
+_POWER_MAKERS = frozenset({"favero_electronics", "stages_cycling", "4iiiis", "sram", "quarq",
+                           "rotor", "power2max", "pioneer", "srm"})  # fmt: skip
+_TRAINER_MAKERS = frozenset({"tacx", "wahoo_fitness", "elite", "saris", "jetblack"})
+
+
+def _app_sensor(maker: str, product_name: str, dtype) -> tuple[str, str | None]:
+    """Kind and model of a sensor in a training app's list ("Garmin - HRM-Dual:837217",
+    "favero_electronics - Ant - 46602"): the model is the last part unless it is only the
+    radio and an id."""
+    last = product_name.split(" - ")[-1].split(":")[0].strip()
+    model = None if not last or last.isdigit() or last.lower() in ("ant", "ble") else last
+    low = product_name.lower()
+    if "hrm" in low or "heart" in low or dtype in (120, "heart_rate"):
+        kind = "hr_strap"
+    elif maker in _POWER_MAKERS:
+        kind = "power_meter"
+    elif maker in _TRAINER_MAKERS:
+        kind = "trainer"
+    else:
+        kind = _DEVICE_KIND.get(dtype, "sensor")
+    return kind, model
+
+
 def devices(messages: dict) -> list[dict]:
     """Devices that recorded the activity: the watch / bike computer and connected sensors.
 
@@ -680,16 +705,23 @@ def devices(messages: dict) -> list[dict]:
     (same maker, product and serial) with {kind, maker, product, name, serial, battery}.
     """
     file_id = (messages.get("file_id_mesgs") or [{}])[0]
+    infos = messages.get("device_info_mesgs") or []
+    # Training apps list their sensors without a source type, named "<maker> - Ant - <id>".
+    app = is_virtual_app(file_id, infos)
     out: dict[tuple, dict] = {}
-    for d in messages.get("device_info_mesgs") or []:
+    for d in infos:
         idx, src = d.get("device_index"), str(d.get("source_type") or "")
         creator = str(idx) == "creator" or idx == 0
-        if not creator and src not in ("antplus", "bluetooth", "bluetooth_low_energy"):
+        app_sensor = app and not creator and not src and bool(d.get("product_name"))
+        if not creator and not app_sensor and src not in _EXTERNAL_SOURCES:
             continue
         maker = d.get("manufacturer")
         product = d.get("garmin_product") or d.get("favero_product") or d.get("product")
         dtype = d.get("device_type") or d.get("antplus_device_type") or d.get("ble_device_type")
-        if creator:
+        if app_sensor:
+            kind, model = _app_sensor(str(maker or ""), str(d["product_name"]), dtype)
+            product = re.sub(r"[\s-]+", "_", model.lower()) if model else None
+        elif creator:
             maker = maker or file_id.get("manufacturer")
             product = product or file_id.get("garmin_product") or file_id.get("product")
             p = str(product or "").lower()

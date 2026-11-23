@@ -222,7 +222,8 @@ async function renderCalendar(params) {
       if (wx[d]) parts.push(calWeather(wx[d]));
     } else if (d >= today && wx[d]) weather = `<div class="cal-dh">${calWeather(wx[d])}</div>`; // today with values
     const label = d.slice(8) === "01" ? both(`1 ${MONTHS[+d.slice(5, 7) - 1].slice(0, 3)}`, "1") : +d.slice(8);
-    return `<div class="cal-dh"><span class="cal-num">${label}</span>${parts.join("")}</div>${weather}`;
+    const wd = WEEKDAYS[(parseDay(d).getUTCDay() + 6) % 7]; // shown on phones only (one day a row)
+    return `<div class="cal-dh"><span class="cal-wd">${wd}</span><span class="cal-num">${label}</span>${parts.join("")}</div>${weather}`;
   };
   // A planned workout of a day up to today goes with an activity of its sport that day (the
   // activity shows that it was planned); one without an activity is hidden once the day is over.
@@ -337,10 +338,12 @@ async function renderCalendar(params) {
   const showSummary = TAB.kpis ?? false;
   const single = !isAll && CURRENT;
   const showTray = single && (TAB.workouts ?? false);
-  const sw = switchHtml("calview", [["month", `${ICON_CAL_MONTH}<span>Month</span>`], ["year", `${ICON_CAL_YEAR}<span>Year</span>`]], mode);
-  view.innerHTML = `${pageHead("Calendar", `${gotoBadge(target)}${single ? `${badgeHtml("ctargets", "Targets", "", { panel: `<div class="opt-panel targets-panel" data-targets></div>` })}<button class="badge ${showTray ? "on" : ""}" data-cworkouts>Workouts</button>` : ""}<button class="badge ${showSummary ? "on" : ""}" data-ckpis>Summary</button>`, sw)}
+  const showNext = single && (TAB.next ?? false);
+  const sw = switchHtml("calview", [["month", `${ICON_CAL_MONTH}<span>Weeks</span>`], ["year", `${ICON_CAL_YEAR}<span>Year</span>`]], mode);
+  view.innerHTML = `${pageHead("Calendar", `${gotoBadge(target)}${single ? `${badgeHtml("ctargets", "Targets", "", { panel: `<div class="opt-panel targets-panel" data-targets></div>` })}<button class="badge ${showTray ? "on" : ""}" data-cworkouts>Workouts</button><button class="badge ${showNext ? "on" : ""}" data-cnext-toggle>Next</button>` : ""}<button class="badge ${showSummary ? "on" : ""}" data-ckpis>Summary</button>`, sw)}
     <div class="cal-top">
       <div data-csummary ${showSummary ? "" : "hidden"}></div>
+      <div data-cnext ${showNext ? "" : "hidden"}></div>
       <div data-ctray ${showTray ? "" : "hidden"}></div>
     </div>
     <div class="cal-sticky" data-csticky>
@@ -371,7 +374,8 @@ async function renderCalendar(params) {
   const activeMonth = () => {
     const edge = sticky.getBoundingClientRect().bottom + 4;
     const row = [...weeks.children].find((r) => r.getBoundingClientRect().bottom > edge) || weeks.lastElementChild;
-    return row ? addDays(row.dataset.week, 3).slice(0, 7) : today.slice(0, 7);
+    const m = row ? addDays(row.dataset.week, 3).slice(0, 7) : today.slice(0, 7);
+    return m > today.slice(0, 7) ? today.slice(0, 7) : m; // the weeks ahead belong to this month
   };
   const paintSummary = async () => {
     const box = view.querySelector("[data-csummary]");
@@ -403,6 +407,18 @@ async function renderCalendar(params) {
     view.querySelector("[data-csummary]").hidden = !on;
     month = null;
     paintSummary();
+    if (on) window.scrollTo({ top: 0, behavior: "smooth" }); // show what was opened
+  };
+  // Next: the suggested next session (suggest.py), the same frame as the summary
+  const nextBox = view.querySelector("[data-cnext]"), nextBtn = view.querySelector("[data-cnext-toggle]");
+  const paintNext = () => renderNextPanel(nextBox, today);
+  if (showNext) paintNext();
+  if (nextBtn) nextBtn.onclick = () => {
+    const on = !nextBtn.classList.contains("on");
+    TAB.next = on;
+    nextBtn.classList.toggle("on", on);
+    nextBox.hidden = !on;
+    if (on) { paintNext(); window.scrollTo({ top: 0, behavior: "smooth" }); }
   };
 
   // Workouts: the tray of templates; dropping one on a day plans it (the week is redrawn, and
@@ -420,6 +436,7 @@ async function renderCalendar(params) {
       }
     }
     paintWeekNumbers();
+    if (nextBox && !nextBox.hidden) renderNextPanel(nextBox, today); // the plan changed: the suggestion too
   };
   if (single) bindPlanDrops(weeks, redrawWeeks);
   // Targets: typed in the badge's panel, saved per person; the weeks are redrawn
@@ -465,6 +482,7 @@ async function renderCalendar(params) {
     trayBtn.classList.toggle("on", on);
     trayBox.hidden = !on;
     if (on && !trayBox.innerHTML) renderWorkoutTray(trayBox, redrawWeeks);
+    if (on) window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
   // more weeks: older below, newer above (the page keeps its place)
@@ -508,6 +526,37 @@ async function renderCalendar(params) {
     paintSummary();
   } else window.scrollTo({ top: 0 });
   paintWeekNumbers();
+}
+
+// Calendar › Next (docs/MANUAL.md › Next workout): the last 7 days and the plan of the next 7
+// split into easy / moderate / hard against the chosen model (per person), the form, and the
+// suggested next session with its reasons; notes when the plan pulls away from the model.
+const NEXT_LEVELS = [["easy", "Easy", "#43a047", "heart rate zones 1–2"], ["moderate", "Moderate", "#f2c200", "heart rate zone 3"], ["hard", "Hard", "#e53935", "heart rate zones 4–5"]];
+const NEXT_KIND = { rest: "Rest day", easy: "Easy", long: "Long", tempo: "Tempo", intervals: "Intervals" };
+async function renderNextPanel(box, today) {
+  const model = UI.data["training-model"] || "polarized";
+  const d = await api("suggest?" + new URLSearchParams({ ...personParam(), today, model })).catch(() => null);
+  if (!d || !box.isConnected) return;
+  const sumOf = (o) => Object.values(o).reduce((a, b) => a + b, 0);
+  const total = sumOf(d.done) + sumOf(d.planned);
+  const rows = NEXT_LEVELS.map(([k, label, color, tip]) => {
+    const dn = total ? d.done[k] / total : 0, pl = total ? d.planned[k] / total : 0, tg = d.target[k];
+    return `<div class="nx-row" data-tip="${esc(`${label} (${tip}): ${hm(d.done[k])} done${d.planned[k] ? `, ${hm(d.planned[k])} planned` : ""} · the model asks ${num(tg * 100)} %`)}">
+      <span class="nx-label">${label}</span><span class="nx-bar"><i style="width:${dn * 100}%;background:${color}"></i><b style="width:${pl * 100}%;--c:${color}"></b><u style="left:${tg * 100}%"></u></span>
+      <span class="nx-val">${num((dn + pl) * 100)}%<small> / ${num(tg * 100)}%</small></span></div>`;
+  }).join("");
+  const n = d.next, when = n.day === today ? "Today" : "Tomorrow";
+  const what = n.kind === "rest" ? NEXT_KIND.rest : `${NEXT_KIND[n.kind]}${n.sport ? ` ${groupLabel(n.sport).toLowerCase()}` : ""}`;
+  const formZone = d.form == null ? "" : FORM_ZONES.find(([lo, hi]) => d.form >= lo && d.form < hi)?.[2] || "";
+  box.innerHTML = `<div class="stat-strip cal-next">
+    <div class="stat-item nx-zones"><span class="stat-label">Last 7 days + plan</span>${rows}</div>
+    <div class="stat-item"><span class="stat-label">Form</span><span class="stat-value">${d.form == null ? "–" : (d.form > 0 ? "+" : "") + num(d.form, 0)}</span><span class="stat-note">${esc(formZone)}</span></div>
+    <div class="stat-item nx-next"><span class="stat-label">${when}</span><span class="stat-value">${n.sport && n.kind !== "rest" ? groupIcon(n.sport, 18) : ""}${esc(what)}${n.minutes ? ` <small>· ${num(n.minutes)} min</small>` : ""}</span>
+      ${n.reasons.map((r) => `<span class="stat-note">${esc(r)}</span>`).join("")}${d.notes.map((r) => `<span class="stat-note nx-note">${esc(r)}</span>`).join("")}</div>
+    <div class="stat-item nx-model">${badgeHtml("cmodel", "Model", d.models[d.model], { panel: `<div class="opt-panel">${pickList("cmodel", Object.entries(d.models), d.model)}</div>`, right: true })}</div>
+  </div>`;
+  bindBadges(box);
+  box.querySelectorAll('[data-pick="cmodel"]').forEach((b) => b.onclick = () => { saveUi("training-model", b.dataset.value); document.onclick?.(); renderNextPanel(box, today); });
 }
 
 // Summary of one month: activities and the watch's daily values (one person).
@@ -574,7 +623,7 @@ async function renderCalendarYear(params) {
   }).join("")}</div>
   <div class="cal-legend hint">Time per day: <span class="lv1"></span> &lt; 30 min <span class="lv2"></span> &lt; 1 h <span class="lv3"></span> &lt; 2 h <span class="lv4"></span> 2 h +</div>`;
   const showSummary = TAB.kpis ?? false;
-  const sw = switchHtml("calview", [["month", `${ICON_CAL_MONTH}<span>Month</span>`], ["year", `${ICON_CAL_YEAR}<span>Year</span>`]], "year");
+  const sw = switchHtml("calview", [["month", `${ICON_CAL_MONTH}<span>Weeks</span>`], ["year", `${ICON_CAL_YEAR}<span>Year</span>`]], "year");
   view.innerHTML = `${pageHead(`Calendar <span class="hint">${year}</span>`, `${gotoBadge(year === today.slice(0, 4) ? today : `${year}-12-31`)}<button class="badge ${showSummary ? "on" : ""}" data-ckpis>Summary</button>`, sw)}
     <div data-csummary ${showSummary ? "" : "hidden"}>${strip}</div><div class="card cal-card">${body}</div>`;
   bindBadges(view.querySelector(".page-head"));
@@ -699,6 +748,8 @@ async function renderFitness(params) {
   pick("f-zones", redraw("zones"));
 }
 
+const FATIGUE_AVG_DAYS = 7; // Max fatigue: the highest average over this many days
+
 // The two charts: fitness with fatigue, and form (the usual axis: fresher higher; the line
 // takes the colour of its zone, the zones are bands behind it). Ramp rate is only a number in
 // the summary: it is the slope of the fitness line.
@@ -714,12 +765,24 @@ function fitnessSeries(s, { marks = [], opt = FITNESS_OPTIONS } = {}) {
     // the latest value marks nothing on hover: its point is the end of the line, next to the pill
     ({ label, value: values[i], i, values, color, text: sign ? signed(values[i], d) : num(values[i], d), tip, mark: i !== last });
   const fresh = extreme(tsb, true), tired = extreme(tsb, false);
+  // the highest fitness of the period, and the highest fatigue as its best 7-day average (a
+  // single day's peak says little): marked at the window's last day
+  const topFit = extreme(ctl, true);
+  const atl7 = atl.map((_, i) => {
+    if (i < FATIGUE_AVG_DAYS - 1) return null;
+    const w = atl.slice(i - FATIGUE_AVG_DAYS + 1, i + 1);
+    return w.some((v) => v == null) ? null : w.reduce((a, v) => a + v, 0) / FATIGUE_AVG_DAYS;
+  });
+  const topTired = extreme(atl7, true);
   return [
     { key: "fitness", label: "Fitness", title: opt.fatigue === "off" ? "Fitness" : "Fitness and fatigue", yTitle: "Training load per day", unit: "", dec: 0, height: 396,
       color: COLORS.ctl, iconHtml: ICON_FITNESS, values: ctl, lines: opt.fatigue === "off" ? [] : [{ label: "Fatigue", color: COLORS.atl, values: atl }],
       fill: opt.fill === "fill", marks, marksHidden: opt.activities === "off", marksTip, onMarks: marksPopup, markSpan: 86400,
       tip: "Fitness: 42-day average of the daily training load. Fatigue: the same over 7 days.",
-      tags: [tag("Fitness", ctl, last, COLORS.ctl, 0, false), ...(opt.fatigue === "off" ? [] : [tag("Fatigue", atl, last, COLORS.atl, 0, false)])] },
+      tags: [tag("Fitness", ctl, last, COLORS.ctl, 0, false), ...(opt.fatigue === "off" ? [] : [tag("Fatigue", atl, last, COLORS.atl, 0, false)]),
+        ...(topFit >= 0 ? [tag("Max fitness", ctl, topFit, COLORS.ctl, 0, false, `Highest fitness in this period: ${s[topFit].date}`)] : []),
+        ...(opt.fatigue !== "off" && topTired >= 0 ? [{ ...tag("Max fatigue", atl7, topTired, COLORS.atl, 0, false,
+          `Highest fatigue in this period as a ${FATIGUE_AVG_DAYS}-day average: ${s[topTired - FATIGUE_AVG_DAYS + 1].date} – ${s[topTired].date}`), mark: true }] : [])] },
     { key: "form", label: "Form", title: "Form", yTitle: "Form", unit: "", dec: 0, height: 259, color: COLORS.neutral, iconHtml: ICON_FORM,
       values: tsb, zones: zonesOf(FORM_ZONES), bands: opt.zones !== "off", yMin: -40, yMax: 30, ySplits: [-40, -30, -10, 5, 25],
       tip: "Yesterday's fitness minus fatigue: higher = fresher, lower = more tired. Training builds fitness in the optimal zone below the grey zone.",
@@ -833,14 +896,13 @@ const parsePace = (txt) => {
 // ---- Statistics -------------------------------------------------------------------------
 // Three views (docs/SPEC.md › Statistics): Compare years (each year one series over its weeks or
 // months; every metric as a chart and its running total, one under the other), Timeline (the whole
-// period on one axis) and Records. Header: Time, Type and X axis. Each view opens on its own
-// period, fixed (`STAT_TIME`; All time is `last=all`): Compare years all time, Timeline the last
-// 12 months, Records the last 6 months. X axis: Compare years Mixed (each period chart by month,
+// period on one axis) and Records. Header: Time, Type and X-axis. Each view opens on its own
+// period, fixed (`STAT_TIME`; All time is `last=all`): all time in every view. X-axis: Compare years Mixed (each period chart by month,
 // each running total by week) | Weeks | Months; Timeline Weeks | Months | Years. Kept while on the tab.
 
 const STAT_X = [["week", "Weeks"], ["month", "Months"], ["year", "Years"]];
 const STAT_X_YEARS = [["mixed", "Mixed"], ["week", "Weeks"], ["month", "Months"]];
-const STAT_TIME = { years: null, timeline: "1y", records: "6m" };
+const STAT_TIME = { years: null, timeline: null, records: null };
 const RECORD_LABELS = {
   pace: { 400: "400 m", 1000: "1 km", 1609.344: "1 mile", 5000: "5 km", 10000: "10 km", 21097.5: "Half marathon", 42195: "Marathon" },
   power: { 5: "5 s", 15: "15 s", 30: "30 s", 60: "1 min", 300: "5 min", 600: "10 min", 1200: "20 min", 3600: "60 min" },
@@ -848,13 +910,16 @@ const RECORD_LABELS = {
 };
 // Series colours (pastel, distinct): years newest first, tile sizes large to small.
 const SERIES_COLORS = ["#5b8def", "#e0879f", "#5fb48a", "#d9a441", "#9a86d6", "#4fb0b8", "#c98a68", "#8d99ae", "#b5a33b", "#d77fc1"];
-// The metrics of Years: [key, title, unit, value from the totals, decimals]
+// The metrics of Years: [key, title, unit, value from the totals, decimals, icon]. Steps come
+// from the daily data (the Type filter does not apply) and have no running total.
 const STAT_METRICS = [
-  ["distance_m", "Distance", "km", (v) => v / 1000, 1],
-  ["count", "Activities", "", (v) => v, 0],
-  ["ascent_m", "Elevation gain", "m", (v) => v, 0],
-  ["time_s", "Time", "h", (v) => v / 3600, 1],
+  ["distance_m", "Distance", "km", (v) => v / 1000, 1, "distance_total"],
+  ["count", "Activities", "", (v) => v, 0, "type"],
+  ["ascent_m", "Elevation gain", "m", (v) => v, 0, "total_ascent"],
+  ["time_s", "Time", "h", (v) => v / 3600, 1, "timer_time"],
+  ["steps", "Steps", "", (v) => v, 0, "steps"],
 ];
+const NO_RUNNING_TOTAL = new Set(["steps"]);
 let STAT_CHARTS = []; // chart groups of the page (destroyed on the next draw)
 
 async function renderStats(params) {
@@ -863,6 +928,7 @@ async function renderStats(params) {
   const sw = switchHtml("stab", [["years", `${ICON_YEARS}<span>Compare years</span>`], ["timeline", `${ICON_TIMELINE}<span>Timeline</span>`],
     ["records", `${ICON_RECORDS}<span>Records</span>`]], tab);
   if (tab === "records") await renderRecords(params, sw);
+  else if (tab === "timeline") await renderTimeline(params, sw);
   else await renderStatCharts(params, sw, tab);
   // another view opens on its own period; the Type filter stays
   view.querySelectorAll("[data-switch=stab]").forEach((b) => b.onclick = () => {
@@ -875,7 +941,7 @@ async function renderStatCharts(params, sw, tab) {
   const choices = tab === "years" ? STAT_X_YEARS : STAT_X;
   const keep = `statsX-${tab}`;
   let x = choices.some(([k]) => k === TAB[keep]) ? TAB[keep] : choices[0][0]; // kept while on the tab
-  const xBadge = badgeHtml("stat-x", "X axis", choices.find(([k]) => k === x)[1], { panel: `<div class="opt-panel">${pickList("stat-x", choices, x)}</div>` });
+  const xBadge = badgeHtml("stat-x", "X-axis", choices.find(([k]) => k === x)[1], { panel: `<div class="opt-panel">${pickList("stat-x", choices, x)}</div>` });
   view.innerHTML = `${pageHead("Statistics", timeBadge(params) + typeBadge(params) + xBadge, sw)}
     <div class="charts" data-scharts><div class="page-loader">${loaderHtml()}</div></div>`;
   const head = view.querySelector(".page-head");
@@ -885,24 +951,31 @@ async function renderStatCharts(params, sw, tab) {
   const draw = async () => {
     // Mixed: the period charts by month, the running totals by week - each chart its own group
     // (other x values), a click on a pill hides the series on all of them
-    const builds = tab !== "years" ? [await timelineCharts(params, x)]
-      : x !== "mixed" ? [await yearCharts(params, x)]
+    const builds = x !== "mixed" ? [await yearCharts(params, x)]
       : await Promise.all([yearCharts(params, "month"), yearCharts(params, "week")]);
+    const bars = tab === "years" && builds[0] ? await yearBarsData(params) : null;
     STAT_CHARTS.forEach((c) => c?.destroy?.());
     STAT_CHARTS = [];
     if (!box.isConnected) return;
     if (!builds[0]) { box.innerHTML = `<div class="card">${hint("No activities match the filters.")}</div>`; return; }
     box.innerHTML = "";
-    if (builds.length === 1) { STAT_CHARTS = [chartGroup(box, builds[0])]; return; }
-    const [byMonth, byWeek] = builds;
-    const onToggle = (label, off) => STAT_CHARTS.forEach((c) => c.toggleLine(label, off));
-    for (const s of byMonth.series.filter((c) => !c.key.endsWith("-cum"))) {
-      const cum = byWeek.series.find((c) => c.key === `${s.key}-cum`);
-      for (const [b, one] of [[byMonth, s], [byWeek, cum]]) {
-        const el = box.appendChild(document.createElement("div"));
-        STAT_CHARTS.push(chartGroup(el, { ...b, series: [one], onToggle }));
+    // every chart of the page: one y axis width and one pill column, so the plots line up
+    const shared = {};
+    if (bars) yearBars(box.appendChild(document.createElement("div")), bars);
+    if (builds.length === 1) STAT_CHARTS = [chartGroup(box.appendChild(document.createElement("div")), { ...builds[0], shared })];
+    else {
+      const [byMonth, byWeek] = builds;
+      const onToggle = (label, off) => STAT_CHARTS.forEach((c) => c.toggleLine(label, off));
+      for (const s of byMonth.series.filter((c) => !c.key.endsWith("-cum"))) {
+        const cum = byWeek.series.find((c) => c.key === `${s.key}-cum`);
+        for (const [b, one] of [[byMonth, s], [byWeek, cum]]) {
+          if (!one) continue;
+          const el = box.appendChild(document.createElement("div"));
+          STAT_CHARTS.push(chartGroup(el, { ...b, series: [one], onToggle, shared }));
+        }
       }
     }
+    STAT_CHARTS.forEach((c) => c.realign());
   };
   head.querySelectorAll('[data-pick="stat-x"]').forEach((b) => b.onclick = () => {
     head.querySelectorAll('[data-pick="stat-x"]').forEach((o) => { o.classList.toggle("on", o === b); o.setAttribute("aria-checked", o === b); });
@@ -912,6 +985,40 @@ async function renderStatCharts(params, sw, tab) {
     draw();
   });
   await draw();
+}
+
+// Compare years, on top: three column charts (distance, activities, elevation per year), each
+// year a column in its series colour, split into running (bottom), cycling and other (top) in
+// three shades of it. Hovering a year marks it on all three and fades the other years below.
+const YEAR_BARS = [["distance_m", "Distance", "km", (v) => v / 1000, "distance_total"], ["count", "Activities", "", (v) => v, "type"],
+  ["ascent_m", "Elevation gain", "m", (v) => v, "total_ascent"]];
+const BAR_PARTS = [["run", "Running", 100], ["ride", "Cycling", 62], ["other", "Other", 34]];
+async function yearBarsData(params) {
+  const d = await api("stats/totals?" + new URLSearchParams({ person: CURRENT, by: "year", parts: 1, ...filterQuery(params) }));
+  const years = [...new Set(d.rows.map((r) => r.period))].sort().reverse();
+  return years.length ? { years, parts: d.parts || [] } : null;
+}
+function yearBars(el, { years, parts }) {
+  el.className = "year-bars";
+  const color = (y) => SERIES_COLORS[years.indexOf(y) % SERIES_COLORS.length];
+  const chrono = [...years].reverse();
+  el.innerHTML = YEAR_BARS.map(([key, title, unit, conv, icon]) => {
+    const val = (y, part) => conv(parts.filter((p) => p.period === y && (!part || p.part === part)).reduce((a, p) => a + (p[key] || 0), 0));
+    const max = Math.max(1, ...chrono.map((y) => val(y)));
+    const fmt = (v) => `${num(v, 0)}${unit ? ` ${unit}` : ""}`;
+    const cols = chrono.map((y) => {
+      const tot = val(y);
+      const tip = [`${y}: ${fmt(tot)}`, ...BAR_PARTS.filter(([p]) => val(y, p)).map(([p, l]) => `${l} ${fmt(val(y, p))}`)].join(" · ");
+      const segs = BAR_PARTS.map(([p, , pct]) => { const v = val(y, p); return v ? `<i style="height:${(v / max) * 100}%;background:color-mix(in srgb, ${color(y)} ${pct}%, var(--surface))"></i>` : ""; }).join("");
+      return `<div class="yb-col" data-year="${y}" data-tip="${esc(tip)}"><span class="yb-val">${fmt(tot)}</span><div class="yb-bar">${segs}</div><span class="yb-year">${y}</span></div>`;
+    }).join("");
+    return `<div class="card yb-card"><h3 class="chart-title">${metricIcon(icon, 18)}<span>${title} per year</span></h3><div class="yb-plot">${cols}</div></div>`;
+  }).join("");
+  const mark = (y) => {
+    el.querySelectorAll(".yb-col").forEach((c) => c.classList.toggle("dim", y != null && c.dataset.year !== y));
+    STAT_CHARTS.forEach((c) => c.emphasize?.(y));
+  };
+  el.querySelectorAll(".yb-col").forEach((c) => { c.onmouseenter = () => mark(c.dataset.year); c.onmouseleave = () => mark(null); });
 }
 
 // The days the filter covers: [first, last] (the first activity … today without one).
@@ -939,7 +1046,7 @@ function monthSpan(y, m) {
 // Years: one series per year over its weeks or months, for each metric the values and their
 // running total; a year's series covers only the filtered days (the current year ends today).
 async function yearCharts(params, by) {
-  const data = await api("stats/totals?" + new URLSearchParams({ person: CURRENT, by, ...filterQuery(params) }));
+  const data = await api("stats/totals?" + new URLSearchParams({ person: CURRENT, by, steps: 1, ...filterQuery(params) }));
   if (!data.rows.length) return null;
   const n = by === "month" ? 12 : 53;
   const xs = [...Array(n)].map((_, i) => i + 1);
@@ -948,16 +1055,19 @@ async function yearCharts(params, by) {
   const years = [...new Set(data.rows.map((r) => r.period.slice(0, 4)))].sort().reverse();
   const color = (k) => SERIES_COLORS[k % SERIES_COLORS.length];
   const sums = Object.fromEntries(years.map((y) => [y, xs.map(() => ({}))]));
-  for (const r of data.rows) {
-    const cell = sums[r.period.slice(0, 4)][posOf(r.period) - 1];
-    for (const [k] of STAT_METRICS) cell[k] = (cell[k] || 0) + (r[k] || 0);
+  for (const r of [...data.rows, ...(data.steps || [])]) {
+    const cell = sums[r.period.slice(0, 4)]?.[posOf(r.period) - 1];
+    if (!cell) continue; // steps of a year without activities
+    for (const [k] of STAT_METRICS) if (r[k] != null) cell[k] = (cell[k] || 0) + r[k];
   }
+  const thisYear = todayDay().slice(0, 4), endsToday = hi === todayDay();
   // inside the filter: a value (0 without activities), outside: no point
   const inside = (y, k) => { const [a, b] = by === "month" ? monthSpan(+y, k) : weekSpan(+y, k); return b >= lo && a <= hi; };
   const charts = [];
-  for (const [key, title, unit, conv, dec] of STAT_METRICS) {
+  for (const [key, title, unit, conv, dec, icon] of STAT_METRICS) {
+    if (key === "steps" && !(data.steps || []).length) continue;
     const fmt = (v) => `${num(v, v >= 100 ? 0 : dec)}${unit ? ` ${unit}` : ""}`;
-    for (const cumulative of [false, true]) {
+    for (const cumulative of NO_RUNNING_TOTAL.has(key) ? [false] : [false, true]) {
       const lines = years.map((y, k) => {
         let run = 0;
         const values = xs.map((p) => {
@@ -966,57 +1076,19 @@ async function yearCharts(params, by) {
           run += v;
           return cumulative ? run : v;
         });
-        return { label: y, values, color: color(k) };
+        // the current year's running total runs on dashed and level to the end of the year
+        return { label: y, values, color: color(k), extend: cumulative && y === thisYear && endsToday };
       });
       const tags = lines.map((l) => {
         const i = l.values.findLastIndex((v) => v != null);
         return { label: l.label, value: i >= 0 ? l.values[i] : null, i, color: l.color, text: i >= 0 ? fmt(l.values[i]) : "–" };
       });
-      charts.push({ key: `${key}${cumulative ? "-cum" : ""}`, label: title, title: cumulative ? `${title}, cumulative` : `${title} per ${by}`,
-        yTitle: title, unit, dec, multi: true, points: true, tagsInside: true, lines, tags, yMin: 0, height: 260, color: color(0) });
+      charts.push({ key: `${key}${cumulative ? "-cum" : ""}`, label: title, title: `${title} per ${by}${cumulative ? ", cumulative" : ""}`, icon,
+        yTitle: title, unit, dec, multi: true, points: true, tagsInside: true, lines, tags, yMin: 0, height: cumulative ? 325 : 260, color: color(0),
+        tipAll: cumulative });
     }
   }
   return { x: { [by]: xs }, kind: by, series: charts };
-}
-
-// Timeline: the whole filtered period on one axis. Explorer tiles: for each tile size (as in
-// Map › Options) the tiles visited by the end of each period (the Type filter applies; tiles
-// first visited before the Time filter count from its start). Computed in the browser from the
-// routes, as on the map.
-const TILE_SHORT = { 13: "Large", 14: "Explorer", 16: "Medium", 17: "Small" };
-async function timelineCharts(params, by) {
-  const q = { person: CURRENT };
-  const types = filterQuery(params).types;
-  if (types) q.types = types;
-  const key = JSON.stringify(q);
-  if (TAB.tileTracks?.key !== key) {
-    const d = await api("heatmap/tracks?" + new URLSearchParams(q));
-    TAB.tileTracks = { key, tracks: d.items.map((t) => ({ day: t.day, coords: lonLat(t.polyline) })), firsts: {} };
-  }
-  const T = TAB.tileTracks;
-  if (!T.tracks.length) return null;
-  const [lo0, hi] = statWindow(params);
-  const lo = lo0 < T.tracks[0].day ? T.tracks[0].day : lo0;
-  // period starts from the one holding `lo` to the one holding `hi`
-  const starts = [];
-  if (by === "week") for (let d = mondayOf(lo); d <= hi; d = addDays(d, 7)) starts.push(d);
-  else if (by === "month") for (let y = +lo.slice(0, 4), m = +lo.slice(5, 7); `${y}-${String(m).padStart(2, "0")}-01` <= hi; m === 12 ? (y++, m = 1) : m++) starts.push(`${y}-${String(m).padStart(2, "0")}-01`);
-  else for (let y = +lo.slice(0, 4); `${y}-01-01` <= hi; y++) starts.push(`${y}-01-01`);
-  const ends = starts.map((s, k) => (k + 1 < starts.length ? addDays(starts[k + 1], -1) : hi));
-  const lines = TILE_SIZES.map(([z], k) => {
-    T.firsts[z] ??= [...computeTiles(T.tracks, z).values()].map((t) => t.first).sort();
-    const f = T.firsts[z];
-    let j = 0;
-    const values = ends.map((e) => { while (j < f.length && f[j] <= e) j++; return j; });
-    return { label: TILE_SHORT[z], values, color: SERIES_COLORS[k] };
-  });
-  const tags = lines.map((l) => ({ label: l.label, value: l.values[l.values.length - 1], i: l.values.length - 1, color: l.color, text: num(l.values[l.values.length - 1]) }));
-  return {
-    x: { date: starts.map((d) => dayMs(d) / 1000) }, kind: "date",
-    series: [{ key: "tiles", label: "Explorer tiles", title: "Explorer tiles", yTitle: "Tiles visited", unit: "", dec: 0,
-      tip: "Map tiles visited by the end of each period, for each tile size of Map › Options.",
-      multi: true, points: true, tagsInside: true, lines, tags, yMin: 0, height: 360, color: SERIES_COLORS[0] }],
-  };
 }
 
 // Records: tiles in the style of the activity's top tiles, a table of best efforts beside its
@@ -1069,8 +1141,11 @@ async function renderRecords(params, sw) {
     : e.kind === "power" ? durFull(e.key) : REC_DIST[e.key] || km(e.key));
   const cols = filtered ? [[esc(rangeLabel), `Best in: ${esc(rangeLabel)}`], ["All time", "Best of all time"]]
     : [["Best", "Best of all time"], ["2nd", "Second best of all time"], ["3rd", "Third best of all time"]];
+  // the best in the period is the all-time best itself: the laurel instead of the same value twice
+  const sameBest = (a, b) => a && b && a.activity_id === b.activity_id && a.value === b.value;
+  const laurelCell = `<span class="rec-laurel" data-tip="The all-time best, set in this period">${LAUREL_SVG}</span>`;
   const table = (rows) => `<div class="efforts rec-efforts" style="--rec-cols:${cols.length}"><div class="effort effort-head"><span></span>${cols.map(([c, tip]) => `<span class="eh-col" data-tip="${tip}">${c}</span>`).join("")}</div>
-    ${rows.map((e) => `<div class="effort"><span class="effort-name">${name(e)}</span>${filtered ? cell(e, e.range) + cell(e, e.ever[0]) : [0, 1, 2].map((k) => cell(e, e.ever[k])).join("")}</div>`).join("")}</div>`;
+    ${rows.map((e) => `<div class="effort"><span class="effort-name">${name(e)}</span>${filtered ? (sameBest(e.range, e.ever[0]) ? laurelCell : cell(e, e.range)) + cell(e, e.ever[0]) : [0, 1, 2].map((k) => cell(e, e.ever[k])).join("")}</div>`).join("")}</div>`;
   // a table tile's title: the sport, then the laurel and BEST EFFORTS
   const be = (what) => `${what}</span>${LAUREL_SVG}<span class="rec-be">Best efforts`;
   const tile = (icon, title, body, cls = "", tip = "") => `<div class="card act-tile rec-tile ${cls}"><h3 class="tile-title"${tip ? ` data-tip="${tip}"` : ""}>${icon}<span>${title}</span></h3>${body}</div>`;
@@ -1093,6 +1168,7 @@ async function renderRecords(params, sw) {
   ].filter(Boolean);
   view.querySelector(".page-loader")?.remove();
   view.insertAdjacentHTML("beforeend", tiles.length ? `<div class="rec-page">${tiles.join("")}</div>` : `<div class="card">${hint("No runs or rides with records yet.")}</div>`);
+  fitRecordTables(view.querySelector(".rec-page"));
   // the curves: the best in the Time filter (or of all time) and, filtered, the best of all time dashed
   const open = (p) => { if (p.activity_id) location.hash = `#/activity/${p.activity_id}`; };
   const pts = (rows, val) => rows.map((e) => { const m = filtered ? e.range : e.ever[0];
@@ -1109,6 +1185,35 @@ async function renderRecords(params, sw) {
   draw("power", { ...common, points: pts(powAll, (e, r) => r.value), color: REC_POWER, unit: "W", label: "Power" });
 }
 let RECORD_CHARTS = [];
+
+// Records tables: every value, pace and date on one line. Each column kind (value, speed, date)
+// takes the width of its widest cell in any table, so the dividers line up through all tiles,
+// and the tables are as wide as that needs (the curves beside them give way).
+const REC_CURVE_MIN = 280; // below this the tables take a smaller font (rec-compact)
+function fitRecordTables(page, compact = false) {
+  if (!page || matchMedia("(max-width: 900px)").matches) return;
+  page.classList.remove("rec-fitted");
+  page.classList.toggle("rec-compact", compact);
+  page.classList.add("rec-measure");
+  const w = { v: 0, s: 0, d: 0 };
+  page.querySelectorAll(".rec-efforts .effort:not(.effort-head)").forEach((row) => {
+    let k = 0; // position inside a result: 0 value, 1 speed, 2 date
+    [...row.children].slice(1).forEach((c) => {
+      const span = c.classList.contains("rec-laurel") ? 3 : c.classList.contains("rec-span2") ? 2 : 1;
+      if (span === 1) { const kind = k === 0 ? "v" : k === 1 ? "s" : "d"; w[kind] = Math.max(w[kind], Math.ceil(c.getBoundingClientRect().width)); }
+      k = (k + span) % 3;
+    });
+  });
+  page.classList.remove("rec-measure");
+  if (!w.v) return;
+  page.style.setProperty("--rc-v", `${w.v}px`); page.style.setProperty("--rc-s", `${w.s}px`); page.style.setProperty("--rc-d", `${w.d}px`);
+  const cols = Number(page.querySelector(".rec-efforts")?.style.getPropertyValue("--rec-cols")) || 2;
+  const tableW = Math.max(420, 112 + cols * (w.v + w.s + w.d) + 28 + 4);
+  // the curves need some room: first a smaller font, else the tables as they come
+  if (!compact && page.clientWidth - tableW - 12 < REC_CURVE_MIN) { fitRecordTables(page, true); return; }
+  page.style.setProperty("--rec-table-w", `${tableW}px`);
+  page.classList.add("rec-fitted");
+}
 
 // ---- Thresholds (Settings › People) -------------------------------------------------------
 // Each value: your own (Settings) > from the watch (FIT files) > estimated. The People table
@@ -1206,4 +1311,318 @@ function activityTrainingHtml(a) {
   return `<div class="card"><h3>Training load and best efforts</h3>
     <div class="card-row">${a.load != null ? `<b>${loadUnit(a.load)}</b> <span class="hint">from ${esc(METHOD_LABELS[a.load_method] || a.load_method)}</span>` : `<span class="hint">${a.analysis_version ? "No load — no heart rate or power data." : "Not computed yet."}</span>`}</div>
     ${blocks ? `<div class="efforts">${blocks}</div>` : ""}</div>`;
+}
+
+// ---- Statistics › Timeline ----------------------------------------------------------------
+// Always on top a summary strip; then four half-width cards: time of day | day of the week
+// (line, columns or pie, one choice for both), activity types | countries (pie or columns, one
+// choice for both; countries with or without virtual routes); distance | weather breakdown
+// tables; at the bottom Explorer tiles: one Size badge for its summary strip and its two charts
+// (tiles visited so far, new tiles per period). All of it from /api/stats/activities and the
+// routes, worked out here.
+const WEEKDAYS_FULL = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+const DIST_CHOICES = [["line", "Line"], ["bars", "Columns"], ["pie", "Pie"]];
+const SHARE_CHOICES = [["pie", "Pie"], ["bars", "Columns"]];
+const ICON_LINE = svg(`<path d="M3 17l5-6 4 3 7-8"/><path d="M3 20h18"/>`);
+const ICON_PIE = svg(`<path d="M12 3a9 9 0 1 0 9 9h-9z"/><path d="M14.5 2.8a9 9 0 0 1 6.7 6.7h-6.7z"/>`);
+const ICON_BARS = svg(`<path d="M5 20V11M10 20V5M15 20v-7M20 20V9"/>`);
+const CHART_KIND_ICON = { line: ICON_LINE, pie: ICON_PIE, bars: ICON_BARS };
+const DIST_BANDS = {
+  run: [[0, 5000, "Under 5 km"], [5000, 10000, "5–10 km"], [10000, 21097.5, "10 km – half"], [21097.5, 42195, "Half – marathon"], [42195, Infinity, "Marathon +"]],
+  ride: [[0, 50000, "Under 50 km"], [50000, 100000, "50–100 km"], [100000, 200000, "100–200 km"], [200000, Infinity, "200 km +"]],
+};
+const TEMP_BANDS = [[-Infinity, 0, "Below 0 °C"], [0, 10, "0–10 °C"], [10, 20, "10–20 °C"], [20, 30, "20–30 °C"], [30, Infinity, "30 °C +"]];
+// WMO weather codes (the hour's worst) → a few kinds
+const WEATHER_KINDS = [["Clear", (c) => c <= 1], ["Cloudy", (c) => c <= 3], ["Fog", (c) => c >= 45 && c <= 48],
+  ["Rain", (c) => (c >= 51 && c <= 67) || (c >= 80 && c <= 82)], ["Snow", (c) => (c >= 71 && c <= 77) || c === 85 || c === 86], ["Thunderstorm", (c) => c >= 95]];
+const EARTH_KM = 40075, MOON_KM = 384400;
+
+async function renderTimeline(params, sw) {
+  const choices = STAT_X;
+  let x = choices.some(([k]) => k === TAB["statsX-timeline"]) ? TAB["statsX-timeline"] : choices[0][0];
+  const xBadge = badgeHtml("stat-x", "X-axis", choices.find(([k]) => k === x)[1], { panel: `<div class="opt-panel">${pickList("stat-x", choices, x)}</div>` });
+  view.innerHTML = `${pageHead("Statistics", timeBadge(params) + typeBadge(params) + xBadge, sw)}<div data-tl><div class="page-loader">${loaderHtml()}</div></div>`;
+  const head = view.querySelector(".page-head");
+  bindBadges(head);
+  bindFilterBadges(head, "#/stats", { ...params, tab: "timeline" }, {});
+  const box = view.querySelector("[data-tl]");
+  const [lo, hi] = statWindow(params);
+  const data = await api("stats/activities?" + new URLSearchParams({ person: CURRENT, steps_from: lo, steps_to: hi, ...filterQuery(params) }));
+  if (!box.isConnected) return;
+  const F = Object.fromEntries(data.fields.map((f, i) => [f, i]));
+  const acts = data.items.map((r) => Object.fromEntries(Object.entries(F).map(([k, i]) => [k, r[i]])));
+  if (!acts.length) { box.innerHTML = `<div class="card">${hint("No activities match the filters.")}</div>`; return; }
+  const onFoot = acts.every((a) => ON_FOOT.has(a.group));
+  TAB.tlChart ??= "line"; TAB.tlShare ??= "pie"; TAB.tlVirtual ??= "in";
+  box.innerHTML = `${tlSummary(acts, data.steps)}
+    <div class="tl-grid">
+      <div class="card tl-card" data-tl-card="hours"></div><div class="card tl-card" data-tl-card="days"></div>
+      <div class="card tl-card" data-tl-card="types"></div><div class="card tl-card" data-tl-card="countries"></div>
+      <div class="card tl-card" data-tl-card="dist"></div><div class="card tl-card" data-tl-card="weather"></div>
+    </div>
+    <div class="card tl-tiles" data-tl-tiles></div>`;
+  const draw = () => {
+    tlCard(box, "hours", "Time of day", "timer_time", "tl-chart", TAB.tlChart, DIST_CHOICES, tlHours(acts, onFoot), "Activities going on in each hour (an activity counts in every hour it spans)");
+    tlCard(box, "days", "Day of the week", "date", "tl-chart", TAB.tlChart, DIST_CHOICES, tlDays(acts, onFoot), "Activities by the day they started");
+    tlCard(box, "types", "Activity types", "type", "tl-share", TAB.tlShare, SHARE_CHOICES, tlTypes(acts), "Activities per type");
+    tlCard(box, "countries", "Countries", "route", "tl-share", TAB.tlShare, SHARE_CHOICES, tlCountries(acts, data.countries, TAB.tlVirtual === "in"),
+      "Activities per country of the route. Indoor: without a route (treadmill, trainer) and, with virtual excluded, the virtual ones.",
+      badgeHtml("tl-virtual-countries", "Virtual", TAB.tlVirtual === "in" ? "Included" : "Excluded", { panel: `<div class="opt-panel">${pickList("tl-virtual", [["in", "Included"], ["out", "Excluded"]], TAB.tlVirtual)}</div>`, right: true }));
+    box.querySelector('[data-tl-card="dist"]').innerHTML = tlDistTable(acts);
+    box.querySelector('[data-tl-card="weather"]').innerHTML = tlWeatherTable(acts);
+    bindBadges(box.querySelector(".tl-grid"));
+    const pick = (name, apply) => box.querySelectorAll(`[data-pick="${name}"]`).forEach((b) => b.onclick = () => { apply(b.dataset.value); document.onclick?.(); draw(); });
+    pick("tl-chart", (v) => { TAB.tlChart = v; });
+    pick("tl-share", (v) => { TAB.tlShare = v; });
+    pick("tl-virtual", (v) => { TAB.tlVirtual = v; });
+  };
+  draw();
+  const tiles = box.querySelector("[data-tl-tiles]");
+  const drawTiles = () => tlTiles(tiles, params, x);
+  head.querySelectorAll('[data-pick="stat-x"]').forEach((b) => b.onclick = () => {
+    head.querySelectorAll('[data-pick="stat-x"]').forEach((o) => { o.classList.toggle("on", o === b); o.setAttribute("aria-checked", o === b); });
+    x = TAB["statsX-timeline"] = b.dataset.value;
+    head.querySelector('[data-badge-value="stat-x"]').textContent = choices.find(([k]) => k === x)[1];
+    document.onclick?.();
+    drawTiles();
+  });
+  await drawTiles();
+}
+
+function tlSummary(acts, steps) {
+  const dist = acts.reduce((t, a) => t + a.distance_m, 0), time = acts.reduce((t, a) => t + (a.distance_m ? a.time_s : 0), 0);
+  const speed = time ? dist / time : null, kmTot = dist / 1000;
+  return statStrip([
+    ["Activities", num(acts.length), ""],
+    ["Distance", `${num(kmTot, kmTot >= 1000 ? 0 : 1)} km`, ""],
+    ["Avg distance", km(dist / acts.length), "per activity"],
+    ["Avg speed", speed ? kmh(speed) : "–", speed ? pace(speed) : ""],
+    ["Around the world", `× ${num(kmTot / EARTH_KM, 2)}`, `${num(EARTH_KM)} km`],
+    ["To the Moon", `× ${num(kmTot / MOON_KM, 3)}`, `${num(MOON_KM)} km`],
+    ...(steps ? [["Steps", num(steps), "daily data"]] : []),
+  ]);
+}
+
+// One card: icon and title on the left, the chart kind (and other badges) on the right.
+function tlCard(box, key, title, icon, pickName, kind, kinds, d, tip, extra = "") {
+  const el = box.querySelector(`[data-tl-card="${key}"]`);
+  const kindBadge = badgeHtml(`${pickName}-${key}`, "Chart", kinds.find(([k]) => k === kind)[1],
+    { panel: `<div class="opt-panel">${pickList(pickName, kinds, kind, () => "", (v) => CHART_KIND_ICON[v] || "")}</div>`, right: true });
+  el.innerHTML = `<div class="card-head"><h3 class="chart-title" data-tip="${esc(tip)}">${metricIcon(icon, 18)}<span>${title}</span></h3><span class="spacer"></span>
+    <div class="badges">${extra}${kindBadge}</div></div>${d.items.length ? (kind === "pie" ? tlPie(d) : tlBars(d, kind === "line")) : hint("Nothing to show.")}`;
+}
+
+// Averages of a set of activities for the tooltips: distance, elevation, pace or speed.
+function tlAvg(list, onFoot) {
+  const n = list.length || 1, dist = list.reduce((t, a) => t + a.distance_m, 0), time = list.reduce((t, a) => t + (a.distance_m ? a.time_s : 0), 0);
+  const sp = time ? dist / time : null;
+  return [`Avg distance <b>${km(dist / n)}</b>`, `Avg elevation <b>${meters(list.reduce((t, a) => t + a.ascent_m, 0) / n)}</b>`,
+    `${onFoot ? "Avg pace" : "Avg speed"} <b>${sp ? (onFoot ? pace(sp) : kmh(sp)) : "–"}</b>`].join("\n");
+}
+const tlTip = (title, n, list, onFoot) => `<b>${esc(title)}</b>\n${num(n)} ${n === 1 ? "activity" : "activities"}${n ? `\n${tlAvg(list, onFoot)}` : ""}`;
+const localMs = (s) => Date.parse(s + "Z");
+
+function tlHours(acts, onFoot) {
+  const per = [...Array(24)].map(() => []);
+  for (const a of acts) {
+    const t0 = localMs(a.start), t1 = t0 + Math.max(60, a.elapsed_s) * 1000;
+    const seen = new Set();
+    for (let t = t0 - (t0 % 3600000); t < t1; t += 3600000) { const h = new Date(t).getUTCHours(); if (!seen.has(h)) { seen.add(h); per[h].push(a); } }
+  }
+  return { items: per.map((l, h) => ({ label: String(h).padStart(2, "0"), value: l.length, color: SERIES_COLORS[h % SERIES_COLORS.length],
+    tip: tlTip(`${String(h).padStart(2, "0")}:00–${String((h + 1) % 24).padStart(2, "0")}:00`, l.length, l, onFoot) })), every: 3 };
+}
+function tlDays(acts, onFoot) {
+  const per = [...Array(7)].map(() => []);
+  for (const a of acts) per[(new Date(localMs(a.start)).getUTCDay() + 6) % 7].push(a);
+  return { items: per.map((l, d) => ({ label: WEEKDAYS[d], value: l.length, color: SERIES_COLORS[d % SERIES_COLORS.length], tip: tlTip(WEEKDAYS_FULL[d], l.length, l, onFoot) })), every: 1 };
+}
+// A share chart's items: the biggest first, past 8 the rest as Other.
+function tlShares(groups, onFootOf = () => false) {
+  const list = [...groups].sort((p, q) => q[1].length - p[1].length);
+  const top = list.length > 8 ? [...list.slice(0, 7), ["Other", list.slice(7).flatMap(([, l]) => l)]] : list;
+  return { items: top.map(([label, l], k) => ({ label, value: l.length, color: SERIES_COLORS[k % SERIES_COLORS.length],
+    tip: `${tlTip(label, l.length, l, onFootOf(l))}\nDistance <b>${km(l.reduce((t, a) => t + a.distance_m, 0))}</b>\nTime <b>${hours(l.reduce((t, a) => t + a.time_s, 0))}</b>` })) };
+}
+function tlTypes(acts) {
+  const by = new Map();
+  for (const a of acts) { const k = typeLabel(a.type); by.set(k, [...(by.get(k) || []), a]); }
+  return tlShares(by, (l) => l.every((a) => ON_FOOT.has(a.group)));
+}
+function tlCountries(acts, names, withVirtual) {
+  const by = new Map();
+  for (const a of acts) {
+    const virtual = String(a.type || "").startsWith("virtual_");
+    const k = a.country && (withVirtual || !virtual) ? names[a.country] || a.country : a.indoor || virtual ? "Indoor" : "No route";
+    by.set(k, [...(by.get(k) || []), a]);
+  }
+  return tlShares(by, (l) => l.every((a) => ON_FOOT.has(a.group)));
+}
+
+// Line or columns: one value per item, the labels under the axis (every `every`-th).
+const niceStep = (v) => { const p = 10 ** Math.floor(Math.log10(v || 1)), f = v / p; return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 5 ? 5 : 10) * p; };
+function tlBars({ items, every = 1 }, line) {
+  const W = 480, H = 200, L = 34, B = 22, T = 10, max = Math.max(1, ...items.map((i) => i.value));
+  const step = Math.max(1, niceStep(max / 4)), top = Math.ceil(max / step) * step;
+  const cw = (W - L - 6) / items.length, X = (k) => L + cw * (k + 0.5), Y = (v) => T + (H - T - B) * (1 - v / top);
+  const grid = [...Array(Math.round(top / step) + 1)].map((_, k) => k * step).map((v) => `<line x1="${L}" x2="${W - 6}" y1="${Y(v)}" y2="${Y(v)}" class="tl-grid-line"/><text x="${L - 5}" y="${Y(v) + 3.5}" class="tl-ylab">${num(v)}</text>`).join("");
+  const labels = items.map((it, k) => (k % every ? "" : `<text x="${X(k)}" y="${H - 6}" class="tl-xlab">${esc(it.label)}</text>`)).join("");
+  const c = SERIES_COLORS[0];
+  const path = items.map((it, k) => `${k ? "L" : "M"}${X(k).toFixed(1)} ${Y(it.value).toFixed(1)}`).join("");
+  const marks = line
+    ? `<path d="${path}L${X(items.length - 1).toFixed(1)} ${Y(0)}L${X(0).toFixed(1)} ${Y(0)}Z" class="tl-area" style="--c:${c}"/><path d="${path}" class="tl-line" style="--c:${c}"/>
+       ${items.map((it, k) => `<circle cx="${X(k)}" cy="${Y(it.value)}" r="3.2" class="tl-dot" style="--c:${c}"/>`).join("")}`
+    : items.map((it, k) => `<rect x="${X(k) - cw * 0.34}" y="${Y(it.value)}" width="${cw * 0.68}" height="${Math.max(0, Y(0) - Y(it.value))}" rx="2" class="tl-bar" style="--c:${it.color}"/>`).join("");
+  const hits = items.map((it, k) => `<rect x="${X(k) - cw / 2}" y="${T}" width="${cw}" height="${H - T - B}" class="tl-hit" data-tip-html="${esc(it.tip)}"/>`).join("");
+  return `<svg class="tl-svg" viewBox="0 0 ${W} ${H}">${grid}${marks}${labels}${hits}</svg>`;
+}
+// Pie: a ring of the shares with the list beside it (share and count).
+function tlPie({ items }) {
+  const total = items.reduce((t, i) => t + i.value, 0) || 1, R = 70, r = 42, C = 80;
+  let a0 = -Math.PI / 2;
+  const p = (rad, a) => `${(C + rad * Math.cos(a)).toFixed(2)} ${(C + rad * Math.sin(a)).toFixed(2)}`;
+  const arcs = items.filter((i) => i.value).map((it) => {
+    const a1 = a0 + (2 * Math.PI * it.value) / total, big = a1 - a0 > Math.PI ? 1 : 0;
+    const d = it.value === total ? `M${C} ${C - R}A${R} ${R} 0 1 1 ${C - 0.01} ${C - R}L${C - 0.01} ${C - r}A${r} ${r} 0 1 0 ${C} ${C - r}Z`
+      : `M${p(R, a0)}A${R} ${R} 0 ${big} 1 ${p(R, a1)}L${p(r, a1)}A${r} ${r} 0 ${big} 0 ${p(r, a0)}Z`;
+    a0 = a1;
+    return `<path d="${d}" class="tl-slice" style="--c:${it.color}" data-tip-html="${esc(it.tip)}"/>`;
+  }).join("");
+  return `<div class="tl-pie"><svg viewBox="0 0 160 160">${arcs}<text x="${C}" y="${C + 5}" class="tl-pie-total">${num(total)}</text></svg>
+    <div class="tl-legend">${items.map((it) => `<div data-tip-html="${esc(it.tip)}"><i style="background:${it.color}"></i><span>${esc(it.label)}</span><b>${num((it.value / total) * 100)}%</b><small>${num(it.value)}</small></div>`).join("")}</div></div>`;
+}
+
+// A breakdown table: rows [label, activities] with the count, distance and share of activities.
+function tlTable(title, icon, sections, tip) {
+  const body = sections.map(([headText, rows]) => {
+    const n = rows.reduce((t, [, l]) => t + l.length, 0) || 1;
+    return `${headText ? `<tr class="tl-sec"><td colspan="4">${headText}</td></tr>` : ""}${rows.map(([label, l]) => `<tr${l.length ? "" : ' class="tl-zero"'}><td>${label}</td><td class="num">${num(l.length)}</td>
+      <td class="num">${km(l.reduce((t, a) => t + a.distance_m, 0))}</td><td class="num">${num((l.length / n) * 100)}%</td></tr>`).join("")}`;
+  }).join("");
+  return `<div class="card-head"><h3 class="chart-title" data-tip="${esc(tip)}">${metricIcon(icon, 18)}<span>${title}</span></h3></div>
+    <table class="data tl-table"><thead><tr><th></th><th class="num">Activities</th><th class="num">Distance</th><th class="num">Share</th></tr></thead><tbody>${body}</tbody></table>`;
+}
+function tlDistTable(acts) {
+  const secs = [["run", "Running"], ["ride", "Cycling"]].map(([g, headText]) => {
+    const list = acts.filter((a) => a.group === g);
+    return list.length ? [headText, DIST_BANDS[g].map(([a, b, l]) => [l, list.filter((x) => x.distance_m >= a && x.distance_m < b)])] : null;
+  }).filter(Boolean);
+  return secs.length ? tlTable("Distance breakdown", "distance_total", secs, "Runs and rides by their distance")
+    : `<div class="card-head"><h3 class="chart-title">${metricIcon("distance_total", 18)}<span>Distance breakdown</span></h3></div>${hint("No runs or rides.")}`;
+}
+// Outdoors for sure: a route was recorded, the activity is not marked indoor and not virtual.
+const isOutdoor = (a) => a.gps && !a.indoor && !String(a.type || "").startsWith("virtual_");
+function tlWeatherTable(acts) {
+  const out = acts.filter(isOutdoor), known = out.filter((a) => a.weather), unknown = out.filter((a) => !a.weather);
+  if (!out.length) return `<div class="card-head"><h3 class="chart-title">${metricIcon("weather", 18)}<span>Weather breakdown</span></h3></div>${hint("No outdoor activities.")}`;
+  const temp = TEMP_BANDS.map(([a, b, l]) => [l, known.filter((x) => x.weather[0] >= a && x.weather[0] < b)]);
+  const kind = WEATHER_KINDS.map(([l]) => [l, []]);
+  for (const a of known) { const k = WEATHER_KINDS.findIndex(([, f]) => f(a.weather[1] ?? 0)); if (k >= 0) kind[k][1].push(a); }
+  const unk = unknown.length ? [["Unknown", unknown]] : [];
+  return tlTable("Weather breakdown", "weather", [["Temperature", [...temp, ...unk]], ["Weather", [...kind, ...unk]]],
+    "Outdoor activities only (a route, not indoor, not virtual). Unknown: the weather of the activity has not been fetched yet (it is when the activity is opened).");
+}
+
+// Explorer tiles: the Size badge drives the summary strip and both charts.
+const TILE_SIZE_NAMES = { 13: "Large squares", 14: "Explorer tiles", 16: "Medium squares", 17: "Small squares" };
+async function tlTiles(el, params, by) {
+  const q = { person: CURRENT };
+  const types = filterQuery(params).types;
+  if (types) q.types = types;
+  const key = JSON.stringify(q);
+  if (TAB.tileTracks?.key !== key || !TAB.tileTracks.tracks[0]?.id) {
+    const d = await api("heatmap/tracks?" + new URLSearchParams(q));
+    TAB.tileTracks = { key, tracks: d.items.map((t) => ({ id: t.id, day: t.day, coords: lonLat(t.polyline) })), firsts: {} };
+  }
+  const T = TAB.tileTracks;
+  STAT_CHARTS.forEach((c) => c?.destroy?.());
+  STAT_CHARTS = [];
+  if (!el.isConnected) return;
+  if (!T.tracks.length) { el.hidden = true; return; }
+  const z = TAB.tlZoom ??= 14;
+  const [lo0, hi] = statWindow(params);
+  const lo = lo0 < T.tracks[0].day ? T.tracks[0].day : lo0;
+  const inWin = T.tracks.filter((t) => t.day >= lo && t.day <= hi);
+  const sizeBadge = badgeHtml("tl-zoom", "Size", TILE_SIZE_NAMES[z], { panel: `<div class="opt-panel">${pickList("tl-zoom", TILE_SIZES.map(([k]) => [k, TILE_SIZE_NAMES[k]]), z)}</div>`, right: true });
+  el.innerHTML = `<div class="card-head"><h3 class="chart-title" data-tip="Map tiles of the routes in this period, for the size chosen (as on Map › Explorer tiles)">${metricIcon("tiles", 18)}<span>Explorer tiles</span></h3><span class="spacer"></span><div class="badges">${sizeBadge}</div></div>
+    ${tlTileStats(inWin, z)}`;
+  const chartsBox = el.parentElement.querySelector("[data-tl-tchart]") || el.insertAdjacentElement("afterend", Object.assign(document.createElement("div"), { className: "charts" }));
+  chartsBox.dataset.tlTchart = "";
+  bindBadges(el);
+  el.querySelectorAll('[data-pick="tl-zoom"]').forEach((b) => b.onclick = () => { TAB.tlZoom = Number(b.dataset.value); document.onclick?.(); tlTiles(el, params, by); });
+  // the tiles visited by the end of each period (tiles first visited before the Time filter
+  // count from its start) and the new ones in each period
+  const starts = [];
+  if (by === "week") for (let d = mondayOf(lo); d <= hi; d = addDays(d, 7)) starts.push(d);
+  else if (by === "month") for (let y = +lo.slice(0, 4), m = +lo.slice(5, 7); `${y}-${String(m).padStart(2, "0")}-01` <= hi; m === 12 ? (y++, m = 1) : m++) starts.push(`${y}-${String(m).padStart(2, "0")}-01`);
+  else for (let y = +lo.slice(0, 4); `${y}-01-01` <= hi; y++) starts.push(`${y}-01-01`);
+  const ends = starts.map((s, k) => (k + 1 < starts.length ? addDays(starts[k + 1], -1) : hi));
+  T.firsts[z] ??= [...computeTiles(T.tracks, z).values()].map((t) => t.first).sort();
+  const f = T.firsts[z];
+  let j = 0;
+  const total = ends.map((e) => { while (j < f.length && f[j] <= e) j++; return j; });
+  const before = f.filter((d) => d < starts[0]).length;
+  const fresh = total.map((v, k) => v - (k ? total[k - 1] : before));
+  const color = SERIES_COLORS[TILE_SIZES.findIndex(([k]) => k === z) % SERIES_COLORS.length];
+  const name = TILE_SIZE_NAMES[z].toLowerCase();
+  const last = total.length - 1, top = Math.max(...fresh);
+  STAT_CHARTS = [chartGroup(chartsBox, {
+    x: { date: starts.map((d) => dayMs(d) / 1000) }, kind: "date",
+    series: [
+      { key: "tiles-total", label: "Tiles", title: `${TILE_SIZE_NAMES[z]}, cumulative`, icon: "tiles", yTitle: "Tiles visited", unit: "", dec: 0, values: total, color, points: true, height: 300,
+        tip: `All ${name} visited by the end of each period.`, tags: [{ label: "Tiles", value: total[last], i: last, color, text: num(total[last]) }] },
+      { key: "tiles-new", label: "New", title: `New ${name} per ${by}`, icon: "tiles", yTitle: "New tiles", unit: "", dec: 0, values: fresh, color, points: true, height: 240,
+        tip: `${TILE_SIZE_NAMES[z]} visited for the first time in each period.`, tags: [{ label: "Most", value: top, i: fresh.indexOf(top), color, text: num(top) }] },
+    ],
+  })];
+}
+
+// The summary strip of the tiles in the period (the measures of Map › Explorer tiles and more).
+function tlTileStats(tracks, z) {
+  const tiles = computeTiles(tracks, z);
+  if (!tiles.size) return statStrip([["Tiles", "0", ""]]);
+  const has = (x, y) => tiles.has(tileKey(x, y));
+  const sq = maxSquare(tiles), clus = clusterOf(tiles);
+  const inner = [...tiles.values()].filter((t) => has(t.x - 1, t.y) && has(t.x + 1, t.y) && has(t.x, t.y - 1) && has(t.x, t.y + 1)).length;
+  const span = clus.length ? Math.max(Math.max(...clus.map((t) => t.x)) - Math.min(...clus.map((t) => t.x)), Math.max(...clus.map((t) => t.y)) - Math.min(...clus.map((t) => t.y))) + 1 : 0;
+  // the largest group of tiles touching side by side
+  const seen = new Set();
+  let connected = 0;
+  for (const [k, t0] of tiles) {
+    if (seen.has(k)) continue;
+    const stack = [t0];
+    seen.add(k);
+    let n = 0;
+    while (stack.length) {
+      const t = stack.pop();
+      n++;
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { const nk = tileKey(t.x + dx, t.y + dy); if (tiles.has(nk) && !seen.has(nk)) { seen.add(nk); stack.push(tiles.get(nk)); } }
+    }
+    connected = Math.max(connected, n);
+  }
+  // the longest unbroken column and row
+  const run = (col) => {
+    let best = 0;
+    for (const t of tiles.values()) {
+      if (col ? has(t.x, t.y - 1) : has(t.x - 1, t.y)) continue; // not the start of a run
+      let n = 1;
+      while (col ? has(t.x, t.y + n) : has(t.x + n, t.y)) n++;
+      best = Math.max(best, n);
+    }
+    return best;
+  };
+  const most = [...tiles.values()].reduce((b, t) => (t.visits > b.visits ? t : b));
+  const perAct = tracks.map((t) => [t, computeTiles([t], z).size]).reduce((b, p) => (p[1] > b[1] ? p : b), [null, 0]);
+  return statStrip([
+    ["Tiles", num(tiles.size), ""],
+    ["Max square", sq.size ? `${sq.size} × ${sq.size}` : "–", ""],
+    ["Max cluster", num(clus.length), "tiles"],
+    ["Cluster tiles", num(inner), "with 4 neighbours"],
+    ["Cluster span", num(span), "tiles across"],
+    ["Connected tiles", num(connected), "touching side by side"],
+    ["Longest column", num(run(true)), "tiles"],
+    ["Longest row", num(run(false)), "tiles"],
+    ["Most visited", num(most.visits), "visits of one tile"],
+    ["One activity", num(perAct[1]), perAct[0] ? `<a href="#/activity/${perAct[0].id}">${esc(perAct[0].day)}</a>` : ""],
+  ]);
 }

@@ -20,6 +20,7 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 from starlette.applications import Starlette
+from starlette.background import BackgroundTask
 from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException
 from starlette.middleware import Middleware
@@ -36,12 +37,14 @@ from . import (
     auth,
     backup,
     basemap,
+    countries,
     db,
     explorer,
     fitfile,
     garmin,
     homeassistant,
     icu,
+    icufiles,
     importer,
     jobs,
     planner,
@@ -50,6 +53,7 @@ from . import (
     segments,
     sports,
     streams,
+    suggest,
     surface,
     tilechart,
     weather,
@@ -274,6 +278,11 @@ def _workout_filter(q) -> tuple[list[str], list]:
     return ["(" + " OR ".join(parts) + ")"], keys
 
 
+# New tiles: earlier routes are looked at when they reach this close to the activity's box
+# (degrees; a large square, zoom 13, is up to ~0.044° wide).
+BOX_MARGIN = 0.05
+
+
 def _map_filters(q) -> tuple[str, list]:
     """Shared filters plus 'has a route', for the map endpoints."""
     where, params = activity_filters(q)
@@ -318,6 +327,7 @@ def create_app(db_path: str | Path) -> Starlette:
     sched = scheduler.Scheduler(db_path, job)
     tiles = basemap.TileCache(Path(db_path).parent / "tilecache")
     uploads_dir = Path(db_path).resolve().parent / "uploads"
+    icu_files_dir = Path(db_path).resolve().parent / "icu-files"
     # Own device photos: <data>/device-images/<product>.png|jpg|webp (e.g. edge_850.png).
     device_images = Path(db_path).resolve().parent / "device-images"
 
@@ -804,13 +814,7 @@ def create_app(db_path: str | Path) -> Starlette:
                 for d in devs:
                     d["image"] = _device_image(d.get("product"))
                 a["devices"] = devs
-            # no time in heart rate zones in the file (virtual rides): from the stream
-            zones = json.loads(a["zones"]) if a.get("zones") else {}
-            if "hr" not in zones and "hr" in a["channels"]:
-                computed = analysis.stream_hr_zones(c, row)
-                if computed:
-                    zones["hr"] = computed
-                    a["zones"] = json.dumps(zones)
+            a["country_name"] = countries.names().get(a.get("country") or "")
             a["segments"] = _activity_segments(c, a)
             # Garmin Connect list data (title, training effect, body battery, location…)
             g = c.execute(
@@ -1068,6 +1072,26 @@ def create_app(db_path: str | Path) -> Starlette:
         if row is None:
             raise HTTPException(404, "activity has no track")
         return JSONResponse({"polyline": row["polyline"], "points": row["point_count"]})
+
+    async def activity_earlier_tracks(request: Request):
+        """Routes of the person's earlier activities that cross this one's box: the browser
+        works out which tiles this activity visited for the first time (New tiles)."""
+        aid = request.path_params["id"]
+        with closing(conn()) as c:
+            a = _activity_or_404(c, aid)
+            if not a["has_gps"] or a["bbox_min_lat"] is None:
+                return JSONResponse({"items": []})
+            rows = c.execute(
+                """SELECT t.polyline FROM activities a JOIN tracks t ON t.activity_id = a.id
+                   WHERE a.person_id = ? AND a.has_gps = 1 AND a.id != ?
+                     AND (a.start_time_utc < ? OR (a.start_time_utc = ? AND a.id < ?))
+                     AND a.bbox_max_lat >= ? AND a.bbox_min_lat <= ?
+                     AND a.bbox_max_lon >= ? AND a.bbox_min_lon <= ?""",
+                (a["person_id"], aid, a["start_time_utc"], a["start_time_utc"], aid,
+                 a["bbox_min_lat"] - BOX_MARGIN, a["bbox_max_lat"] + BOX_MARGIN,
+                 a["bbox_min_lon"] - BOX_MARGIN, a["bbox_max_lon"] + BOX_MARGIN),
+            ).fetchall()  # fmt: skip
+        return JSONResponse({"items": [r["polyline"] for r in rows]})
 
     # ---- heatmap ---------------------------------------------------------------------
 
@@ -1469,9 +1493,81 @@ def create_app(db_path: str | Path) -> Starlette:
                     (pid,),
                 )
             ]
-        return JSONResponse(
-            {"rows": [dict(r) for r in rows], "groups": [dict(r) for r in groups], "years": years}
-        )
+            out = {"rows": [dict(r) for r in rows], "groups": [dict(r) for r in groups],
+                   "years": years}  # fmt: skip
+            # ?parts=1: the same per period split into running, cycling and the rest
+            if q.get("parts"):
+                out["parts"] = [
+                    dict(r)
+                    for r in c.execute(
+                        f"""SELECT {period} AS period,
+                                   CASE category WHEN 'run' THEN 'run' WHEN 'ride' THEN 'ride'
+                                        ELSE 'other' END AS part,
+                                   COUNT(*) AS count, SUM(distance_m) AS distance_m,
+                                   SUM(ascent_m) AS ascent_m, SUM(time_s) AS time_s
+                            FROM ({inner}) GROUP BY period, part ORDER BY period""",
+                        params,
+                    )
+                ]
+            # ?steps=1: steps per period (daily monitoring data; the Type filter does not apply)
+            if q.get("steps"):
+                fmt = {"year": "%Y", "month": "%Y-%m", "week": "%Y-W%W"}[q.get("by", "year")]
+                per: dict[str, int] = {}
+                for d, v in analysis.daily_values(c, pid, "0000-01-01", "9999-12-31").items():
+                    if v["steps"]:
+                        key = date.fromisoformat(d).strftime(fmt)
+                        per[key] = per.get(key, 0) + v["steps"]
+                out["steps"] = [{"period": k, "steps": v} for k, v in sorted(per.items())]
+        return JSONResponse(out)
+
+    # Calendar › Next: the next session for the person (suggest.py); `today` = the browser's day
+    async def suggest_next(request: Request):
+        q = request.query_params
+        try:
+            today = date.fromisoformat(q.get("today") or "")
+        except ValueError:
+            today = date.today()
+        with closing(conn()) as c:
+            pid = _single_person(c, request)
+            return JSONResponse(suggest.suggest(c, pid, today, q.get("model") or ""))
+
+    # Statistics › Timeline: one short row per activity in the filters; the page works out the
+    # time of day, weekdays, types, countries, distances and weather from them.
+    async def stats_activities(request: Request):
+        q = request.query_params
+        with closing(conn()) as c:
+            pid = _single_person(c, request)
+            where, params = activity_filters(q, "", person=False)
+            where, params = ["person_id = ?", *where], [pid, *params]
+            rows = c.execute(
+                f"""SELECT id, start_time_utc, utc_offset_s, elapsed_s, time_s, distance_m,
+                           ascent_m, avg_speed, category, activity_type, indoor, has_gps,
+                           country, weather
+                    FROM activities WHERE {" AND ".join(where)} ORDER BY start_time_utc""",
+                params,
+            ).fetchall()
+            # ?steps_from=&steps_to= (local days): the steps of those days (daily data)
+            steps = None
+            if q.get("steps_from") and q.get("steps_to"):
+                days = analysis.daily_values(c, pid, q["steps_from"], q["steps_to"])
+                steps = sum(v["steps"] or 0 for v in days.values())
+        items = []
+        for r in rows:
+            w = json.loads(r["weather"]) if r["weather"] else None
+            t = datetime.strptime(r["start_time_utc"][:19], "%Y-%m-%dT%H:%M:%S")
+            local = t + timedelta(seconds=r["utc_offset_s"] or 0)
+            items.append([
+                r["id"], local.strftime("%Y-%m-%dT%H:%M:%S"), r["elapsed_s"] or r["time_s"] or 0,
+                r["time_s"] or 0,
+                r["distance_m"] or 0, r["ascent_m"] or 0, r["avg_speed"], r["category"],
+                r["activity_type"], int(bool(r["indoor"])), int(bool(r["has_gps"])), r["country"],
+                [w.get("temp"), w.get("code")] if w and w.get("temp") is not None else None,
+            ])  # fmt: skip
+        return JSONResponse({
+            "fields": ["id", "start", "elapsed_s", "time_s", "distance_m", "ascent_m",
+                       "avg_speed", "group", "type", "indoor", "gps", "country", "weather"],
+            "items": items, "countries": countries.names(), "steps": steps,
+        })  # fmt: skip
 
     # Statistics › Records: per sport (run, ride) and best effort (kind, key, v) the 3 best of
     # all time and, with a Time filter, the best in that time. Rides: outdoor and indoor (v = 1)
@@ -1723,6 +1819,7 @@ def create_app(db_path: str | Path) -> Starlette:
         median = times[mid] if len(times) % 2 else (times[mid - 1] + times[mid]) / 2
         return {
             "count": len(times),
+            "reverse": sum(1 for e in efforts if e.get("reverse")),  # ridden the other way
             "best_s": times[0],
             "avg_s": round(sum(times) / len(times), 1),
             "median_s": round(median, 1),
@@ -2099,6 +2196,43 @@ def create_app(db_path: str | Path) -> Starlette:
             c.execute("DELETE FROM icu_accounts WHERE person_id = ?", (request.path_params["id"],))
         return JSONResponse({"deleted": True})
 
+    # Files from intervals.icu prepared for download (icufiles.py).
+    files_wake = asyncio.Event()
+
+    async def icu_files(request: Request):
+        with closing(conn()) as c:
+            persons = icufiles.state(c)
+        nxt = icufiles.next_check(datetime.now().astimezone())
+        return JSONResponse({"persons": persons, "next_check": nxt.isoformat(timespec="minutes")})
+
+    async def icu_files_set(request: Request):
+        pid = request.path_params["id"]
+        body = await request.json()
+        with closing(conn()) as c:
+            if not c.execute("SELECT 1 FROM icu_accounts WHERE person_id = ?", (pid,)).fetchone():
+                raise HTTPException(
+                    400, "add the intervals.icu API key first (Settings › Workouts)"
+                )
+            icufiles.set_on(c, pid, bool(body.get("on")))
+        if body.get("on"):
+            files_wake.set()  # a first look at once
+        return JSONResponse({"on": bool(body.get("on"))})
+
+    async def icu_file_download(request: Request):
+        pid, aid = request.path_params["id"], request.path_params["aid"]
+        with closing(conn()) as c:
+            taken = icufiles.take(c, pid, aid)
+        if not taken:
+            raise HTTPException(404, "this file is no longer waiting")
+        path, name = taken
+
+        def done():
+            with closing(conn()) as c:
+                icufiles.after_download(c, pid, aid, path)
+
+        return FileResponse(path, media_type="application/octet-stream", filename=name,
+                            background=BackgroundTask(run_in_threadpool, done))  # fmt: skip
+
     def _person_or_400(c: sqlite3.Connection, pid: str) -> None:
         if (
             pid == importer.UNASSIGNED
@@ -2379,6 +2513,7 @@ def create_app(db_path: str | Path) -> Starlette:
         Route("/api/activities/{id:int}/intervals", activity_intervals),
         Route("/api/activities/{id:int}/weather", activity_weather),
         Route("/api/activities/{id:int}/track", activity_track),
+        Route("/api/activities/{id:int}/earlier-tracks", activity_earlier_tracks),
         Route("/api/heatmap/tracks", heatmap_tracks),
         Route("/api/heatmap/tiles", heatmap_tiles),
         Route("/api/basemaps", basemaps),
@@ -2398,6 +2533,8 @@ def create_app(db_path: str | Path) -> Starlette:
         Route("/api/calendar", calendar),
         Route("/api/forecast", forecast),
         Route("/api/stats/totals", stats_totals),
+        Route("/api/stats/activities", stats_activities),
+        Route("/api/suggest", suggest_next),
         Route("/api/stats/records", stats_records),
         Route("/api/ha/records", ha_records),
         Route("/api/workouts", workouts_list),
@@ -2414,6 +2551,9 @@ def create_app(db_path: str | Path) -> Starlette:
         Route("/api/icu/{id}", icu_account_set, methods=["PUT"]),
         Route("/api/icu/{id}", icu_account_delete, methods=["DELETE"]),
         Route("/api/icu/{id}/test", icu_account_test, methods=["POST"]),
+        Route("/api/icu-files", icu_files),
+        Route("/api/icu-files/{id}", icu_files_set, methods=["PUT"]),
+        Route("/api/icu-files/{id}/{aid}", icu_file_download),
         Route("/api/garmin", garmin_accounts),
         Route("/api/garmin/alerts", garmin_alerts),
         Route("/api/garmin/{id}", garmin_account_set, methods=["PUT"]),
@@ -2517,6 +2657,27 @@ def create_app(db_path: str | Path) -> Starlette:
             except TimeoutError:
                 pass
 
+    # Files from intervals.icu: a look on the timetable (icufiles.CHECK_SLOTS, local time) or at
+    # once when switched on.
+    async def files_loop():
+        while True:
+            now = datetime.now().astimezone()
+            wait = (icufiles.next_check(now) - now).total_seconds()
+            try:
+                await asyncio.wait_for(files_wake.wait(), wait)
+                files_wake.clear()
+            except TimeoutError:
+                pass
+
+            def work():
+                with closing(conn()) as c:
+                    icufiles.check_all(c, icu_files_dir)
+
+            try:
+                await run_in_threadpool(work)
+            except Exception:  # noqa: BLE001 - keep the loop alive
+                log.exception("Files from intervals.icu failed")
+
     # Record events Home Assistant did not get (it was restarting or away) are sent again, and
     # the sensor is put back (state 0) when HA lost it: a pushed state does not survive an HA
     # restart, and before the first record there would be no entity at all.
@@ -2540,6 +2701,7 @@ def create_app(db_path: str | Path) -> Starlette:
         sched.start()
         surface_task = asyncio.create_task(surface_loop(), name="trailbook-surface")
         plan_task = asyncio.create_task(plan_loop(), name="trailbook-plans")
+        files_task = asyncio.create_task(files_loop(), name="trailbook-icu-files")
         ha_task = (
             asyncio.create_task(ha_records_loop(), name="trailbook-ha-records")
             if homeassistant.available()
@@ -2548,6 +2710,7 @@ def create_app(db_path: str | Path) -> Starlette:
         yield
         surface_task.cancel()
         plan_task.cancel()
+        files_task.cancel()
         if ha_task:
             ha_task.cancel()
         await sched.stop()

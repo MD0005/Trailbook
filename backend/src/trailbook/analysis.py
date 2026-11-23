@@ -30,13 +30,14 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 
-from . import streams
+from . import countries, streams
 
 # v2: watch thresholds, load_estimated; v3: effort positions, ride; v4: 30 km ride;
 # v5: power over pauses, up to 5 h; v6: watch FTP per sport, FTP corrected per activity;
 # v7: top speed (rides), distance within a time (Cooper 12 min, the hour), biggest climb and
-# steepest 1 km (runs and rides)
-ANALYSIS_VERSION = 7
+# steepest 1 km (runs and rides); v8: time in heart rate / power zones from the streams when
+# the file has none (virtual rides), with borrowed zone limits; the country of the route
+ANALYSIS_VERSION = 8
 
 # Best efforts (SPEC §7.5). Pace: metres → best time in s. Power / HR: seconds → best mean.
 # Ride: kilometres → best time in s (kind "ride"). Efforts also keep where they happened
@@ -712,15 +713,16 @@ def _channels(conn: sqlite3.Connection, activity_id: int) -> dict[str, list]:
     }
 
 
-def time_in_hr_zones(time: list, hr: list, bounds: list[float]) -> list[float]:
-    """Seconds in each heart rate zone, in the shape of fitfile.time_in_zones: times[0] below
-    zone 1 (under bounds[0]), times[k] in zone k (bounds[k - 1] … bounds[k]), above the last
-    bound counts in the top zone. A sample lasts until the next one; gaps over MAX_GAP_S
-    (pauses) count 1 s."""
-    times = [0.0] * len(bounds)
-    n = min(len(time), len(hr))
+def time_in_stream_zones(time: list, values: list, bounds: list[float]) -> list[float]:
+    """Seconds in each zone, in the shape of fitfile.time_in_zones (one more entry than
+    bounds): times[k] counts samples under bounds[k] and at or over bounds[k - 1]; a value over
+    the last bound counts in the top zone. For heart rate (and cycling power, bounds from 0)
+    times[0] is below zone 1; for running power every bound is the top of a zone. A sample
+    lasts until the next one; gaps over MAX_GAP_S (pauses) count 1 s."""
+    times = [0.0] * (len(bounds) + 1)
+    n = min(len(time), len(values))
     for i in range(n - 1):
-        v, t0, t1 = hr[i], time[i], time[i + 1]
+        v, t0, t1 = values[i], time[i], time[i + 1]
         if v is None or t0 is None or t1 is None:
             continue
         dt = t1 - t0
@@ -730,40 +732,68 @@ def time_in_hr_zones(time: list, hr: list, bounds: list[float]) -> list[float]:
     return [round(x) for x in times]
 
 
-def stream_hr_zones(conn: sqlite3.Connection, row: sqlite3.Row) -> dict | None:
-    """Time in heart rate zones from the heart rate stream, for an activity whose file has
-    none (virtual rides: apps write no time in zones). The zone limits are Garmin's of the
-    person's activity of the same sport nearest in time (else of any sport). None without a
-    heart rate stream or any zone limits."""
-    bounds, source = None, None
-    for same in (True, False):
-        r = conn.execute(
+ZONE_CHANNEL = {"hr": "hr", "power": "power"}
+
+
+def _borrowed_bounds(
+    conn: sqlite3.Connection, row: sqlite3.Row, kind: str
+) -> tuple[list, str] | None:
+    """Garmin's zone limits of the person's activity of the same sport nearest in time (heart
+    rate: else of any sport; power only of the same sport - running and cycling power differ).
+    Only zones from a file count, never ones computed here."""
+    for same in (True, False) if kind == "hr" else (True,):
+        rows = conn.execute(
             f"""SELECT zones, start_time_utc FROM activities
-               WHERE person_id = ? AND zones LIKE '%"hr"%' AND id != ?
+               WHERE person_id = ? AND zones LIKE ? AND id != ?
                      {"AND category IS ?" if same else ""}
-               ORDER BY ABS(julianday(start_time_utc) - julianday(?)) LIMIT 1""",
+               ORDER BY ABS(julianday(start_time_utc) - julianday(?)) LIMIT 30""",
             (
                 row["person_id"],
+                f'%"{kind}"%',
                 row["id"],
                 *([row["category"]] if same else []),
                 row["start_time_utc"],
             ),
-        ).fetchone()
-        if r:
-            bounds = (json.loads(r["zones"]).get("hr") or {}).get("bounds")
-            source = r["start_time_utc"]
-            if bounds:
-                break
-    if not bounds or len(bounds) < 2:
+        ).fetchall()
+        for r in rows:
+            z = (json.loads(r["zones"]) or {}).get(kind) or {}
+            if z.get("bounds") and len(z["bounds"]) >= 2 and not z.get("computed"):
+                return z["bounds"], r["start_time_utc"]
+    return None
+
+
+def stream_zones(conn: sqlite3.Connection, row: sqlite3.Row, ch: dict | None = None) -> dict:
+    """Time in heart rate and power zones from the streams, for the kinds the file has none of
+    (virtual rides: apps write no time in zones), with borrowed zone limits (_borrowed_bounds),
+    marked {"computed": True, "from": <that activity's start>}. Empty when nothing to add."""
+    have = json.loads(row["zones"]) if row["zones"] else {}
+    out: dict[str, dict] = {}
+    for kind in ("hr", "power"):
+        if kind in have and not have[kind].get("computed"):
+            continue
+        if ch is None:
+            ch = _channels(conn, row["id"])
+        time, vals = ch.get("time") or [], ch.get(ZONE_CHANNEL[kind]) or []
+        if not any(v for v in vals if v):
+            continue
+        found = _borrowed_bounds(conn, row, kind)
+        if not found:
+            continue
+        times = time_in_stream_zones(time, vals, found[0])
+        if any(times):
+            out[kind] = {"times": times, "bounds": found[0], "computed": True, "from": found[1]}
+    return out
+
+
+# Apps whose routes are a made-up world placed somewhere at sea: no country.
+MADE_UP_WORLDS = ("zwift",)
+
+
+def route_country(a: sqlite3.Row, ch: dict[str, list]) -> str | None:
+    """Country code of the route (countries.of_route); None without GPS or in a made-up world."""
+    if not a["has_gps"] or str(a["device"] or "").split(" ")[0] in MADE_UP_WORLDS:
         return None
-    ch = _channels(conn, row["id"])
-    time, hr = ch.get("time") or [], ch.get("hr") or []
-    if not any(v for v in hr if v):
-        return None
-    times = time_in_hr_zones(time, hr, bounds)
-    if not any(times):
-        return None
-    return {"times": times, "bounds": bounds, "computed": True, "from": source}
+    return countries.of_route((a["start_lat"], a["start_lon"]), ch.get("lat"), ch.get("lon"))
 
 
 def backfill(conn: sqlite3.Connection, progress: ProgressFn | None = None) -> int:
@@ -813,7 +843,15 @@ def analyse_one(
         return None
     cache = {} if cache is None else cache
     th = activity_thresholds(conn, a, cache)
-    result = analyse(a, _channels(conn, activity_id), th)
+    ch = _channels(conn, activity_id)
+    result = analyse(a, ch, th)
+    computed = stream_zones(conn, a, ch)
+    zones = None
+    if computed:
+        zones = json.loads(a["zones"]) if a["zones"] else {}
+        zones.update(computed)
+        zones = json.dumps(zones, separators=(",", ":"))
+    country = route_country(a, ch)
     used = METHOD_FIELDS.get(result.method or "", ())
     estimated = int(any((th.sources or {}).get(f) in ("auto", "default") for f in used))
     conn.execute("BEGIN")
@@ -826,9 +864,11 @@ def analyse_one(
         )
         conn.execute(
             """UPDATE activities SET load = ?, load_method = ?, load_estimated = ?,
-                      np_power = COALESCE(np_power, ?), analysis_version = ? WHERE id = ?""",
-            (result.load, result.method, estimated, result.np_power, ANALYSIS_VERSION, activity_id),
-        )
+                      np_power = COALESCE(np_power, ?), zones = COALESCE(?, zones),
+                      country = ?, analysis_version = ? WHERE id = ?""",
+            (result.load, result.method, estimated, result.np_power, zones, country,
+             ANALYSIS_VERSION, activity_id),
+        )  # fmt: skip
         conn.execute("COMMIT")
     except Exception:
         conn.execute("ROLLBACK")

@@ -129,11 +129,39 @@ def main(countries_path, regions_path):
     (OUT / "index.json").write_text(
         json.dumps(index, separators=(",", ":"), ensure_ascii=False), encoding="utf-8"
     )
+    write_boxes()
     total = sum(f.stat().st_size for f in OUT.glob("*.json"))
     print(
         f"{len(index)} countries, {sum(len(c['r']) for c in index)} regions, {total / 1e6:.2f} MB"
     )
 
 
+def write_boxes():
+    """`boxes.json`: the bounding box of each country outline polygon, in 1/1000 degree
+    ({code: [[min_x, min_y, max_x, max_y], ...]}), so the server finds the country of a point
+    (countries.py) reading only the files whose box holds it."""
+    boxes = {}
+    for f in sorted(OUT.glob("*.json")):
+        if f.stem in ("index", "boxes"):
+            continue
+        data = json.loads(f.read_text(encoding="utf-8"))
+        out = []
+        for poly in data["g"]:
+            x = y = 0
+            xs, ys = [], []
+            for i in range(0, len(poly[0]), 2):  # the outer ring
+                x += poly[0][i]
+                y += poly[0][i + 1]
+                xs.append(x)
+                ys.append(y)
+            if xs:
+                out.append([min(xs), min(ys), max(xs), max(ys)])
+        boxes[data["c"]] = out
+    (OUT / "boxes.json").write_text(json.dumps(boxes, separators=(",", ":")), encoding="utf-8")
+
+
 if __name__ == "__main__":
+    if sys.argv[1:] == ["--boxes"]:
+        write_boxes()
+        sys.exit()
     main(*sys.argv[1:3])

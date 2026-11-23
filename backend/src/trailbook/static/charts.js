@@ -61,7 +61,7 @@ const fillAlpha = (a) => (dark() ? a * 0.65 : a);
 //               `keys` and a strip above each with the values of every section (label). A line
 //               can be dragged; on the strip a ball with − over a line removes it, a ball with +
 //               elsewhere adds one. Changes apply to all those charts.
-function chartGroup(root, { x, kind, series, hidden = [], sections = null, onHover = () => {}, onRanges = () => {}, onState = () => {}, onOrder = () => {}, onToggle = () => {} }) {
+function chartGroup(root, { x, kind, series, hidden = [], sections = null, shared = null, onHover = () => {}, onRanges = () => {}, onState = () => {}, onOrder = () => {}, onToggle = () => {} }) {
   const g = { kind, plots: [], pins: [], range: null, hoverIdx: null, dragged: false, mark: null, hidden: new Set(hidden), secs: [].concat(sections || []) };
   const syncKey = "tb-" + Math.random().toString(36).slice(2);
   const xs = () => x[g.kind];
@@ -204,8 +204,8 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, onHov
           // one width for the y axis of every chart in the group: the plots start at the same x,
           // so a moment (cursor, pins, interval lines) is one straight line down the page
           size: (u, vals) => {
-            g.yw[s.key] = vals ? Math.max(...vals.map((v) => String(v).length)) * 6.4 + 8 : 24;
-            return Math.max(...Object.values(g.yw));
+            yws()[s.key] = vals ? Math.max(...vals.map((v) => String(v).length)) * 6.4 + 8 : 24;
+            return Math.max(...Object.values(yws()));
           },
           grid: { stroke: line, width: 0.6, dash: [2, 3] }, ticks: { stroke: axis, size: 3, width: 1 },
           values: (u, vals, ax, space, incr) => vals.map((v) => (s.fmt ? s.fmt(v) : num(v, s.ySplits ? 0 : stepDec(incr)))) },
@@ -214,7 +214,7 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, onHov
         // soft shadow under the series line
         drawClear: [(u) => drawZones(u, s)],
         drawAxes: [(u) => { u.ctx.save(); u.ctx.shadowColor = s.zones ? "rgba(0,0,0,.18)" : withAlpha(s.color, 0.55); u.ctx.shadowBlur = 6; u.ctx.shadowOffsetY = 2; }],
-        draw: [(u) => { u.ctx.restore(); drawSurface(u, s); drawTargets(u, s); drawClimbs(u, s); drawExt(u, s); drawSections(u, s); drawMark(u, s); drawFocus(u, s); drawFrame(u, axis); placeSections(u, s); placeClimbs(u, s); drawPins(u); placeTags(u, s); placeMarks(u, s); }],
+        draw: [(u) => { u.ctx.restore(); drawExtend(u, s); drawSurface(u, s); drawTargets(u, s); drawClimbs(u, s); drawExt(u, s); drawSections(u, s); drawMark(u, s); drawFocus(u, s); drawFrame(u, axis); placeSections(u, s); placeClimbs(u, s); drawPins(u); placeTags(u, s); placeMarks(u, s); }],
         setCursor: [(u) => cursorMoved(u, s)],
         setSelect: [(u) => {
           if (u.select.width < 4) return;
@@ -311,8 +311,11 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, onHov
     const box = u._tb?.tags;
     if (!box || !s.tags) return;
     const items = [...box.querySelectorAll("[data-tag]")];
-    // the column is as wide as the widest pill (no empty strip on the right)
-    box.style.width = `${Math.ceil(Math.max(0, ...items.map((el) => el.offsetWidth)))}px`;
+    // the column is as wide as the widest pill of the group (no empty strip on the right, and
+    // every plot of the group ends at the same x); with `shared` of every group of the page
+    const store = shared || g;
+    const tw = store.tagW = Math.max(store.tagW || 0, Math.ceil(Math.max(0, ...items.map((el) => el.offsetWidth))));
+    box.style.width = `${tw}px`;
     const off = u.over.getBoundingClientRect().top - box.getBoundingClientRect().top;
     // pills with the label inside are lower; a hidden series' pill keeps its height (grey)
     const h = s.tagsInside ? 20 : 32, step = h + (s.tagsInside ? 2 : 3), lo = 0, hi = box.clientHeight - h;
@@ -628,6 +631,24 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, onHov
   }
   // Multi charts: the hovered dot (g.focus: a line's label and the sample) - the same line's dot
   // on every multi chart of the group, lit like a hovered stat point.
+  // A line with `extend`: dashed and level from its last value to the end of the x axis (the
+  // current year's running total: where it ends if nothing more is done).
+  function drawExtend(u, s) {
+    if (!s.multi) return;
+    const ctx = u.ctx, dpr = devicePixelRatio || 1, xv = xs();
+    for (const l of s.lines) {
+      if (!l.extend || l.hidden) continue;
+      const i = l.values.findLastIndex((v) => v != null);
+      if (i < 0 || i >= xv.length - 1) continue;
+      const y = u.valToPos(l.values[i], "y", true);
+      ctx.save();
+      ctx.beginPath(); ctx.rect(u.bbox.left, u.bbox.top, u.bbox.width, u.bbox.height); ctx.clip();
+      ctx.strokeStyle = l.color; ctx.lineWidth = 1.6 * dpr; ctx.setLineDash([5 * dpr, 4 * dpr]);
+      ctx.globalAlpha = l._alpha ?? 1;
+      ctx.beginPath(); ctx.moveTo(u.valToPos(xv[i], "x", true), y); ctx.lineTo(u.valToPos(xv[xv.length - 1], "x", true), y); ctx.stroke();
+      ctx.restore();
+    }
+  }
   function drawFocus(u, s) {
     const f = g.focus;
     if (!s.multi || !f) return;
@@ -659,9 +680,13 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, onHov
     const v = l ? l.values[i] : null;
     if (v == null) { b.tip.hidden = true; return; }
     b.tip.hidden = false;
-    b.tip.innerHTML = `<span class="chart-tip-name">${l.label}</span> <b style="color:${l.color}">${fmtY(s, v)}</b>`;
+    // tipAll: every visible line's value at this x, in the order of the lines; the hovered one bold
+    b.tip.innerHTML = s.tipAll
+      ? s.lines.filter((x) => !x.hidden && x.values[i] != null).map((x) => `<div class="chart-tip-row${x === l ? " on" : ""}"><i class="chart-tip-dot" style="background:${x.color}"></i><span class="chart-tip-name">${x.label}</span> <b style="color:${x.color}">${fmtY(s, x.values[i])}</b></div>`).join("")
+      : `<span class="chart-tip-name">${l.label}</span> <b style="color:${l.color}">${fmtY(s, v)}</b>`;
     const left = u.valToPos(xs()[i], "x"), top = u.valToPos(v, "y"), w = u.over.clientWidth;
-    b.tip.style.transform = `translate(${left + 14 + 150 > w ? left - 14 - b.tip.offsetWidth : left + 14}px, ${Math.max(0, top - 22)}px)`;
+    const y = s.tipAll ? Math.max(0, Math.min(top - 22, u.over.clientHeight - b.tip.offsetHeight)) : Math.max(0, top - 22);
+    b.tip.style.transform = `translate(${left + 14 + 150 > w ? left - 14 - b.tip.offsetWidth : left + 14}px, ${y}px)`;
   }
   // Show or hide one series (by label) on every multi chart of the group; its pills turn grey.
   // onToggle(label, off) tells other groups of the page (api.toggleLine sets it from outside).
@@ -862,6 +887,8 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, onHov
     g.plots.forEach(({ u }) => u.destroy());
     g.plots = [];
     g.yw = {};
+    g.tagW = 0;
+    if (shared) shared.yw ??= {};
     root.innerHTML = "";
     for (const s of series) {
       // colours for the current theme, always from the original ones (theme switches rebuild)
@@ -938,13 +965,15 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, onHov
       ro.observe(holder); // the plot area changes when the pill column takes its width
     }
     if (g.range) g.plots.forEach(({ u }) => u.setScale("x", { min: g.range[0], max: g.range[1] }));
+    g.plots.forEach(({ u, s }) => placeTags(u, s)); // the charts built first take the widest pill column
     renderPins();
     fitSide();
     alignAxes();
   }
+  const yws = () => (shared ? (shared.yw ??= {}) : g.yw);
   // Charts built before the widest y axis was known take its width now.
   function alignAxes() {
-    const w = Math.max(0, ...Object.values(g.yw));
+    const w = Math.max(0, ...Object.values(yws()));
     g.plots.forEach(({ u }) => { if (Math.abs((u.axes[1]._size || 0) - w) > 0.5) u.setSize({ width: u.width, height: u.height }); });
   }
   // The side column of every chart in the group is as wide as the widest stat or legend
@@ -1029,6 +1058,21 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, onHov
       p.u.setCursor(i == null ? { left: -10, top: -10 } : { left: p.u.valToPos(xs()[i], "x"), top: -10 });
     },
     toggleLine(label, off) { toggleLine(label, off); },
+    // Another part of the page points at one series (by label): the other lines fade; null clears.
+    emphasize(label) {
+      for (const { u, s } of g.plots) {
+        if (!s.multi) continue;
+        s.lines.forEach((l, k) => { l._alpha = label == null || l.label === label ? 1 : 0.18; u.series[k + 2].alpha = l._alpha; });
+        u.redraw(false);
+      }
+    },
+    // Groups sharing `shared` (one page): after all are built, take the widest y axis and pill
+    // column of the page.
+    realign() {
+      g.plots.forEach(({ u, s }) => placeTags(u, s));
+      alignAxes();
+      requestAnimationFrame(() => g.plots.forEach(fit));
+    },
     destroy() { ro.disconnect(); themeWatch.disconnect(); g.plots.forEach(({ u }) => u.destroy()); },
   };
   return api;

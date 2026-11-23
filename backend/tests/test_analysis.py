@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 
 import pytest
@@ -158,6 +159,12 @@ def test_training_api(tdb):
         assert [(r["period"], r["count"]) for r in tot["rows"]] == [("2026-01", 2), ("2026-02", 1)]
         runs = client.get("/api/stats/totals?person=anna&type=g:run").json()
         assert sum(r["count"] for r in runs["rows"]) == 2
+        parts = client.get("/api/stats/totals?person=anna&by=year&parts=1&steps=1").json()
+        assert {(p["part"], p["count"]) for p in parts["parts"]} == {("run", 2), ("ride", 1)}
+        assert parts["steps"] == []
+        acts = client.get("/api/stats/activities?person=anna").json()
+        assert len(acts["items"]) == 3 and acts["fields"][1] == "start"
+        assert acts["items"][0][1] == "2026-01-05T09:00:00" and acts["steps"] is None
 
         rec = client.get("/api/stats/records?person=anna").json()
         assert rec["filtered"] is False
@@ -265,13 +272,34 @@ def test_ftp_is_taken_from_the_same_sport_and_can_be_corrected(tdb):
     assert analysis.activity_thresholds(c, a).sources["ftp"] == "activity"
 
 
-def test_time_in_hr_zones_from_the_stream():
-    from trailbook.analysis import time_in_hr_zones
+def test_time_in_zones_from_the_stream():
+    from trailbook.analysis import time_in_stream_zones
 
     bounds = [100, 120, 140, 160, 180, 200]  # below z1 | z1 … z5
     time = [0, 1, 2, 3, 4, 64, 65]  # a 60 s pause after the 5th sample counts 1 s
     hr = [90, 110, 130, 150, 210, 170, None]
-    assert time_in_hr_zones(time, hr, bounds) == [1, 1, 1, 1, 1, 1]
+    assert time_in_stream_zones(time, hr, bounds) == [1, 1, 1, 1, 1, 1, 0]
+
+
+def test_virtual_ride_gets_zones_from_the_nearest_ride(tdb):
+    _, c = tdb
+    outdoor = _activity(c, "anna", "2026-01-20", group="ride", atype="road_ride", power=200)
+    z = {"hr": {"times": [0, 1, 1, 1, 1, 1, 0], "bounds": [100, 120, 140, 160, 180, 200]},
+         "power": {"times": [0, 1, 1, 1], "bounds": [0, 150, 250, 4000]}}  # fmt: skip
+    c.execute("UPDATE activities SET zones = ? WHERE id = ?", (json.dumps(z), outdoor))
+    virtual = _activity(c, "anna", "2026-01-25", group="ride", atype="virtual_ride", hr=150,
+                        power=200)  # fmt: skip
+    analysis.analyse_one(c, virtual)
+    row = c.execute("SELECT zones FROM activities WHERE id = ?", (virtual,)).fetchone()
+    got = json.loads(row[0])
+    assert got["hr"]["computed"] and got["hr"]["from"] == "2026-01-20T08:00:00Z"
+    assert got["hr"]["times"][3] == 3600  # 150 bpm: zone 3
+    assert got["power"]["times"][2] == 3600  # 200 W: zone 2
+    # computed zones are never borrowed by another activity
+    other = _activity(c, "anna", "2026-01-26", group="ride", atype="virtual_ride", power=200)
+    c.execute("UPDATE activities SET zones = NULL WHERE id = ?", (outdoor,))
+    analysis.analyse_one(c, other)
+    assert c.execute("SELECT zones FROM activities WHERE id = ?", (other,)).fetchone()[0] is None
 
 
 def _ride(seconds: int, speed_at):

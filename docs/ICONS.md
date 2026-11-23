@@ -14,7 +14,7 @@ Activity type icons use the accent colour. Metric icons use the colour of their 
 a metric not in a coloured group is drawn in `--muted`.
 
 Own drawings (`OWN_ICONS` in `preview.js`, same grid, 2.1 stroke, round joins) take
-precedence over the set: `sleep`, `date`, `type`, `name`, and replacements for the weak
+precedence over the set: `sleep`, `date`, `type`, `name`, `tiles` (explorer tiles), and replacements for the weak
 `avg_heart_rate`, `timer_time`, `avg_pace`, `total_ascent` and `total_descent`.
 
 Activity types likewise: `OWN_TYPE_ICONS` in `preview.js` replaces weak drawings of the

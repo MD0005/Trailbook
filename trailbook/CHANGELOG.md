@@ -1,5 +1,50 @@
 # Changelog
 
+## 0.1.13
+
+### Added
+- Settings › Data sources: **Other sources: Intervals.icu** — a Check switch per person; files it finds wait
+  as Download buttons until you take them.
+- Activity: a **New tiles** card with the tiles the activity visited for the first time.
+- Activity: the country of the route next to the date (for virtual rides the route's country).
+- Statistics › Compare years: Distance, Activities and Elevation per year as columns on top,
+  split into running, cycling and other.
+- Statistics › Compare years: Steps per week or month.
+- Statistics › Compare years: the current year's running total goes on as a dashed line to the
+  end of the year.
+- Statistics › Compare years: hovering a running total lists every year's value.
+- Statistics › Timeline: a summary on top, time of day, day of the week, activity types,
+  countries, distance and weather breakdowns.
+- Statistics › Timeline: Explorer tiles with a size picker, its own summary, the tiles so far and
+  new tiles per period.
+- Calendar: a **Next** button with a suggested next session: the week's easy, moderate and hard
+  time (done and planned) against a training model, the form and what to do next.
+- Fitness: Max fitness and Max fatigue (best 7-day average) of the period next to the chart.
+- Segments: a segment counted both ways shows how many efforts went each way.
+
+### Changed
+- Settings › Data sources: the Strava card is called **Other sources: Strava**.
+- Settings: the tabs are called **Data sources** and **Workouts API**.
+- Activity: the Power in zones bar is as thick as the heart rate zone bars.
+- Statistics › Compare years: all charts line up left and right, the running totals are higher
+  and say per week or per month, every chart title has an icon.
+- Statistics › Records and Timeline open on All time.
+- Fitness: the fitness and form charts end at exactly the same place on the right.
+- A new waiting animation: the cyclist sits on the bike properly and pedals.
+- Chart options say "X-axis".
+- Calendar: the view is called **Weeks**; on phones one day a row with one-line activities.
+- Calendar: the summary shows the current month while the weeks ahead are on top.
+- Calendar: opening Summary, Next or Workouts scrolls to the top.
+- Segments: "Last" is now "Most recent"; values an effort does not have (e.g. cadence) are left
+  out instead of showing "–".
+- Statistics › Records: a value and its date stay on one line; a period's best that is the
+  all-time best shows the laurel instead of the same value twice.
+
+### Fixed
+- Virtual rides: heart rate and power zones are counted from the ride, so Power in zones shows
+  and Calendar and Activities › Charts draw coloured blocks instead of a grey bar.
+- Virtual rides: Gear lists the power meter, trainer and heart rate strap, not only the app.
+
 ## 0.1.12
 
 ### Fixed

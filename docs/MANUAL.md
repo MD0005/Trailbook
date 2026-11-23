@@ -343,15 +343,87 @@ Phases: 15 s means of the heart rate; the zone changes only 3 bpm past a limit (
 the scale); neighbours in one zone are joined; the shortest block under the minimum joins the
 neighbour closer in heart rate, until none is shorter.
 
-## Heart rate in zones (activity page)
+## Heart rate and power in zones (activity page, Calendar, Activities › Charts)
 
 - From the activity file: Garmin's time in zones (`time_in_zone`), with the zone limits the
   watch used.
-- Files without it (virtual rides: training apps write none): counted from the heart rate
-  line. Zone limits = Garmin's of the person's activity of the same sport nearest in time (else
-  of any sport). Each sample lasts until the next one; a gap over 10 s (a pause) counts 1 s.
-  Below the first limit = "below zone 1", above the last = the top zone.
-- No heart rate line or no activity with zones yet: no tile.
+- Files without it (virtual rides: training apps write none): counted from the heart rate and
+  power lines when the activity is analysed, and kept with the activity, so the zone tiles, the
+  heart rate blocks of Calendar and Activities › Charts and the route colours all have them.
+  Zone limits = Garmin's of the person's activity of the same sport nearest in time that has
+  them in its file (heart rate: else of any sport; power: only the same sport, running and
+  cycling power differ; zones counted this way are never borrowed). Each sample lasts until the
+  next one; a gap over 10 s (a pause) counts 1 s. Below the first limit = "below zone 1", above
+  the last = the top zone. The tile's title says which activity's zones were used.
+- No line or no activity with zones yet: no tile.
+
+## Country (activity header)
+
+- The country of the route, from the country outlines the app ships (Natural Earth 1:10m),
+  nothing asked of a server: the start point, else the first of ~24 points along the track that
+  lies in a country (a start on a beach can fall just outside the simplified outline).
+- A route crossing a border shows the start's country.
+- Virtual: the country of the app's route (riding at home on a route from New Zealand = New
+  Zealand). Apps with a made-up world placed at sea (Zwift): none.
+- Without GPS: none.
+
+## New tiles (activity page)
+
+- The tiles of each size (as on Map › Explorer tiles) this activity's route touched before any
+  earlier activity of the same person did; virtual routes count, as on the map.
+- Counted in the browser from the stored routes (the same simplified lines the map uses), so it
+  matches Map › Explorer tiles; only earlier routes that come near the activity are loaded.
+- The card shows only when there is a new tile; the Size badge lists only sizes with new
+  tiles, the largest first.
+
+## Statistics › Timeline
+
+- **Time of day**: an activity counts once in every hour it spans (start to start + elapsed
+  time, local time), so a ride from 17:30 to 19:10 counts at 17, 18 and 19.
+- **Day of the week**: the day the activity started (local).
+- Tooltip averages: distance and elevation per activity; pace (all activities on foot) or speed
+  = total distance / total moving time of the activities with a distance.
+- **Avg speed** in the summary the same; **Around the world** = distance / 40 075 km, **To the
+  Moon** = distance / 384 400 km; **Steps** = the daily steps of the days in the period.
+- **Countries**: the route's country (Manual › Country); without one: Indoor (marked indoor, or
+  virtual when they are excluded) or No route.
+- **Weather breakdown**: outdoors for sure only — a recorded route, not marked indoor, not
+  virtual. Kinds from the hour's WMO weather code: Clear 0–1, Cloudy 2–3, Fog 45–48, Rain 51–67
+  and 80–82, Snow 71–77 and 85–86, Thunderstorm 95+. Unknown: the weather is fetched when the
+  activity is opened, not yet for this one.
+- **Explorer tiles** strip (the tiles of the routes in the period, chosen size): Max square and
+  Max cluster as on Map › Explorer tiles; Cluster tiles = tiles whose four neighbours are visited;
+  Cluster span = the max cluster's width or height in tiles, the larger; Connected tiles = the
+  largest group of visited tiles touching side by side; Longest column / row = the longest
+  unbroken vertical / horizontal line of visited tiles; Most visited = the visits of the most
+  visited tile; One activity = the most tiles one activity visited.
+
+## Next workout (Calendar › Next)
+
+- **Window**: the last 7 days (today included) and the workouts planned for the next 7 (today's
+  only while no activity of its sport is done today).
+- **Split**: easy = heart rate zones 1–2 and below, moderate = zone 3, hard = zones 4–5 (Garmin's
+  time in zones of each activity; activities without heart rate do not count). A planned step
+  by its target: heart rate and pace zones 1–2 / 3 / 4–5 (a pace target read as a zone from your
+  usual speed, as in the workout estimate), power zones 1–2 / 3 / 4–7; no target or rest = easy.
+- **Models** (easy / moderate / hard): Polarized 80 / 5 / 15, Pyramidal 75 / 20 / 5, Threshold
+  55 / 35 / 10.
+- **The next session**, the first rule that fits:
+  1. Form below −30: rest.
+  2. A hard day (≥ 10 min hard) yesterday or today and form below +5: easy (rest with form below
+     −20).
+  3. No session of 90 min or more in the 7 days and none planned, form −20 or higher: long.
+  4. Hard time short of the model by the most (at least 3 points), form −20 or higher: intervals.
+  5. Moderate time short of the model (at least 3 points), form −20 or higher: tempo.
+  6. Otherwise easy.
+- **Sport**: of the endurance sports done at least twice in the last 4 weeks (run, ride, swim,
+  walk, hike, winter, water), the one whose share of the time fell most in this window (plan
+  included) against those 4 weeks.
+- **Length**: the sport's usual session (median of 4 weeks), long = 1,5 × that and at least
+  90 min; to 5 minutes.
+- **Plan notes**: when the plan puts an intensity more than 10 points past the model, the
+  planned workout with the most of it is named (make it easier, or add hard work when easy is
+  too much).
 
 ## Calendar: steps, floors, stress, day length
 
@@ -456,6 +528,9 @@ Every sport. The first method the activity has data for; duration = the timer ti
 - Fitness (CTL) += (load − CTL) × (1 − e^(−1/42)) ≈ 2,35 %; Fatigue (ATL) the same with 7 days
   ≈ 13,31 %. Both start at 0 on the first day with a load.
 - Form (TSB) = yesterday's CTL − yesterday's ATL. Ramp rate = CTL − CTL 7 days ago.
+- Pills on the Fitness chart: **Max fitness** = the highest CTL of the shown period; **Max
+  fatigue** = the highest average ATL over 7 days in a row in the shown period (one day's peak
+  says little), placed at the last day of that week.
 - The activity page's **Load** tile shows the activity's own load (the one the calendar adds up
   and fitness and fatigue are built from), next to Garmin's training load (its own scale) and
   the Body Battery change (both from Garmin Connect, not computed here).

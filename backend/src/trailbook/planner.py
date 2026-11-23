@@ -359,8 +359,15 @@ def estimate(w: dict, ctx: dict) -> dict:
         lo, hi = (round(span[0], 3), round(span[1], 3)) if span else (None, None)
         blocks.append([round(x / total, 4), round((x + sec) / total, 4), lo, hi, typ])
         x += sec
+    # seconds easy / moderate / hard (suggest.py): heart rate and pace zones 1–2 / 3 / 4–5,
+    # power zones 1–2 / 3 / 4–7; a step without a target and a rest count as easy
+    split = [0.0, 0.0, 0.0]
+    for sec, _, zlo, zhi, typ, _, _ in rows:
+        z = 1 if typ == "rest" else int(min(max((zlo + zhi) / 2, 1.0), 7.0))
+        split[0 if z <= 2 else 1 if z == 3 else 2] += sec
     return {
         "duration_s": round(total),
+        "intensity": [round(x) for x in split],
         "distance_m": round(sum(r[1] for r in rows)),
         "load": round(load),
         "kind": _kind(rows),

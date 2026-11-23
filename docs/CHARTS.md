@@ -28,7 +28,7 @@ served locally. Local variations are allowed; the base stays the same.
    full date, exact time or the distance with two decimals. Distance is shown with **two
    decimals everywhere in the app**.
 8. **Title and controls**: the card title on the left; controls as badges in the page header
-   ("Charts: 5 of 12", "Options" with the X axis and other chart settings); **Reset** is a refresh pictogram in the top
+   ("Charts: 5 of 12", "Options" with the X-axis and other chart settings); **Reset** is a refresh pictogram in the top
    right corner of the plot area. Dragging a chart card (its title or margin, not the plot)
    changes the order of the charts.
 9. **Font**: Roboto.
@@ -138,7 +138,7 @@ performance condition, stamina and potential stamina. Streams without data are n
   300 m long with the highest average grade) and **Longest climb · +gain** (its length);
   both explain this on hover and highlight their stretch.
 - **Options** badge (page header), a panel with:
-  - **X axis**: Distance | Elapsed time (pauses and stops included) | Timer time (pauses on
+  - **X-axis**: Distance | Elapsed time (pauses and stops included) | Timer time (pauses on
     the watch left out: a gap over 30 s counts 1 s) | Percent (Distance when the activity
     has one; fixed default every visit);
   - **Power & cadence avg**: None | 5 s | 10 s | 15 s | 30 s | 1 min | 5 min | 20 min —
@@ -166,12 +166,26 @@ performance condition, stamina and potential stamina. Streams without data are n
 - **Hover**: the dot nearest to the cursor (in height) is lit (halo and white rim) with a value
   flag beside it; the same series' dot at the same x is lit on every other chart of the page
   (e.g. the cumulative pair), with its flag.
-- X axis: months (Jan … Dec, every month) or weeks (W1 … W53, every 1, 2, 4 or 8 weeks as they
+- X-axis: months (Jan … Dec, every month) or weeks (W1 … W53, every 1, 2, 4 or 8 weeks as they
   fit) with half a period of room at both ends; Timeline: the date axis.
-- Compare years: four pairs of charts (per period, then cumulative), each the full width, one
-  under the other. X axis Mixed (default): the per-period charts by month, the running totals by
-  week — each chart its own group (its own x values, no shared crosshair); a click on a pill
-  hides the series on all of them (`onToggle` / `api.toggleLine`).
+- Compare years: on top three column charts side by side (a third of the width each):
+  Distance, Activities and Elevation gain per year — a column per year (oldest left) in its
+  series colour, split into running (bottom, full colour), cycling and other (top) in three
+  shades of it; the total over the column, the split on hover. Hovering a year dims the other
+  columns of all three and fades the other years' lines on every chart below
+  (`api.emphasize(label)`).
+  Then four pairs of charts (per period, then cumulative), each the full width, one under the
+  other, and Steps per period (daily data, no running total, the Type filter does not apply).
+  Titles: an icon and "<metric> per week | month", the running totals "…, cumulative"; the
+  cumulative charts are 25 % higher (325 px). The current year's running total goes on dashed
+  and level from its last week to the end of the year (`extend` on a line). Hovering a dot of a
+  running total: the flag lists every year's value at that week or month, newest first, the
+  hovered year bold (`tipAll`). X-axis Mixed (default): the per-period charts by month, the
+  running totals by week — each chart its own group (its own x values, no shared crosshair); a
+  click on a pill hides the series on all of them (`onToggle` / `api.toggleLine`).
+- **One left and right edge on a page**: groups built with the same `shared` object take the
+  widest y axis and the widest pill column of all of them (`api.realign()` after the last one),
+  so every plot starts and ends at the same x.
 - Records: the speed and power curves are the activity's duration curve (`curveChart`, same
   frame, fills, dashed comparison) — over the distances for speed (labels 400m, 1k, 1mi, 5k…,
   HM, M; tooltip pace and speed on foot), over the durations for power; the main series is the
@@ -199,7 +213,9 @@ that would overlap move apart by the same amount, centred on their values (each 
 equally); hovering one marks its point. A pinned value shows every series of the chart.
 
 - **Fitness and fatigue** (396 px) — fitness (muted steel blue `#6f8fbf`) filled (or a plain line, Options), fatigue a
-  line; pills: Fitness and Fatigue at the end of the period. No daily load. Under its x axis
+  line; pills: Fitness and Fatigue at the end of the period, Max fitness (highest in the period)
+  and Max fatigue (highest 7-day average, Manual › Fitness) at their heights. The pill columns of
+  all charts of a group are one width, so the plots end at the same x. No daily load. Under its x axis
   a strip of **activity icons** (type icon on its day; icons closer than ~35 px share one spot (about three a month over a year; more when zoomed in)
   with a count; hovering shades the days the icon stands for on the chart (first to last day)
   and the tooltip sums them up: the days, one line per sport — count and load —, the total

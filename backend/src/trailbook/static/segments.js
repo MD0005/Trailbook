@@ -99,7 +99,7 @@ function segmentCard(s, fqs = "") {
       ${CURRENT === "all" ? `<div class="seg-eb-who">${avatar(person(e.person_id), 16)} ${esc(personLabel(e.person_id))}</div>` : ""}</div>` : "");
   return `<a class="card seg-card" href="#/segment/${s.id}${fqs ? "?" + fqs : ""}">
     <div class="seg-map-wrap">${staticMap(s.polyline, { dashed: true, twoWay: s.two_way })}${s.two_way ? `<span class="seg-two-way" title="${TWO_WAY_TIP}">${ICON_TWO_WAY}</span>` : ""}</div>${head}
-    ${s.efforts ? `<div class="seg-ebs">${block("Best", LAUREL_SVG, s.best)}${block("Last", metricIcon("date", 15), s.last)}</div>` : hint(s.pending ? "Looking for efforts in all activities…" : "No efforts yet.")}</a>`;
+    ${s.efforts ? `<div class="seg-ebs">${block("Best", LAUREL_SVG, s.best)}${block("Most recent", metricIcon("date", 15), s.last)}</div>` : hint(s.pending ? "Looking for efforts in all activities…" : "No efforts yet.")}</a>`;
 }
 
 async function renderSegments(params) {
@@ -151,7 +151,7 @@ function segmentTrend(root, series) {
       key: "time", label: "Time", title: "Trend", icon: "elapsed_time", unit: "m:ss", values: v, fmt: mmss, points: true, fill: false,
       invert: true, color: accent, tip: "Effort times in the period, faster higher. Dashed: robust LOESS trend over date.",
       lines: trend ? [{ label: "Trend", values: trend, color: grey, dash: [6, 4] }] : [], legend: false,
-      tags: [tag("Last", v[last], last, accent, v, "Latest effort"),
+      tags: [tag("Most recent", v[last], last, accent, v, "The most recent effort"),
         ...(trend ? [tag("Trend", trend[last], last, grey, trend, "LOESS at the last effort: local linear fit, span 0,6, tricube weights in days, 2 bisquare robustness passes (outliers > 6·MAD → 0)")] : []),
         tag("Best", v[best], best, accent, v, "Minimum in the period"),
         tag("Avg", avg, null, accent, v, "Arithmetic mean in the period")],
@@ -382,13 +382,16 @@ function effortRow(e, group, { power = SEG_HAS_POWER, thisId = null, wx = false,
     <td class="c-act">${mine ? `<span class="this-tag">This activity</span>` : `<a href="#/activity/${e.activity_id}">${typeName(e.activity_type, e.activity_name || typeLabel(e.activity_type))}</a>`}</td>${wxCell}</tr>`;
 }
 
-// Last / best effort: a card titled like the activity tiles, its values as small tiles in one
-// row. Both cards show the same set (a missing value is "–"), so their columns line up.
-function effortCard(title, icon, e, group) {
+// Most recent / best effort: a card titled like the activity tiles, its values as small tiles in
+// one row. A value neither card has (a ride without cadence) is left out; both cards show the
+// same set (one missing in only one of them is "–"), so their columns line up.
+function effortCard(title, icon, e, group, both = [e]) {
   const head = `<h3 class="tile-title">${icon}<span>${title}</span></h3>`;
   if (!e) return `<div class="card seg-eff">${head}${hint("–")}</div>`;
   const onFoot = ON_FOOT.has(group);
-  const tile = (ic, label, value) => `<div class="seg-eff-tile"><span class="tile-title">${metricIcon(ic, 18)}<span>${label}</span></span><b>${value ?? "–"}</b></div>`;
+  const FIELD = { "Max speed": "max_speed", "Best pace": "max_speed", "Avg HR": "avg_hr", "Max HR": "max_hr", "Avg power": "avg_power", Cadence: "avg_cadence" };
+  const tile = (ic, label, value) => (FIELD[label] && !both.some((x) => x?.[FIELD[label]]) ? ""
+    : `<div class="seg-eff-tile"><span class="tile-title">${metricIcon(ic, 18)}<span>${label}</span></span><b>${value ?? "–"}</b></div>`);
   return `<div class="card seg-eff"><div class="seg-eff-head">${head}
     <div class="hint seg-eff-sub">${localTime(e)}${personBit(e)} · <a href="#/activity/${e.activity_id}">${esc(e.activity_name || typeLabel(e.activity_type))}</a>${e.rank ? ` · rank ${e.rank}` : ""}${e.reverse ? " · other way ⇄" : ""}</div></div>
     <div class="seg-eff-tiles">${tile("elapsed_time", "Time", mmss(e.elapsed_s))}
@@ -443,19 +446,20 @@ async function renderSegment(id, params) {
       ["Elevation gain", meters(s.ascent_m), grade],
       ["Direction", s.two_way ? "Both ways" : "One way", s.net_climb_m != null ? `end ${s.net_climb_m >= 0 ? "+" : "−"}${num(Math.abs(s.net_climb_m))} m vs start` : ""],
       ["Efforts", num(sum.count), CURRENT === "all" && d.people.length ? `${num(d.people.length)} ${d.people.length === 1 ? "person" : "people"}` : ""],
+      ...(s.two_way ? [["By direction", `${num(sum.count - (sum.reverse || 0))} · ${num(sum.reverse || 0)}`, "this way · other way ⇄"]] : []),
       ["Best", mmss(sum.best_s), d.best ? effortDay(d.best) : ""],
       ["Average", mmss(sum.avg_s), sum.median_s != null ? `median ${mmss(sum.median_s)}` : ""],
-      ["Last", d.last ? mmss(d.last.elapsed_s) : "–", d.last ? effortDay(d.last) : ""],
+      ["Most recent", d.last ? mmss(d.last.elapsed_s) : "–", d.last ? effortDay(d.last) : ""],
     ])}</div>
     <div class="card route-card"><div class="card-head"><h3 class="tile-title">${metricIcon("route", 18)}<span>Route</span></h3>
         ${s.two_way ? `<span class="hint seg-two-way-note" title="${TWO_WAY_TIP}">${ICON_TWO_WAY} both ways</span>` : ""}<span class="spacer"></span>
         ${routeRef ? `<div class="badges">${badgeHtml("route-color", "Data", routeModeLabel("plain"), { panel: `<div class="opt-panel">${pickList("route-color", SEG_ROUTE_MODES, "plain", () => "", routeModeIcon)}</div>`, right: true })}</div>` : ""}</div>
       <div class="route-wrap"><div id="seg-map" class="map"></div><div class="route-overlays"><div class="route-legend" id="route-legend" hidden></div></div></div></div>
     ${sum.count ? `
-    <div class="seg-eff-row">${effortCard("Last effort", metricIcon("date", 18), d.last, g)}${effortCard("Best effort", LAUREL_SVG, d.best, g)}</div>
+    <div class="seg-eff-row">${effortCard("Most recent effort", metricIcon("date", 18), d.last, g, [d.last, d.best])}${effortCard("Best effort", LAUREL_SVG, d.best, g, [d.last, d.best])}</div>
     <div class="charts" data-trend></div>
     ${CURRENT === "all" && d.people.length ? `<div class="card"><h3>People</h3><div class="scroll"><table class="data"><thead><tr>${thIcon("", "Person", false)}
-      ${thIcon("elapsed_time", "Best")}${thIcon("elapsed_time", "Average")}<th class="num">Efforts</th>${thIcon("date", "Last", false)}</tr></thead><tbody>
+      ${thIcon("elapsed_time", "Best")}${thIcon("elapsed_time", "Average")}<th class="num">Efforts</th>${thIcon("date", "Most recent", false)}</tr></thead><tbody>
       ${d.people.map((p) => `<tr><td>${avatar(person(p.person_id), 18)} ${esc(personLabel(p.person_id))}</td><td class="num"><b>${mmss(p.best_s)}</b></td>
         <td class="num">${mmss(p.avg_s)}</td><td class="num">${num(p.count)}</td><td>${mmss(p.last.elapsed_s)} <span class="hint">${effortDay(p.last)}</span></td></tr>`).join("")}
       </tbody></table></div></div>` : ""}
