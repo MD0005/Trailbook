@@ -38,41 +38,65 @@ export, FIT/GPX/TCX files) are there to bring in older history or a second devic
 
 ## Features
 
-**Activities** — every activity as tiles, charts or a table; 100+ sport types; easy, tempo,
-intervals or race detected for you.
+**Activities**
+- Every activity as tiles with its route, as small charts or as a sortable table.
+- 100+ sport types with their own icons; easy, tempo, intervals, hills, long or race is
+  detected for each run and ride.
 
-**Activity page** — the route coloured by pace or heart rate, charts with intervals and climbs,
-zones, curves, best efforts, road surface and the weather that helped or held you back.
+**Activity page**
+- The route coloured by pace, heart rate, power or gradient, with the road surface of every
+  stretch and the weather that helped or held you back.
+- Charts linked to the map, with intervals and categorised climbs marked; the targets of a
+  planned workout drawn in.
+- Zones, heart rate and power curves, training effect and load, and best efforts against
+  your year and all-time bests.
 
 <table><tr><td align="center" valign="top"><a href="docs/screenshots/heart-rate.png"><img src="docs/screenshots/heart-rate.png" alt="Activity › heart rate of an interval workout" width="520"></a><br><sub><em>Activity › heart rate of an interval workout</em></sub></td></tr></table>
 
 <table><tr><td align="center" valign="top"><a href="docs/screenshots/zones.png"><img src="docs/screenshots/zones.png" alt="Activity › zones, surface and power curve" width="330"></a><br><sub><em>Activity › zones, surface and power curve</em></sub></td><td align="center" valign="top"><a href="docs/screenshots/weather.png"><img src="docs/screenshots/weather.png" alt="Activity › weather on the route" width="210"></a><br><sub><em>Activity › weather on the route</em></sub></td></tr></table>
 
-**Calendar** — your weeks at a glance, a suggested next workout, and structured workouts sent
-to your Garmin watch.
+**Calendar**
+- Your weeks at a glance: each day's activities, steps, stress and forecast, the week's
+  totals per sport against your targets, and a year view.
+- **Next workout**: what to do next, from the last 7 days, your form and a training model
+  (polarized, pyramidal or threshold).
+- Build structured workouts and send them to your Garmin watch through intervals.icu.
 
 <table><tr><td align="center" valign="top"><a href="docs/screenshots/calendar.png"><img src="docs/screenshots/calendar.png" alt="Calendar with Next workout and workouts" width="430"></a><br><sub><em>Calendar with Next workout and workouts</em></sub></td><td align="center" valign="top"><a href="docs/screenshots/workout.png"><img src="docs/screenshots/workout.png" alt="Calendar › workout builder" width="300"></a><br><sub><em>Calendar › workout builder</em></sub></td></tr></table>
 
-**Map** — a heatmap of every route and the explorer tiles you have visited, on maps with
-shaded relief and marked trails.
+**Map**
+- A heatmap of every route, per person or all together.
+- Explorer tiles: every square you have visited, your biggest square and cluster, and how
+  much of a region you have covered.
+- Several base maps with shaded relief and marked hiking, cycling or MTB trails.
 
 <table><tr><td align="center" valign="top"><a href="docs/screenshots/map.webp"><img src="docs/screenshots/map.webp" alt="Map › Heatmap" width="390"></a><br><sub><em>Map › Heatmap</em></sub></td><td align="center" valign="top"><a href="docs/screenshots/tiles.webp"><img src="docs/screenshots/tiles.webp" alt="Map › Explorer tiles" width="390"></a><br><sub><em>Map › Explorer tiles</em></sub></td></tr></table>
 
-**Segments** — your own segments, matched automatically, with a leaderboard and a trend.
+**Segments**
+- Create them from an activity or by placing pins on the map; every activity that passes is
+  matched, in both directions if you like.
+- Best, average and latest effort, the trend over the years and a top 10 with the weather.
 
 <table><tr><td align="center" valign="top"><a href="docs/screenshots/segment.png"><img src="docs/screenshots/segment.png" alt="Segment" width="430"></a><br><sub><em>Segment</em></sub></td></tr></table>
 
-**Fitness** — training load, fitness, fatigue and form over time.
+**Fitness**
+- Training load of every activity from power, pace or heart rate.
+- Fitness, fatigue and form over time, with the form zones from fresh to overreaching.
 
 <table><tr><td align="center" valign="top"><a href="docs/screenshots/fitness.png"><img src="docs/screenshots/fitness.png" alt="Fitness › fitness, fatigue and form" width="520"></a><br><sub><em>Fitness › fitness, fatigue and form</em></sub></td></tr></table>
 
-**Statistics** — years compared, a timeline of when, where and in what weather you train,
-and your records.
+**Statistics**
+- **Compare years**: distance, activities and elevation per year, and every year as a line
+  with its running total.
+- **Timeline**: when, where and in what weather you train, and your explorer tiles growing.
+- **Records**: your best efforts and their curves for running, cycling, walking and hiking,
+  and segments, of all time or in any period.
 
 <table><tr><td align="center" valign="top"><a href="docs/screenshots/statistics.png"><img src="docs/screenshots/statistics.png" alt="Statistics › Compare years" width="260"></a><br><sub><em>Statistics › Compare years</em></sub></td><td align="center" valign="top"><a href="docs/screenshots/timeline.png"><img src="docs/screenshots/timeline.png" alt="Statistics › Timeline" width="260"></a><br><sub><em>Statistics › Timeline</em></sub></td><td align="center" valign="top"><a href="docs/screenshots/records.png"><img src="docs/screenshots/records.png" alt="Statistics › Records" width="260"></a><br><sub><em>Statistics › Records</em></sub></td></tr></table>
 
 **And more**
 - Several people in one install, and a side-by-side comparison of everyone.
+- New records as Home Assistant notifications and a sensor for your dashboards.
 - A built-in manual that explains every number.
 - Garmin Connect as the main source: the whole history, then every new activity on its own.
 - Older history from a Strava export, a folder or an upload; duplicates are skipped.
