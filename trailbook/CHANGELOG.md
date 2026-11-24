@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.1.18
+
+### Added
+- Maps: Relief option that shades hills on every map and on the activity tiles.
+- Maps: new base maps Humanitarian, CARTO Positron, Voyager and Dark Matter, and a Trails
+  option with marked hiking, cycling or MTB routes.
+- Strava import: optional From / To dates to import only part of the export.
+- Statistics › Compare years: a click on a year column keeps it highlighted.
+- Statistics › Timeline: average new tiles per period next to Most.
+
+### Changed
+- Statistics › Timeline: every activity type and country gets its own slice; labels hidden
+  only under 1 %.
+- Statistics › Timeline: time of day and day of the week as columns (default) or pie only.
+- Statistics › Timeline: weather from the most common, Unknown last.
+- Statistics › Compare years: the cumulative chart comes first in each pair.
+- Calendar: the Summary stays on screen while scrolling (not on phones).
+- Calendar › Next workout: the thresholds are shown for each sport.
+- Export: every file of the archive is included.
+- Settings › Data sources: Intervals.icu is marked as a testing phase.
+
+### Fixed
+- Statistics › Timeline: the Running and Cycling distance tables line up.
+
 ## 0.1.17
 
 ### Added
