@@ -189,7 +189,10 @@ fetched twice.
 **Other sources: Strava** (Settings › Data sources, a card shown whatever the data connection is): one-time
 imports of history kept elsewhere, uploaded for a chosen person through the same
 `POST /api/uploads`, one file after another (several files can be picked; the running import
-picks up files that arrive meanwhile). Today: **Strava** — the bulk export ZIP or single
+picks up files that arrive meanwhile). Files over 8 MB go in 8 MB parts (`POST /api/uploads/part?part=<id>&offset=<n>`,
+appended in `upload-parts/` next to the database; unfinished ones dropped after a day), then
+`POST /api/uploads?...&part=<id>` takes the joined file: Home Assistant's Ingress refuses big
+requests (413). Today: **Strava** — the bulk export ZIP or single
 files. Formats read everywhere (folder, ZIPs, uploads): `.fit`, `.gpx`, `.tcx`, each also
 gzipped (`.gz`); the content decides the parser (`trackfile.kind`), not the name.
 - GPX/TCX (`trackfile.py`): time, position, altitude, distance (TCX; summed from positions in
@@ -203,7 +206,15 @@ gzipped (`.gz`); the content decides the parser (`trackfile.kind`), not the name
   id `strava:<id>`). Photos and other files in the ZIP are ignored. Optional **From / To**
   dates on the card (`from`, `to` on `POST /api/uploads`, both included): only the ZIP's
   activities whose date in `activities.csv` is in the range are queued (files without a CSV
-  row are kept) — e.g. only the years before Garmin.
+  row are kept) — e.g. only the years before Garmin. The stored ZIP is then cut down to the
+  queued files and `activities.csv` (photos and the activities left out are deleted); with
+  nothing to import the upload is deleted. After each import run (`importer.prune_uploads`)
+  the person's own uploads also lose what was not imported: duplicates (copies of activities
+  already there) and skipped files that are no activity (not FIT data such as sleep or
+  monitoring, which stay; errors stay too), files and their rows; a ZIP keeps the rest and its
+  activities.csv, an upload with nothing left is deleted. Garmin downloads and watched-folder
+  copies are never touched. Exports in another language (same columns, headers
+  translated) are read by column place; Polish month names and activity types are translated.
 - No time zone in GPX/TCX/CSV: estimated (see `MANUAL.md` › Imported files without a time zone).
 - Duplicates: see 5.3.
 
@@ -881,16 +892,15 @@ map the same frame floats over the map without the fade.
   floats above it, aligned with the content column of the other tabs.
   Settings is one panel with three columns, always all of them: Map, Heatmap, Explorer tiles
   (the base map is shared; settings of the hidden mode are kept for when you switch):
-  - Base map: OpenStreetMap (default), OpenTopoMap, CyclOSM, Humanitarian (HOT), CARTO
-    Positron, CARTO Voyager, CARTO Dark Matter (free without a key for non-commercial use) or
-    none; Trails: None (default) | Hiking | Cycling | MTB — the marked routes of Waymarked
-    Trails drawn over it (transparent tiles, `basemap.OVERLAYS` `trails-<kind>`); colours: faded light,
-    original, muted, grayscale, soft dark, slate, dusk (default, in both themes), dark (high
-    contrast). The soft dark tones lift blacks and lower contrast so routes stand out without
+  - Base map: OpenStreetMap, OpenTopoMap, CyclOSM, Humanitarian (HOT, default) or none (CARTO
+    was tried: it needs an API key now; a base map no longer offered falls back to the default); Trails: None (default) | Hiking | Cycling | MTB — the marked routes of Waymarked
+    Trails drawn over it (transparent tiles, `basemap.OVERLAYS` `trails-<kind>`); colours: Automatic (default:
+    muted in light, dusk in dark, following the theme, `MAP_TONE`), faded light, original, muted,
+    grayscale, soft dark, slate, dusk, dark (high contrast). The soft dark tones lift blacks and lower contrast so routes stand out without
     a harsh map. The chosen colours belong to the Map tab only. Route maps (activity, segment,
     segment creator) always have fixed colours per theme: faded light in light, soft dark in
     dark (`ROUTE_TONE`); the activity tiles' static maps likewise.
-  - Relief: Off (default) | On — hills shaded over the base map (under the routes) on every
+  - Relief: On (default) | Off — hills shaded over the base map (under the routes) on every
     map, the static route maps too (remembered with the other map settings). Elevation from
     Terrain Tiles (open data on AWS, Terrarium encoding, up to zoom 15; `basemap.OVERLAYS`,
     fetched and cached by the server like the base maps): interactive maps shade them with a

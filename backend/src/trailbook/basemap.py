@@ -45,25 +45,6 @@ SOURCES: dict[str, tuple[str, int, str, str]] = {
         "© OpenStreetMap contributors · style © Humanitarian OpenStreetMap Team, OSM France",
         "Humanitarian (HOT)",
     ),
-    # CARTO basemaps: free without a key for non-commercial use (up to 75k map views a month)
-    "positron": (
-        "https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png",
-        20,
-        "© OpenStreetMap contributors © CARTO",
-        "CARTO Positron (light)",
-    ),
-    "voyager": (
-        "https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png",
-        20,
-        "© OpenStreetMap contributors © CARTO",
-        "CARTO Voyager",
-    ),
-    "darkmatter": (
-        "https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png",
-        20,
-        "© OpenStreetMap contributors © CARTO",
-        "CARTO Dark Matter (dark)",
-    ),
 }
 
 # Elevation tiles for the Relief option (hills shaded over the base map, worked out in the

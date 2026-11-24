@@ -138,6 +138,8 @@ def cmd_scan(conn, args) -> int:
             result = importer.run_queue(
                 conn, root, progress=progress, limit=args.limit, uploads_dir=uploads_dir
             )
+            if uploads_dir is not None and args.limit is None:
+                importer.prune_uploads(conn, uploads_dir)  # only what was imported stays
 
             def tile_progress(i, total):
                 jobs.write_progress(

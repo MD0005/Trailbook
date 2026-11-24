@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.1.19
+
+### Changed
+- Maps: Humanitarian with relief is the default; the colours follow the light or dark theme
+  until you pick them (Colours: Automatic).
+- Maps: CARTO maps removed, they now need an API key; a map no longer offered falls back to
+  the default.
+- Uploads: only what was imported is kept. Photos, activities outside the chosen dates,
+  copies of activities you already have and files that are no activity are deleted after
+  the import.
+
+### Fixed
+- Uploading big files (e.g. a Strava export ZIP) through Home Assistant no longer fails with
+  "Content Too Large".
+- Strava import: exports in Polish (and other languages) now bring titles, dates, sports and
+  activities entered by hand.
+
+### Docs
+- README: a table of contents and new screenshots.
+
 ## 0.1.18
 
 ### Added

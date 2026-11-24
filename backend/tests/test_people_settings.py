@@ -248,7 +248,19 @@ def test_upload_zip_for_person(tmp_path):
     )
     assert client.post("/api/uploads?person=alice&name=x.txt", content=b"x").status_code == 400
     assert client.post("/api/uploads?person=alice&name=x.zip", content=b"notzip").status_code == 400
-    r = client.post("/api/uploads?person=alice&name=export.zip", content=buf.getvalue())
+    # in parts (as the browser sends big files): appended in order, then taken by the upload
+    data, part = buf.getvalue(), "ab" * 16
+    half = len(data) // 2
+    assert (
+        client.post(f"/api/uploads/part?part={part}&offset=0", content=data[:half]).status_code
+        == 200
+    )
+    bad = client.post(f"/api/uploads/part?part={part}&offset=0", content=b"x")  # not at its end
+    assert bad.status_code == 409
+    r = client.post(f"/api/uploads/part?part={part}&offset={half}", content=data[half:])
+    assert r.json()["size"] == len(data)
+    assert client.post("/api/uploads/part?part=../x&offset=0", content=b"x").status_code == 400
+    r = client.post(f"/api/uploads?person=alice&name=export.zip&part={part}")
     assert r.status_code == 202 and r.json()["queued"] == 2
     assert client.app.state.import_job.wait(timeout=60) == 0
 

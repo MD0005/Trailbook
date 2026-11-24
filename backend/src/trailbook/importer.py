@@ -446,12 +446,15 @@ def register_upload(
     """Queue an uploaded activity file or ZIP (already saved under `uploads_dir`).
 
     `date_from` / `date_to` (YYYY-MM-DD, both ends included): of a Strava export only the
-    activities whose date in activities.csv is in the range; members without a date are kept."""
+    activities whose date in activities.csv is in the range; members without a date are kept.
+    A Strava export is then cut down to the queued files and its activities.csv (photos and
+    the activities left out are not kept); an upload with nothing to import is deleted."""
     rel = UPLOADS_PREFIX + path.relative_to(uploads_dir).as_posix()
-    st = path.stat()
+    csv_name = None
     if path.suffix.lower() == ".zip":
         with zipfile.ZipFile(path) as zf:
             members = zip_members(zf)
+            csv_name = strava.find_csv(zf.namelist())
             if date_from or date_to:
                 try:
                     rows = strava.read_zip(zf)
@@ -466,8 +469,14 @@ def register_upload(
                     return (not date_from or day >= date_from) and (not date_to or day <= date_to)
 
                 members = [m for m in members if inside(m)]
+        if not members:
+            path.unlink(missing_ok=True)
+            return 0
+        if csv_name:
+            _trim_zip(path, {*members, csv_name})
     else:
         members = [""]
+    st = path.stat()
     stamp = now_iso()
     conn.executemany(
         """INSERT OR IGNORE INTO files (person_id, rel_path, zip_member, size, mtime, status,
@@ -476,6 +485,80 @@ def register_upload(
         [(person_id, rel, m, st.st_size, st.st_mtime, stamp, stamp) for m in members],
     )
     return len(members)
+
+
+def _trim_zip(path: Path, keep: set[str]) -> None:
+    """Rewrite a ZIP with only the members in `keep` (copied as they are, not recompressed)."""
+    with zipfile.ZipFile(path) as zf:
+        infos = [i for i in zf.infolist() if i.filename in keep]
+        if len(infos) == len(zf.infolist()):
+            return
+        tmp = path.with_suffix(".trim.tmp")
+        with zipfile.ZipFile(tmp, "w") as out:
+            for info in infos:
+                with (
+                    zf.open(info) as src,
+                    out.open(info, "w", force_zip64=info.file_size > 0x7FFFFFFF) as dst,
+                ):
+                    shutil.copyfileobj(src, dst, 1 << 20)
+    os.replace(tmp, path)
+
+
+def prune_uploads(conn: sqlite3.Connection, uploads_dir: Path) -> int:
+    """After an import: drop from the person's own uploads what was not imported - copies of
+    activities already there (duplicate) and files that are no activity at all (skipped, e.g.
+    not a FIT file); FIT data files (sleep, monitoring...) and errors stay. A ZIP keeps the
+    rest (and its activities.csv); an upload with nothing left is deleted. Garmin downloads and
+    watched-folder copies are left alone. Returns the number of files dropped."""
+    data_types = tuple(fitfile.FILE_TYPE_NAMES.values())
+    marks = ",".join("?" * len(data_types))
+    prunable = (
+        "(status = 'duplicate' OR (status = 'skipped'"
+        f" AND COALESCE(skip_reason, '') NOT IN ({marks})))"
+    )
+    uploads = [
+        r[0] for r in conn.execute(
+            f"""SELECT DISTINCT rel_path FROM files f
+                WHERE rel_path LIKE ? AND source_rel IS NULL AND {prunable}
+                  AND NOT EXISTS (SELECT 1 FROM files n WHERE n.rel_path = f.rel_path
+                                  AND n.status = 'new')
+                  AND rel_path NOT IN (SELECT file_rel FROM garmin_activities
+                                       WHERE file_rel IS NOT NULL)""",
+            (UPLOADS_PREFIX + "%", *data_types),
+        )
+    ]  # fmt: skip
+    dropped = 0
+    for rel in uploads:
+        if rel.startswith(f"{UPLOADS_PREFIX}{FOLDER_ARCHIVE}/"):
+            continue
+        rows = conn.execute(
+            f"SELECT id, zip_member, {prunable} AS drop_it FROM files WHERE rel_path = ?",
+            (*data_types, rel),
+        ).fetchall()
+        gone = [r for r in rows if r["drop_it"]]
+        keep = {r["zip_member"] for r in rows if not r["drop_it"]}
+        path = uploads_dir / rel[len(UPLOADS_PREFIX) :]
+        try:
+            if not keep:
+                path.unlink(missing_ok=True)
+            elif path.suffix.lower() == ".zip" and path.is_file():
+                with zipfile.ZipFile(path) as zf:
+                    csv_name = strava.find_csv(zf.namelist())
+                _trim_zip(
+                    path,
+                    {m for m in keep if not strava.is_manual(m)}
+                    | ({csv_name} if csv_name else set()),
+                )
+                st = path.stat()
+                conn.execute(
+                    "UPDATE files SET size = ?, mtime = ? WHERE rel_path = ?",
+                    (st.st_size, st.st_mtime, rel),
+                )
+        except (OSError, zipfile.BadZipFile):
+            continue  # left as it is; tried again after the next import
+        conn.executemany("DELETE FROM files WHERE id = ?", [(r["id"],) for r in gone])
+        dropped += len(gone)
+    return dropped
 
 
 def run_queue(

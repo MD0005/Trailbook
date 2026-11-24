@@ -185,6 +185,28 @@ def park_loop(conn):
     ).fetchall()
 
 
+def test_prune_uploads_keeps_only_imported(conn, tmp_path, monkeypatch):
+    add_person(conn)
+    uploads = tmp_path / "uploads"
+    path = strava_zip(uploads / "alice" / "export.zip")
+    # the same export again: everything in it is a duplicate
+    again = strava_zip(uploads / "alice" / "again.zip")
+    with zipfile.ZipFile(again, "a") as zf:
+        zf.writestr("activities/9.gpx", b"not a track")  # skipped: no activity
+    importer.register_upload(conn, uploads, "alice", path)
+    importer.run_queue(conn, None, uploads_dir=uploads)
+    importer.register_upload(conn, uploads, "alice", again)
+    importer.run_queue(conn, None, uploads_dir=uploads)
+    dropped = importer.prune_uploads(conn, uploads)
+    assert dropped >= 3
+    assert not again.exists()  # nothing imported from it
+    with zipfile.ZipFile(path) as zf:  # the first one keeps its imported files and the CSV
+        assert set(zf.namelist()) == {"activities.csv", "activities/1.gpx.gz", "activities/2.tcx"}
+    rels = {r[0] for r in conn.execute("SELECT rel_path FROM files")}
+    assert rels == {"@uploads/alice/export.zip"}
+    assert importer.prune_uploads(conn, uploads) == 0  # nothing left to drop
+
+
 def test_watch_fit_replaces_strava_copy(conn, tmp_path, monkeypatch):
     add_person(conn)
     strava_zip(tmp_path / "uploads" / "alice" / "export.zip")
@@ -253,7 +275,32 @@ def test_strava_zip_date_range(conn, tmp_path):
     assert importer.register_upload(conn, uploads, "alice", path, "2019-06-02", None) == 1
     members = {r[0] for r in conn.execute("SELECT zip_member FROM files")}
     assert members == {"activities.csv#3"}
+    # only the queued activities and activities.csv stay in the archive (no photos)
+    with zipfile.ZipFile(path) as zf:
+        assert set(zf.namelist()) == {"activities.csv"}
+    path = strava_zip(tmp_path / "uploads" / "alice" / "export2.zip")
     assert importer.register_upload(conn, uploads, "alice", path, None, "2019-06-01") == 2
+    with zipfile.ZipFile(path) as zf:
+        assert set(zf.namelist()) == {"activities.csv", "activities/1.gpx.gz", "activities/2.tcx"}
+    # nothing in the range: the upload is not kept at all
+    path = strava_zip(tmp_path / "uploads" / "alice" / "export3.zip")
+    assert importer.register_upload(conn, uploads, "alice", path, "2030-01-01", None) == 0
+    assert not path.exists()
+
+
+def test_strava_csv_in_polish():
+    # the same columns, headers / months / types translated (synthetic row)
+    header = [f"kolumna {i}" for i in range(48)]
+    header[0], header[1], header[3], header[12] = "Identyfikator", "Data", "Rodzaj", "Nazwa pliku"
+    row = [""] * 48
+    row[0], row[1], row[2], row[3] = "7", "24 paź 2023, 18:32:10", "Wieczorem", "Jazda wirtualna"
+    row[6], row[12], row[17], row[31] = "1,5", "activities/7.fit.gz", "1500.0", "140.0"
+    text = ",".join(header) + "\n" + ",".join(f'"{v}"' for v in row) + "\n"
+    r = strava.parse_csv(text)["activities/7.fit.gz"]
+    assert r.start == datetime(2023, 10, 24, 18, 32, 10, tzinfo=UTC)
+    assert r.title == "Wieczorem" and r.kind == "Virtual Ride"
+    assert r.values["distance_m"] == 1500.0 and r.values["avg_hr"] == 140.0
+    assert trackfile.sport_of(r.kind) == ("cycling", "virtual_activity")
 
 
 def test_eu_summer():

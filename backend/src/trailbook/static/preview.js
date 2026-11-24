@@ -2190,7 +2190,8 @@ function defaultMapSettings() {
   return {
     layer: "heatmap",
     kpis: false,
-    map: { source: "osm", tone: "dusk", relief: "off", trails: "none" }, // until the person picks one: Dusk in both themes
+    // until the person picks: Humanitarian with relief, the colours by the theme (MAP_TONE)
+    map: { source: "hot", tone: "auto", relief: "on", trails: "none" },
     heatmap: { style: "density", color: "#e8590c", ramp: "fire", width: 2, intensity: 0.45, perPerson: true },
     tiles: { zoom: 14, style: "coverage", color: "#0f766e", ramp: "viridis", display: "grid",
              square: true, cluster: true, routes: true, regions: [] },
@@ -2219,19 +2220,24 @@ const DARK_TONES = new Set(["soft-dark", "slate", "dusk", "dark"]);
 const TONE_PROPS = ["raster-saturation", "raster-brightness-min", "raster-brightness-max", "raster-contrast", "raster-hue-rotate"];
 const TONE_DEFAULTS = { "raster-saturation": 0, "raster-brightness-min": 0, "raster-brightness-max": 1, "raster-contrast": 0, "raster-hue-rotate": 0 };
 const toneOf = (key) => (BASE_TONES.find(([k]) => k === key) || BASE_TONES[0])[2];
+// Map tab colours "auto" (the default): by the theme. A base map no longer offered: the default.
+const MAP_TONE = { light: "muted", dark: "dusk" };
+const themeKey = () => (document.documentElement.dataset.theme === "dark" ? "dark" : "light");
+const mapTone = (M) => (!M.tone || M.tone === "auto" || !BASE_TONES.some(([k]) => k === M.tone) ? MAP_TONE[themeKey()] : M.tone);
+const baseSource = (key) => (key === "none" ? null : (BASEMAPS || []).find((b) => b.key === key) || (BASEMAPS || []).find((b) => b.key === "hot") || null);
 // Route maps (activity, segment, segment creator) have fixed colours per theme: Faded light in
 // light, Soft dark in dark. The colours chosen in Map › Options belong to the Map tab only.
 const ROUTE_TONE = { light: "faded", dark: "soft-dark" };
 const routeTone = () => ROUTE_TONE[document.documentElement.dataset.theme === "dark" ? "dark" : "light"];
 
 function baseStyle(mapSettings) {
-  const src = (BASEMAPS || []).find((b) => b.key === mapSettings.source);
+  const src = baseSource(mapSettings.source);
   const bg = getComputedStyle(document.documentElement).getPropertyValue("--surface-2").trim() || "#1e222b";
   const style = { version: 8, sources: {}, layers: [{ id: "background", type: "background", paint: { "background-color": bg } }] };
   if (src) {
     const tiles = new URL(`api/basemap/${src.key}/`, document.baseURI).href + "{z}/{x}/{y}.png";
     style.sources.base = { type: "raster", tiles: [tiles], tileSize: 256, maxzoom: src.max_zoom, attribution: src.attribution };
-    style.layers.push({ id: "base", type: "raster", source: "base", paint: toneOf(mapSettings.tone) });
+    style.layers.push({ id: "base", type: "raster", source: "base", paint: toneOf(mapTone(mapSettings)) });
   }
   if (mapSettings.relief === "on") { // hills shaded over the base map (under the routes)
     const dem = new URL("api/basemap/terrain/", document.baseURI).href + "{z}/{x}/{y}.png";
@@ -2344,7 +2350,7 @@ async function createMap(container, mapSettings, opts = {}) {
   delete opts.bounds; delete opts.fitBoundsOptions; delete opts.zoomOffset; delete opts.focus; delete opts.reset; delete opts.keepTone;
   // Route maps (activity, segment, segment creator): the fixed tone of the theme (routeTone).
   // The Map tab (keepTone) shows exactly the tone of its options.
-  const tone = () => (keepTone ? mapSettings.tone : routeTone());
+  const tone = () => (keepTone ? mapTone(mapSettings) : routeTone());
   const map = new ml.Map({ container, style: baseStyle({ ...mapSettings, tone: tone() }), attributionControl: false,
                                        fadeDuration: 0, ...start, ...opts });
   if (extra) EXTRA_MAPS.push(map); else activeMap = map;
@@ -2734,13 +2740,13 @@ async function renderHeatmap(params) {
 function renderSettingsPanel() {
   const s = heat.settings, M = s.map, H = s.heatmap, T = s.tiles;
   const lat = heat.map ? heat.map.getCenter().lat : 52;
-  const srcLabel = (BASEMAPS || []).find((b) => b.key === M.source)?.label.split(" (")[0] || "None";
-  const toneLabel = (BASE_TONES.find(([k]) => k === M.tone) || BASE_TONES[0])[1];
+  const srcLabel = baseSource(M.source)?.label.split(" (")[0] || "None";
+  const toneLabel = !M.tone || M.tone === "auto" ? "Automatic" : (BASE_TONES.find(([k]) => k === M.tone) || BASE_TONES[0])[1];
   const sizeLabel = (TILE_SIZES.find(([z]) => z === T.zoom) || TILE_SIZES[1])[1];
   const styleLabel = { density: "Density", coverage: "Coverage", glow: "Heat glow" }[H.style];
   const glow = H.style === "glow", byVisits = T.style === "heat";
-  const mapBody = row("Base map", pickList("map.source", [...(BASEMAPS || []).map((b) => [b.key, b.label]), ["none", "None"]], M.source))
-    + row("Colours", pickList("map.tone", BASE_TONES.map(([k, l]) => [k, l]), M.tone))
+  const mapBody = row("Base map", pickList("map.source", [...(BASEMAPS || []).map((b) => [b.key, b.label]), ["none", "None"]], M.source === "none" ? "none" : baseSource(M.source)?.key))
+    + row("Colours", pickList("map.tone", [["auto", "Automatic — muted in light, dusk in dark"], ...BASE_TONES.map(([k, l]) => [k, l])], M.tone || "auto"))
     + row("Relief", pickList("map.relief", [["off", "Off"], ["on", "On — hills shaded"]], M.relief))
     + row("Trails", pickList("map.trails", TRAILS, M.trails || "none"));
   const heatBody = row("Style", pickList("heatmap.style", [["density", "Density — overlaps get stronger"], ["coverage", "Coverage — solid lines"], ["glow", "Heat glow — colour gradient"]], H.style))
@@ -2840,7 +2846,7 @@ function applyBase(newSource) {
     return;
   }
   if (!map.getLayer("base")) return;
-  const tone = toneOf(M.tone);
+  const tone = toneOf(mapTone(M));
   for (const p of TONE_PROPS) map.setPaintProperty("base", p, tone[p] ?? TONE_DEFAULTS[p]);
   drawHeatLayers();
 }
@@ -2958,7 +2964,7 @@ function drawHeatLayers() {
     }
     // Routes on top of the tiles, so they stay visible.
     map.addLayer({ id: "routes", type: "line", source: "routes", layout: { "line-join": "round", "line-cap": "round", visibility: T.routes ? "visible" : "none" },
-      paint: { "line-color": DARK_TONES.has(s.map.tone) || s.map.source === "none" && document.documentElement.dataset.theme === "dark" ? "#ffffff" : "#1b1e25",
+      paint: { "line-color": DARK_TONES.has(mapTone(s.map)) || s.map.source === "none" && document.documentElement.dataset.theme === "dark" ? "#ffffff" : "#1b1e25",
                "line-opacity": 0.7, "line-width": ["interpolate", ["linear"], ["zoom"], 8, 0.6, 14, 1.6] } });
   }
   updatePaint();
@@ -3494,11 +3500,24 @@ async function settingsGeneral(el, tab = "general") {
     up.disabled = true;
     out.innerHTML = state(`Uploading ${esc(file.name)} (${num(file.size / 1048576, 1)} MB)…`);
     try {
-      const r = await api(`uploads?${new URLSearchParams({ person: pid, name: file.name })}`, { method: "POST", body: file, headers: {} });
+      const r = await uploadOne({ person: pid, name: file.name }, file,
+        (share) => { out.innerHTML = state(`Uploading ${esc(file.name)} · ${num(share * 100)} %…`); });
       out.innerHTML = state(`Uploaded · ${num(r.queued)} FIT file(s) queued — progress in Settings › Imported`, "ok");
     } catch (e) { out.innerHTML = state(esc(e.message), "bad"); }
     up.disabled = false;
   };
+}
+
+// Big files go in parts: a proxy in front (Home Assistant's Ingress) refuses big requests.
+const UPLOAD_PART = 8 * 1048576;
+async function uploadOne(params, file, onPart = () => {}) {
+  if (file.size <= UPLOAD_PART) return api(`uploads?${new URLSearchParams(params)}`, { method: "POST", body: file, headers: {} });
+  const part = [...crypto.getRandomValues(new Uint8Array(16))].map((b) => b.toString(16).padStart(2, "0")).join("");
+  for (let offset = 0; offset < file.size; offset += UPLOAD_PART) {
+    onPart(offset / file.size);
+    await api(`uploads/part?${new URLSearchParams({ part, offset })}`, { method: "POST", body: file.slice(offset, offset + UPLOAD_PART), headers: {} });
+  }
+  return api(`uploads?${new URLSearchParams({ ...params, part })}`, { method: "POST", headers: {} });
 }
 
 // Upload files one after another; the import job picks up each one as it arrives.
@@ -3506,11 +3525,13 @@ async function uploadFiles(pid, files, out, range = {}) {
   const span = Object.fromEntries(Object.entries(range).filter(([, v]) => v)); // from / to: ZIPs of a Strava export only
   let queued = 0, failed = 0;
   for (const [i, file] of files.entries()) {
-    out.innerHTML = state(files.length > 1
-      ? `Uploading ${num(i + 1)} of ${num(files.length)}: ${esc(file.name)}…`
-      : `Uploading ${esc(file.name)} (${num(file.size / 1048576, 1)} MB)…`);
+    const label = files.length > 1
+      ? `Uploading ${num(i + 1)} of ${num(files.length)}: ${esc(file.name)}`
+      : `Uploading ${esc(file.name)} (${num(file.size / 1048576, 1)} MB)`;
+    out.innerHTML = state(`${label}…`);
     try {
-      const r = await api(`uploads?${new URLSearchParams({ person: pid, name: file.name, ...span })}`, { method: "POST", body: file, headers: {} });
+      const r = await uploadOne({ person: pid, name: file.name, ...span }, file,
+        (share) => { out.innerHTML = state(`${label} · ${num(share * 100)} %…`); });
       queued += r.queued;
     } catch (e) {
       failed++;

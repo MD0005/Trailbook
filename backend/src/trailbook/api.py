@@ -328,6 +328,11 @@ def create_app(db_path: str | Path) -> Starlette:
     sched = scheduler.Scheduler(db_path, job)
     tiles = basemap.TileCache(Path(db_path).parent / "tilecache")
     uploads_dir = Path(db_path).resolve().parent / "uploads"
+    # Big files come in parts (a proxy such as Home Assistant's Ingress refuses big requests):
+    # each part is appended here, the last request (POST /api/uploads with `part`) takes the file.
+    parts_dir = Path(db_path).resolve().parent / "upload-parts"
+    PART_ID = re.compile(r"[0-9a-f]{16,64}")
+    PART_MAX_AGE_S = 24 * 3600  # unfinished uploads are dropped after a day
     icu_files_dir = Path(db_path).resolve().parent / "icu-files"
     # Own device photos: <data>/device-images/<product>.png|jpg|webp (e.g. edge_850.png).
     device_images = Path(db_path).resolve().parent / "device-images"
@@ -1228,10 +1233,38 @@ def create_app(db_path: str | Path) -> Starlette:
             }
         )
 
+    def _part_path(request: Request) -> Path:
+        pid = request.query_params.get("part", "")
+        if not PART_ID.fullmatch(pid):
+            raise HTTPException(400, "bad upload part id")
+        return parts_dir / f"{pid}.part"
+
+    async def upload_part(request: Request):
+        """One part of a big upload, appended at `offset` (must be the size received so far)."""
+        path = _part_path(request)
+        try:
+            offset = int(request.query_params.get("offset", ""))
+        except ValueError:
+            raise HTTPException(400, "offset missing") from None
+        parts_dir.mkdir(parents=True, exist_ok=True)
+        if offset == 0:  # a new upload: drop old unfinished ones
+            cutoff = datetime.now().timestamp() - PART_MAX_AGE_S
+            for old in parts_dir.glob("*.part"):
+                if old.stat().st_mtime < cutoff:
+                    old.unlink(missing_ok=True)
+        have = path.stat().st_size if path.exists() else 0
+        if offset != have:
+            raise HTTPException(409, f"expected offset {have}")
+        with path.open("ab" if offset else "wb") as fh:
+            async for chunk in request.stream():
+                fh.write(chunk)
+        return JSONResponse({"size": path.stat().st_size})
+
     async def upload(request: Request):
         """Raw body upload of one activity file or ZIP for a chosen person (one-time import).
 
-        FIT, GPX and TCX (also .gz) and ZIPs of them: Garmin and Strava exports."""
+        FIT, GPX and TCX (also .gz) and ZIPs of them: Garmin and Strava exports. With `part`:
+        the file sent before in parts (POST /api/uploads/part), the body is empty."""
         pid = request.query_params.get("person", "")
         name = Path(request.query_params.get("name", "")).name
         # optional: of a Strava export only the activities of these days (both included)
@@ -1257,10 +1290,17 @@ def create_app(db_path: str | Path) -> Starlette:
             n += 1
             target = target.with_name(f"{stamp}-{n}-{safe}")
         size = 0
-        with target.open("wb") as fh:
-            async for chunk in request.stream():
-                size += len(chunk)
-                fh.write(chunk)
+        if request.query_params.get("part"):
+            part = _part_path(request)
+            if not part.is_file():
+                raise HTTPException(400, "upload parts missing")
+            os.replace(part, target)
+            size = target.stat().st_size
+        else:
+            with target.open("wb") as fh:
+                async for chunk in request.stream():
+                    size += len(chunk)
+                    fh.write(chunk)
         if size == 0:
             target.unlink(missing_ok=True)
             raise HTTPException(400, "empty file")
@@ -2531,6 +2571,7 @@ def create_app(db_path: str | Path) -> Starlette:
         Route("/api/device-image/{name}", device_image),
         Route("/api/ui-settings/{key}", ui_settings_put, methods=["PUT"]),
         Route("/api/uploads", upload, methods=["POST"]),
+        Route("/api/uploads/part", upload_part, methods=["POST"]),
         Route("/api/persons/{id}", person_update, methods=["PATCH"]),
         Route("/api/activities", activities),
         Route("/api/activities/{id:int}", activity),

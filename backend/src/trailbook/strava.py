@@ -62,9 +62,39 @@ _DATE_FORMATS = (
 )
 
 
+# Exports in another language: the same columns in the same order, the headers translated.
+# Without English headers the columns are read by their place (index -> English header).
+_COLUMNS_BY_PLACE = {
+    0: "activity id", 1: "activity date", 2: "activity name", 3: "activity type",
+    4: "activity description", 5: "elapsed time", 6: "distance", 7: "max heart rate",
+    12: "filename", 15: "elapsed time", 17: "distance", 18: "max speed", 19: "average speed",
+    20: "elevation gain", 21: "elevation loss", 28: "max cadence", 29: "average cadence",
+    30: "max heart rate", 31: "average heart rate", 32: "max watts", 33: "average watts",
+    34: "calories", 46: "weighted average power",
+}  # fmt: skip
+# Month names of the Polish export ("24 lis 2023, 18:32:10") -> English for strptime.
+_MONTHS = {
+    "sty": "Jan", "lut": "Feb", "mar": "Mar", "kwi": "Apr", "maj": "May", "cze": "Jun",
+    "lip": "Jul", "sie": "Aug", "wrz": "Sep", "paź": "Oct", "lis": "Nov", "gru": "Dec",
+}  # fmt: skip
+# Activity types of the Polish export -> Strava's English names (trackfile.sport_of).
+_TYPES = {
+    "jazda": "Ride", "jazda wirtualna": "Virtual Ride", "jazda na rowerze górskim":
+    "Mountain Bike Ride", "jazda na rowerze gravelowym": "Gravel Ride", "bieganie": "Run",
+    "bieg wirtualny": "Virtual Run", "bieg po szlaku": "Trail Run", "spacer": "Walk",
+    "wędrówka": "Hike", "pływanie": "Swim", "trening": "Workout",
+    "trening siłowy": "Weight Training", "joga": "Yoga", "orbitrek": "Elliptical",
+    "narciarstwo alpejskie": "Alpine Ski", "narciarstwo biegowe": "Nordic Ski",
+    "kajakarstwo": "Kayaking", "wioślarstwo": "Rowing", "żeglarstwo": "Sail",
+    "piłka nożna": "Soccer", "tenis": "Tennis",
+}  # fmt: skip
+
+
 def parse_date(text: str) -> datetime | None:
-    """`Activity Date` (UTC) as Strava writes it, e.g. "Mar 14, 2021, 8:05:21 AM"."""
+    """`Activity Date` (UTC) as Strava writes it, e.g. "Mar 14, 2021, 8:05:21 AM" (in the
+    Polish export "14 mar 2021, 08:05:21")."""
     text = re.sub(r"\s+", " ", text.replace(" ", " ").replace("\xa0", " ")).strip()
+    text = re.sub(r"(?<=\d )([^\W\d_]+)(?= \d{4})", lambda m: _MONTHS.get(m[1].lower(), m[1]), text)
     for fmt in _DATE_FORMATS:
         try:
             return datetime.strptime(text, fmt).replace(tzinfo=UTC)
@@ -88,6 +118,8 @@ def parse_csv(text: str, base: str = "") -> dict[str, Row]:
     recorded activities, `activities.csv#<Activity ID>` for manual ones."""
     reader = csv.reader(io.StringIO(text))
     header = [h.strip().lower() for h in next(reader, [])]
+    if "activity id" not in header and len(header) > max(_COLUMNS_BY_PLACE):
+        header = [_COLUMNS_BY_PLACE.get(i, h) for i, h in enumerate(header)]
     first: dict[str, int] = {}
     last: dict[str, int] = {}
     for i, h in enumerate(header):
@@ -118,7 +150,7 @@ def parse_csv(text: str, base: str = "") -> dict[str, Row]:
             activity_id=aid,
             filename=text_of(r, "filename"),
             title=text_of(r, "activity name"),
-            kind=text_of(r, "activity type"),
+            kind=_kind(text_of(r, "activity type")),
             description=text_of(r, "activity description"),
             start=parse_date(date) if date else None,
             values=values,
@@ -126,6 +158,10 @@ def parse_csv(text: str, base: str = "") -> dict[str, Row]:
         key = base + row.filename if row.filename else f"{base}{CSV_NAME}{MANUAL_MARK}{aid}"
         out[key] = row
     return out
+
+
+def _kind(text: str | None) -> str | None:
+    return _TYPES.get(text.lower(), text) if text else text
 
 
 def find_csv(names: list[str]) -> str | None:

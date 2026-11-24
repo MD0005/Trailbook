@@ -42,7 +42,7 @@ function staticMap(polyline, { W = 560, H = 230, cls = "seg-map", tiles: tileCls
   if (pts.length < 2) return "";
   const { source, relief, trails } = loadMapSettings().map;
   const trail = trails && trails !== "none" ? trails : null;
-  const src = (BASEMAPS || []).find((b) => b.key === source);
+  const src = baseSource(source);
   const maxZ = Math.min(16, src?.max_zoom ?? 16);
   let z = maxZ, px;
   for (; z > 2; z--) {

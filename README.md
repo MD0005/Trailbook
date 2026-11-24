@@ -18,11 +18,22 @@ export, FIT/GPX/TCX files) are there to bring in older history or a second devic
 ![Stage](https://img.shields.io/badge/stage-stable-green.svg)
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 
-![Activity page](docs/screenshots/activity.png)
+## Contents
 
-> [!NOTE]
-> Trailbook is young and changes quickly. It already covers a lot (see below), the look is a
-> working preview and the final design is still to come. Parts marked 🚧 are being built.
+- [Features](#features)
+- [Installation](#installation)
+  - [Windows app](#windows-app)
+  - [Without Home Assistant (Docker)](#without-home-assistant-docker)
+- [First steps](#first-steps)
+- [Records in Home Assistant](#records-in-home-assistant)
+- [Updating](#updating)
+- [Privacy](#privacy)
+- [In development](#in-development)
+- [Development](#development)
+- [Trademarks](#trademarks)
+- [License](#license)
+
+![Activity page](docs/screenshots/activity.png)
 
 ## Features
 
@@ -45,6 +56,8 @@ export, FIT/GPX/TCX files) are there to bring in older history or a second devic
 
 ### Map
 - Every route on one map with a heatmap effect.
+- Base maps: OpenStreetMap, Humanitarian, OpenTopoMap and CyclOSM, with shaded relief and
+  marked hiking, cycling or MTB trails on top; colours that follow the light or dark theme.
 - Explorer tiles: all map squares you have visited, your biggest square and cluster.
 
 ![Map](docs/screenshots/map.png)
@@ -79,7 +92,8 @@ export, FIT/GPX/TCX files) are there to bring in older history or a second devic
 
 ### Other sources — for older history
 - **Strava** — upload the export ZIP (titles, descriptions and activities entered by hand
-  come with it) or single files; handy for the years before your Garmin.
+  come with it, in any export language) or single files; pick a date range to bring in only
+  the years before your Garmin. Only what is imported is kept.
 - **A folder** — FIT, GPX and TCX files (also `.gz`) saved to a folder, for example by a
   Home Assistant automation; one subfolder per person, or the watch decides.
 - **Upload** — a Garmin export ZIP or single files.
@@ -208,15 +222,14 @@ upgraded, so tick *Create backup* in the update dialog if you may want to go bac
 Your activities, routes and health data stay in Home Assistant. Trailbook only talks to the
 internet for:
 
-- map tiles from OpenStreetMap,
+- map tiles (OpenStreetMap, Humanitarian, OpenTopoMap, CyclOSM, Waymarked Trails) and
+  elevation tiles for the relief (Terrain Tiles on AWS Open Data),
 - weather for an activity's time and place (Open-Meteo),
 - road surface along a route (OpenStreetMap Overpass),
 - Garmin Connect, when you connect an account.
 
-## In development 🚧
+## In development
 
-- 🚧 **New design** — the current look is a technical preview.
-- 🚧 **Polish translation** of the interface.
 - 🚧 **Wellbeing** — sleep, stress, HRV, resting heart rate, steps and weight from Garmin
   Connect.
 - 🚧 **More sources** — further services under *Settings › Other sources*.

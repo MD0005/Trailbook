@@ -83,7 +83,7 @@ def test_tile_cache_fetches_once(tmp_path, monkeypatch):
 def test_basemap_endpoint_validates_and_reports_errors(tmp_path, monkeypatch):
     client = TestClient(create_app(tmp_path / "t.db"))
     assert {b["key"] for b in client.get("/api/basemaps").json()} == {
-        "osm", "topo", "cyclosm", "hot", "positron", "voyager", "darkmatter"
+        "osm", "topo", "cyclosm", "hot"
     }  # fmt: skip
     assert client.get("/api/basemap/osm/3/99/0.png").status_code == 404
     assert client.get("/api/basemap/topo/18/0/0.png").status_code == 404  # above max zoom
