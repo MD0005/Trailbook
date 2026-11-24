@@ -630,6 +630,11 @@ MIGRATIONS: list[str] = [
     """
     ALTER TABLE activities ADD COLUMN country TEXT;
     """,
+    # v41 — walks and hikes get best efforts too (Statistics › Records: the biggest climb, the
+    # steepest 1 km and the steps from the cadence): analysed again.
+    """
+    UPDATE activities SET analysis_version = 0 WHERE category IN ('walk', 'hike');
+    """,
 ]
 
 SCHEMA_VERSION = len(MIGRATIONS)

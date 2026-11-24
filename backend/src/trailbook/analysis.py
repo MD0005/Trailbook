@@ -79,6 +79,12 @@ CLIMB_PIVOT_M = 3.0  # wiggles under this are noise
 CLIMB_DIP_SHARE, CLIMB_DIP_DROP = 0.25, 1 / 3
 CLIMB_MIN_M = 20.0
 GRADE_DISTANCES_M = (1000,)
+# the biggest climb and the steepest stretch: runs, rides, walks and hikes
+CLIMB_GROUPS = ("run", "ride", "walk", "hike")
+# the steps of a walk or a hike (kind "steps", key 0, value = steps), from the cadence (steps per
+# minute on foot); gaps longer than STEP_GAP_S (a pause) count no steps
+STEP_GROUPS = ("walk", "hike")
+STEP_GAP_S = 10
 GRADE_MAX_VS = 1.5  # m/s of height gained: faster is no climbing by bike or on foot
 GRADE_MAX_PCT = 40.0
 GRADE_PIECE_M, GRADE_PIECE_PCT = 50.0, 30.0  # a stretch with 50 m steeper than 30 %: altitude drift
@@ -649,7 +655,18 @@ def analyse(activity: sqlite3.Row, ch: dict[str, list], th: Thresholds) -> Analy
             r = best_time_for_distance_at(time, ch["distance"], m)
             if r is not None:
                 efforts.append((distances[0], m, round(r[0], 1), r[1] - t0, r[1] - t0 + r[0]))
-    if group in ("run", "ride") and ch.get("distance") and ch.get("altitude") and time:
+    if group in STEP_GROUPS and ch.get("cadence") and time:
+        n = min(len(time), len(ch["cadence"]))
+        steps = sum(
+            ch["cadence"][k] * (time[k] - time[k - 1]) / 60
+            for k in range(1, n)
+            if ch["cadence"][k] and time[k] is not None and time[k - 1] is not None
+            and 0 < time[k] - time[k - 1] <= STEP_GAP_S
+        )  # fmt: skip
+        if steps >= 1:
+            end = next((t for t in reversed(time) if t is not None), t0) - t0
+            efforts.append(("steps", 0, round(steps), 0, end))
+    if group in CLIMB_GROUPS and ch.get("distance") and ch.get("altitude") and time:
         alt = clean_altitude(time, ch["altitude"])
         dist = ch["distance"]
         n = min(len(time), len(alt), len(dist))
@@ -708,7 +725,7 @@ def _channels(conn: sqlite3.Connection, activity_id: int) -> dict[str, list]:
             """SELECT channel, encoding, data FROM streams
                WHERE activity_id = ?
                  AND channel IN ('time', 'hr', 'power', 'distance', 'lat', 'lon', 'speed',
-                                 'altitude')""",
+                                 'altitude', 'cadence')""",
             (activity_id,),
         )
     }

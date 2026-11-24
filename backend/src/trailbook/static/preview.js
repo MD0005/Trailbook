@@ -1767,8 +1767,9 @@ function effortsCard(efforts, compareKey, category, segs = [], year = todayDay()
   // distances, then Distance, Ascent and Steepest side by side, Speed1m and Hour (Cooper), power
   const RANK = { longest: 1, ascent: 2, grade: 3, speed: 4, within: 5, power: 6 };
   const order = (e) => RANK[e.kind] || 0;
+  // runs and rides only (walks and hikes have their records in Statistics › Records)
   const list = efforts.map((e, k) => ({ ...e, k }))
-    .filter((e) => e.kind === "pace" || e.kind === "ride" || e.kind === "longest" || e.kind === "within" || e.kind === "ascent" || e.kind === "grade" || (ride && e.kind === "speed") || (ride && e.kind === "power" && (e.key === 1200 || e.key === 3600)))
+    .filter((e) => (ride || category === "run") && (e.kind === "pace" || e.kind === "ride" || e.kind === "longest" || e.kind === "within" || e.kind === "ascent" || e.kind === "grade" || (ride && e.kind === "speed") || (ride && e.kind === "power" && (e.key === 1200 || e.key === 3600))))
     .sort((p, q) => order(p) - order(q) || p.key - q.key);
   if (!list.length && !segs.length) return "";
   const [short, long] = COMPARE_SHORT[compareKey] || COMPARE_SHORT.all;
@@ -2190,8 +2191,8 @@ function defaultMapSettings() {
   return {
     layer: "heatmap",
     kpis: false,
-    // until the person picks: Humanitarian with relief, the colours by the theme (MAP_TONE)
-    map: { source: "hot", tone: "auto", relief: "on", trails: "none" },
+    // until the person picks: Humanitarian with relief; colours chosen for each theme apart
+    map: { source: "hot", toneLight: "muted", toneDark: "dusk", relief: "on", trails: "none" },
     heatmap: { style: "density", color: "#e8590c", ramp: "fire", width: 2, intensity: 0.45, perPerson: true },
     tiles: { zoom: 14, style: "coverage", color: "#0f766e", ramp: "viridis", display: "grid",
              square: true, cluster: true, routes: true, regions: [] },
@@ -2207,7 +2208,14 @@ function loadMapSettings() {
   if (!s) return { ...d, ...tab };
   const tiles = { ...d.tiles, ...s.tiles };
   if (!TILE_SIZES.some(([z]) => z === tiles.zoom)) tiles.zoom = d.tiles.zoom; // a size no longer offered
-  return { ...d, ...s, ...tab, map: { ...d.map, ...s.map }, heatmap: { ...d.heatmap, ...s.heatmap }, tiles };
+  const map = { ...d.map, ...s.map };
+  if ("tone" in map) { // one choice for both themes (before): kept for the theme it suits
+    if (BASE_TONES.some(([k]) => k === map.tone) && !(s.map || {})[DARK_TONES.has(map.tone) ? "toneDark" : "toneLight"]) {
+      map[DARK_TONES.has(map.tone) ? "toneDark" : "toneLight"] = map.tone;
+    }
+    delete map.tone;
+  }
+  return { ...d, ...s, ...tab, map, heatmap: { ...d.heatmap, ...s.heatmap }, tiles };
 }
 
 function saveMapSettings(s) {
@@ -2220,10 +2228,13 @@ const DARK_TONES = new Set(["soft-dark", "slate", "dusk", "dark"]);
 const TONE_PROPS = ["raster-saturation", "raster-brightness-min", "raster-brightness-max", "raster-contrast", "raster-hue-rotate"];
 const TONE_DEFAULTS = { "raster-saturation": 0, "raster-brightness-min": 0, "raster-brightness-max": 1, "raster-contrast": 0, "raster-hue-rotate": 0 };
 const toneOf = (key) => (BASE_TONES.find(([k]) => k === key) || BASE_TONES[0])[2];
-// Map tab colours "auto" (the default): by the theme. A base map no longer offered: the default.
+// Map tab colours: chosen for the light and the dark theme apart (defaults muted / dusk); a
+// `tone` given outright (route maps) wins. A base map no longer offered: the default.
 const MAP_TONE = { light: "muted", dark: "dusk" };
 const themeKey = () => (document.documentElement.dataset.theme === "dark" ? "dark" : "light");
-const mapTone = (M) => (!M.tone || M.tone === "auto" || !BASE_TONES.some(([k]) => k === M.tone) ? MAP_TONE[themeKey()] : M.tone);
+const toneKey = () => (themeKey() === "dark" ? "toneDark" : "toneLight");
+const validTone = (k) => BASE_TONES.some(([t]) => t === k);
+const mapTone = (M) => (validTone(M.tone) ? M.tone : validTone(M[toneKey()]) ? M[toneKey()] : MAP_TONE[themeKey()]);
 const baseSource = (key) => (key === "none" ? null : (BASEMAPS || []).find((b) => b.key === key) || (BASEMAPS || []).find((b) => b.key === "hot") || null);
 // Route maps (activity, segment, segment creator) have fixed colours per theme: Faded light in
 // light, Soft dark in dark. The colours chosen in Map › Options belong to the Map tab only.
@@ -2741,12 +2752,12 @@ function renderSettingsPanel() {
   const s = heat.settings, M = s.map, H = s.heatmap, T = s.tiles;
   const lat = heat.map ? heat.map.getCenter().lat : 52;
   const srcLabel = baseSource(M.source)?.label.split(" (")[0] || "None";
-  const toneLabel = !M.tone || M.tone === "auto" ? "Automatic" : (BASE_TONES.find(([k]) => k === M.tone) || BASE_TONES[0])[1];
+  const toneLabel = BASE_TONES.find(([k]) => k === mapTone(M))[1];
   const sizeLabel = (TILE_SIZES.find(([z]) => z === T.zoom) || TILE_SIZES[1])[1];
   const styleLabel = { density: "Density", coverage: "Coverage", glow: "Heat glow" }[H.style];
   const glow = H.style === "glow", byVisits = T.style === "heat";
   const mapBody = row("Base map", pickList("map.source", [...(BASEMAPS || []).map((b) => [b.key, b.label]), ["none", "None"]], M.source === "none" ? "none" : baseSource(M.source)?.key))
-    + row("Colours", pickList("map.tone", [["auto", "Automatic — muted in light, dusk in dark"], ...BASE_TONES.map(([k, l]) => [k, l])], M.tone || "auto"))
+    + row(`Colours<small class="opt-hint">For the ${themeKey()} theme.</small>`, pickList("map.tone", BASE_TONES.map(([k, l]) => [k, l]), mapTone(M)))
     + row("Relief", pickList("map.relief", [["off", "Off"], ["on", "On — hills shaded"]], M.relief))
     + row("Trails", pickList("map.trails", TRAILS, M.trails || "none"));
   const heatBody = row("Style", pickList("heatmap.style", [["density", "Density — overlaps get stronger"], ["coverage", "Coverage — solid lines"], ["glow", "Heat glow — colour gradient"]], H.style))
@@ -2784,7 +2795,8 @@ function bindSettingsPanel(el) {
   const s = heat.settings;
   const set = (path, value) => {
     const [a, b] = path.split(".");
-    if (b === undefined) s[a] = value; else s[a][b] = value;
+    if (path === "map.tone") s.map[toneKey()] = value; // saved for the current theme only
+    else if (b === undefined) s[a] = value; else s[a][b] = value;
     saveMapSettings(s);
   };
   const shown = (path) => path.startsWith("map.") || path.startsWith(s.layer + ".");

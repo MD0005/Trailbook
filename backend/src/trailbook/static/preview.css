@@ -1942,7 +1942,7 @@ svg.tile-chart { width: 100%; height: 100%; display: block; }
 @media (max-width: 900px) { .rec-page { grid-template-columns: minmax(0, 1fr); } .rec-page > div:empty { display: none; } }
 .rec-page > .card { margin: 0; padding: 12px 14px; min-width: 0; }
 .rec-tile:not(.rec-curve-tile) { min-width: 0; }
-.rec-seg-tile { width: var(--rec-table-w); max-width: 100%; justify-self: start; } /* as wide as the other tables */
+.rec-seg-tile, .rec-side-tile { width: var(--rec-table-w); max-width: 100%; justify-self: start; } /* as wide as the other tables */
 .rec-tile h3 .laurel { width: 18px; height: 18px; flex: none; } /* as large as the sport icon */
 .rec-tile h3 .rec-be { text-transform: uppercase; letter-spacing: .03em; }
 .rec-seg { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; }

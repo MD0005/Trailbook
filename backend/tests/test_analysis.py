@@ -439,3 +439,16 @@ def test_steepest_km_skips_jumps():
     dist3 = [d + (1000 if s >= 400 else 0) for s, d in zip(t, dist, strict=True)]
     alt3 = [a + (100 if s >= 400 else 0) for s, a in zip(t, alt, strict=True)]
     assert analysis.steepest_at(t, dist3, alt3, 1000)[0] == pytest.approx(10, abs=0.2)
+
+
+def test_walk_steps_and_climbing():
+    # a 20 min walk at 110 steps/min climbing 60 m over 1,5 km, with a 5 min pause (no steps)
+    time = [float(t) for t in range(0, 600, 2)] + [float(t) for t in range(900, 1500, 2)]
+    dist = [i * 2.5 for i in range(len(time))]
+    alt = [100 + d * 0.04 for d in dist]
+    cad = [110.0] * len(time)
+    a = {"time_s": 1200, "timer_s": 1200, "category": "walk", "avg_hr": None, "avg_power": None}
+    ch = {"time": time, "distance": dist, "altitude": alt, "cadence": cad}
+    efforts = {(e[0], e[1]): e[2] for e in analysis.analyse(a, ch, analysis.Thresholds()).efforts}
+    assert efforts[("steps", 0)] == pytest.approx(2200, abs=10)  # 20 min x 110, the pause left out
+    assert efforts[("climb", 0)] > 50 and efforts[("grade", 1000)] == pytest.approx(4, abs=0.5)

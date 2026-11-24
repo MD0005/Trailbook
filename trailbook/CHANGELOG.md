@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.1.20
+
+### Added
+- Statistics › Records: Walking & hiking best efforts (longest distance, most steps, elevation
+  gain, biggest climb, steepest 1 km); segments one row lower.
+
+### Changed
+- Maps: colours are chosen for the light and the dark theme apart (defaults: muted in light,
+  dusk in dark), instead of Automatic.
+- Windows app: Trailbook opens in a window of its own (Microsoft Edge as an app) at
+  trailbook.localhost instead of a browser tab.
+- Windows app: uninstalling asks whether to delete your Trailbook data too (default: keep it).
+
+### Fixed
+- The Trailbook icon in the browser tab and on the taskbar of the Windows app (it was a
+  generic globe).
+- No more "translate this page?" prompt from the browser.
+
+### Docs
+- README: a short tour of every part with captioned screenshot thumbnails, and a clearer
+  Installation.
+
 ## 0.1.19
 
 ### Changed

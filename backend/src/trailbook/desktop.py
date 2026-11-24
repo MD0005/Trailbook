@@ -1,12 +1,14 @@
 """The Windows app: Trailbook without Docker or Home Assistant.
 
 `Trailbook.exe` without arguments starts the server on this computer only (127.0.0.1), puts
-an icon in the notification area (Open / Quit) and opens the browser. With arguments it is the
-command-line interface (`trailbook.cli`): the background import, export and restore jobs run
-the same exe. The data lives in %LOCALAPPDATA%\\Trailbook, apart from the program, so an
-update or a reinstall keeps it.
+an icon in the notification area (Open / Quit) and opens Trailbook in a window of its own:
+Microsoft Edge as an app (no address bar or tabs), else the default browser. The address is
+http://trailbook.localhost:<port>/ - browsers send every *.localhost name to this computer.
+With arguments it is the command-line interface (`trailbook.cli`): the background import,
+export and restore jobs run the same exe. The data lives in %LOCALAPPDATA%\\Trailbook, apart
+from the program, so an update or a reinstall keeps it.
 
-`--background` (Windows start-up, after an update) starts without opening the browser.
+`--background` (Windows start-up, after an update) starts without opening the window.
 """
 
 from __future__ import annotations
@@ -23,6 +25,43 @@ from pathlib import Path
 
 PORT = 8099
 HOST = "127.0.0.1"
+NAME = "trailbook.localhost"  # the address shown; resolves to this computer, no hosts file
+
+
+def _edge() -> str | None:
+    """msedge.exe (in every Windows 10 and 11), or None."""
+    if os.name != "nt":
+        return None
+    import winreg
+
+    key = r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\msedge.exe"
+    for root in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
+        try:
+            with winreg.OpenKey(root, key) as k:
+                path = winreg.QueryValue(k, None)
+            if path and Path(path).is_file():
+                return path
+        except OSError:
+            continue
+    for env in ("PROGRAMFILES(X86)", "PROGRAMFILES", "LOCALAPPDATA"):
+        path = Path(os.environ.get(env, "")) / "Microsoft" / "Edge" / "Application" / "msedge.exe"
+        if os.environ.get(env) and path.is_file():
+            return str(path)
+    return None
+
+
+def open_window(url: str) -> None:
+    """Trailbook in an Edge app window; without Edge in the default browser."""
+    edge = _edge()
+    if edge:
+        import subprocess
+
+        try:
+            subprocess.Popen([edge, f"--app={url}"], close_fds=True)  # noqa: S603
+            return
+        except OSError:
+            pass
+    webbrowser.open(url)
 
 
 def data_dir() -> Path:
@@ -92,11 +131,11 @@ def run_app(open_browser: bool = True) -> int:
     port = int(os.environ.get("TRAILBOOK_PORT") or PORT)
     if _running_trailbook(port):
         if open_browser:
-            webbrowser.open(f"http://localhost:{port}/")
+            open_window(f"http://{NAME}:{port}/")
         return 0
     if not _port_free(port):
         port = _free_port()
-    url = f"http://localhost:{port}/"
+    url = f"http://{NAME}:{port}/"
 
     import logging
 
@@ -124,7 +163,7 @@ def run_app(open_browser: bool = True) -> int:
         _message(f"Trailbook could not start. See the log in {folder}.")
         return 1
     if open_browser:
-        webbrowser.open(url)
+        open_window(url)
 
     import pystray
 
@@ -137,7 +176,7 @@ def run_app(open_browser: bool = True) -> int:
         _icon_image(),
         f"Trailbook {__version__}",
         menu=pystray.Menu(
-            pystray.MenuItem("Open Trailbook", lambda: webbrowser.open(url), default=True),
+            pystray.MenuItem("Open Trailbook", lambda: open_window(url), default=True),
             pystray.MenuItem("Quit", quit_app),
         ),
     )

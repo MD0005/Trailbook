@@ -1,6 +1,7 @@
 ; Installer of the Windows app (Inno Setup 6); built by windows/build.py.
 ; Per user, no administrator rights: an update from inside the app installs without a prompt.
-; The data (%LOCALAPPDATA%\Trailbook) is not part of the install: updates and uninstalling keep it.
+; The data (%LOCALAPPDATA%\Trailbook) is not part of the install: updates keep it; uninstalling
+; asks whether to delete it too (default No, so a reinstall finds it again).
 
 #ifndef AppVersion
   #define AppVersion "0.0.0"
@@ -38,6 +39,8 @@ en.StartWithWindows=Start Trailbook when Windows starts (imports and downloads k
 pl.StartWithWindows=Uruchamiaj Trailbook razem z Windows (import i pobieranie działają dalej)
 en.LaunchNow=Start Trailbook
 pl.LaunchNow=Uruchom Trailbook
+en.DeleteData=Also delete your Trailbook data (activities, files, settings) from this computer?%n%n%1%n%nThis cannot be undone. Choose No to keep it for a later install.
+pl.DeleteData=Usunąć też dane Trailbook (aktywności, pliki, ustawienia) z tego komputera?%n%n%1%n%nTego nie da się cofnąć. Wybierz Nie, aby zachować je na później.
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
@@ -65,3 +68,17 @@ Filename: "{app}\Trailbook.exe"; Parameters: "--background"; Flags: nowait; Chec
 
 [UninstallRun]
 Filename: "{sys}\taskkill.exe"; Parameters: "/F /IM Trailbook.exe"; Flags: runhidden; RunOnceId: "StopTrailbook"
+
+[Code]
+// After the program is removed (Trailbook.exe already stopped by [UninstallRun]): ask whether
+// the data goes too. Not asked in a silent uninstall; the answer defaults to No.
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  Data: String;
+begin
+  if CurUninstallStep <> usPostUninstall then Exit;
+  Data := ExpandConstant('{localappdata}\Trailbook');
+  if UninstallSilent or not DirExists(Data) then Exit;
+  if MsgBox(FmtMessage(CustomMessage('DeleteData'), [Data]), mbConfirmation, MB_YESNO or MB_DEFBUTTON2) = IDYES then
+    DelTree(Data, True, True, True);
+end;

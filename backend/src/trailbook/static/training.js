@@ -1161,7 +1161,7 @@ async function yearCharts(params, by) {
 
 // Records: tiles in the style of the activity's top tiles, a table of best efforts beside its
 // curve (one grid: the tables one width, each pair one height): Running; Power; Cycling (outdoor);
-// Virtual (indoor rides: records of their own). Without a Time filter the 3 best of all time,
+// Virtual (indoor rides: records of their own) | Walking & hiking (no speeds); Segments. Without a Time filter the 3 best of all time,
 // with one the best in that time and the best of all time. A record opens its activity.
 const REC_DIST = { 400: "400 m", 1000: "1 km", 1609.344: "1 mile", 5000: "5 km", 10000: "10 km", 20000: "20 km", 21097.5: "Half marathon",
   30000: "30 km", 40000: "40 km", 42195: "Marathon", 50000: "50 km", 100000: "100 km" };
@@ -1182,11 +1182,11 @@ async function renderRecords(params, sw) {
   RECORD_CHARTS.forEach((c) => c?.destroy());
   RECORD_CHARTS = [];
   const find = (list, kind, v = 0) => list.filter((e) => e.kind === kind && e.v === v).sort((p, q) => p.key - q.key);
-  const run = data.run || [], ride = data.ride || [];
+  const run = data.run || [], ride = data.ride || [], walk = data.walk || [];
   // one result: the value and its pace or speed (the time of the longest); the activity and the
   // date on hover, a click opens it
-  const value = (e, r) => (e.kind === "ascent" || e.kind === "climb" ? meters(r.value) : e.kind === "grade" ? `${num(r.value, 1)} %` : e.kind === "longest" || e.kind === "within" ? km(r.value) : e.kind === "speed" ? kmh(r.value) : e.kind === "power" ? watts(r.value) : clock(r.value));
-  const sub = (e, r) => (e.kind === "pace" ? pace(e.key / r.value) : e.kind === "ride" ? kmh(e.key / r.value)
+  const value = (e, r) => (e.kind === "steps" ? num(r.value) : e.kind === "ascent" || e.kind === "climb" ? meters(r.value) : e.kind === "grade" ? `${num(r.value, 1)} %` : e.kind === "longest" || e.kind === "within" ? km(r.value) : e.kind === "speed" ? kmh(r.value) : e.kind === "power" ? watts(r.value) : clock(r.value));
+  const sub = (e, r) => (e.group === "walk" ? "" : e.kind === "pace" ? pace(e.key / r.value) : e.kind === "ride" ? kmh(e.key / r.value)
     : e.kind === "within" ? (e.group === "run" ? pace(r.value / e.key) : kmh(r.value / e.key)) : e.kind === "longest" ? (r.time_s ? durMin(r.time_s) : "") : "");
   // a segment effort: its time, pace or speed (the activity's group)
   const segValue = (e, r) => clock(r.value);
@@ -1200,6 +1200,7 @@ async function renderRecords(params, sw) {
   };
   const name = (e) => (e.segment ? `<a class="plain-link rec-seg" href="#/segment/${e.segment.id}" data-tip="${esc(e.segment.name || "Segment")} · ${km(e.segment.distance_m)}">${esc(e.segment.name || "Segment")}</a>`
     : e.kind === "longest" ? `<span data-tip="Longest distance in one activity">Max distance</span>`
+    : e.kind === "steps" ? `<span data-tip="Most steps in one activity, from the cadence">Most steps</span>`
     : e.kind === "speed" ? `<span data-tip="Top speed held for 1 minute; stretches with GPS jumps are left out">Top speed 1 min</span>`
     : e.kind === "ascent" ? `<span data-tip="Elevation gain of the whole activity">Max elevation gain</span>`
     : e.kind === "climb" ? `<span data-tip="The biggest single climb: from a low point to its top, short dips on the way allowed (as the climbs on the altitude chart); altitude jumps left out">Biggest climb</span>`
@@ -1223,6 +1224,7 @@ async function renderRecords(params, sw) {
   const runRows = [...find(run, "pace"), ...find(run, "longest"), ...find(run, "within"), ...find(run, "ascent"), ...find(run, "climb"), ...find(run, "grade")];
   const outRows = [...find(ride, "ride"), ...find(ride, "longest"), ...find(ride, "within"), ...find(ride, "speed"), ...find(ride, "ascent"), ...find(ride, "climb"), ...find(ride, "grade")];
   const inRows = [...find(ride, "ride", 1), ...find(ride, "longest", 1), ...find(ride, "within", 1), ...find(ride, "speed", 1), ...find(ride, "ascent", 1), ...find(ride, "climb", 1), ...find(ride, "grade", 1)];
+  const walkRows = [...find(walk, "longest"), ...find(walk, "steps"), ...find(walk, "ascent"), ...find(walk, "climb"), ...find(walk, "grade")];
   const powAll = find(ride, "power"), powRows = powAll.filter((e) => REC_POWER_ROWS.includes(e.key));
   const segRows = data.segments || [];
   const pair = (left, right) => `${left}${right || "<div></div>"}`;
@@ -1233,8 +1235,9 @@ async function renderRecords(params, sw) {
       powAll.length > 1 && curveTile("power", "Power curve", "power")),
     outRows.length && pair(tile(typeIcon("ride"), be("Cycling"), table(outRows), "", "Outdoor rides"),
       find(ride, "ride").length > 1 && curveTile("ride", "Cycling speed curve", "speed")),
-    (inRows.length || segRows.length) && pair(inRows.length ? tile(typeIcon("virtual_ride"), be("Cycling virtual"), table(inRows), "", "Virtual and indoor rides: a trainer's distance and speed are records of their own") : "<div></div>",
-      segRows.length && tile(metricIcon("route", 18), be("Segment"), table(segRows), "rec-seg-tile", "Every segment you have an effort on: the fastest times")),
+    (inRows.length || walkRows.length) && pair(inRows.length ? tile(typeIcon("virtual_ride"), be("Cycling virtual"), table(inRows), "", "Virtual and indoor rides: a trainer's distance and speed are records of their own") : "<div></div>",
+      walkRows.length && tile(typeIcon("walk"), be("Walking & hiking"), table(walkRows), "rec-side-tile", "Walks and hikes together: distance, steps and climbing, no speeds")),
+    segRows.length && pair(tile(metricIcon("route", 18), be("Segment"), table(segRows), "rec-seg-tile", "Every segment you have an effort on: the fastest times")),
   ].filter(Boolean);
   view.querySelector(".page-loader")?.remove();
   view.insertAdjacentHTML("beforeend", tiles.length ? `<div class="rec-page">${tiles.join("")}</div>` : `<div class="card">${hint("No runs or rides with records yet.")}</div>`);

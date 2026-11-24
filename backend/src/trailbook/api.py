@@ -1642,7 +1642,11 @@ def create_app(db_path: str | Path) -> Starlette:
     RECORD_KINDS = {
         "run": ("pace", "longest", "within", "ascent", "climb", "grade"),
         "ride": ("ride", "longest", "within", "speed", "ascent", "climb", "grade", "power"),
+        "walk": ("longest", "steps", "ascent", "climb", "grade"),  # walks and hikes: no speed
     }
+    # a records group and the activity groups in it
+    RECORD_GROUPS = {"run": ("run",), "ride": ("ride",), "walk": ("walk", "hike")}
+    RECORD_GROUP_SQL = "CASE WHEN a.category = 'hike' THEN 'walk' ELSE a.category END"
 
     async def stats_records(request: Request):
         q = request.query_params
@@ -1651,7 +1655,8 @@ def create_app(db_path: str | Path) -> Starlette:
             pid = _single_person(c, request)
             shared, sp = activity_filters(time_q, person=False)
             kinds = " OR ".join(
-                f"(a.category = '{g}' AND o.kind IN ({', '.join(repr(k) for k in ks)}))"
+                f"(a.category IN ({', '.join(repr(c) for c in RECORD_GROUPS[g])})"
+                f" AND o.kind IN ({', '.join(repr(k) for k in ks)}))"
                 for g, ks in RECORD_KINDS.items()
             )
             keep = lambda r: {k: r[k] for k in r.keys() if k not in ("grp", "kind", "key", "v")}  # noqa: E731
@@ -1659,11 +1664,11 @@ def create_app(db_path: str | Path) -> Starlette:
             def top(where: list[str], params: list, n: int) -> list[sqlite3.Row]:
                 return c.execute(
                     f"""WITH e AS (
-                            SELECT a.category AS grp, o.kind, o.key, o.v, o.value,
+                            SELECT {RECORD_GROUP_SQL} AS grp, o.kind, o.key, o.v, o.value,
                                    a.id AS activity_id, a.name, a.activity_type,
                                    a.start_time_utc, a.utc_offset_s, a.distance_m, a.time_s,
                                    ROW_NUMBER() OVER (
-                                       PARTITION BY a.category, o.kind, o.key, o.v
+                                       PARTITION BY {RECORD_GROUP_SQL}, o.kind, o.key, o.v
                                        ORDER BY {records._ORDER}, a.start_time_utc) AS rk
                             FROM {EFFORTS_SQL} o JOIN activities a ON a.id = o.activity_id
                             WHERE a.person_id = ? AND ({kinds})

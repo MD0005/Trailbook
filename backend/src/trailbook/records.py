@@ -46,11 +46,11 @@ EFFORTS_SQL = f"""(SELECT b.activity_id, b.kind, b.key, b.value, b.start_s, b.en
     UNION ALL
     SELECT id, 'longest', 0, distance_m, 0, elapsed_s,
         CASE WHEN category = 'ride' AND indoor THEN 1 ELSE 0 END
-    FROM activities WHERE distance_m > 0 AND category IN ('run', 'ride')
+    FROM activities WHERE distance_m > 0 AND category IN ('run', 'ride', 'walk', 'hike')
     UNION ALL
     SELECT id, 'ascent', 0, ascent_m, 0, elapsed_s,
         CASE WHEN category = 'ride' AND indoor THEN 1 ELSE 0 END
-    FROM activities WHERE ascent_m > 0 AND category IN ('run', 'ride'))"""
+    FROM activities WHERE ascent_m > 0 AND category IN ('run', 'ride', 'walk', 'hike'))"""
 
 LOWER_IS_BETTER = ("pace", "ride", "segment")  # times; power and distance: higher
 _ORDER = "CASE WHEN o.kind IN ('pace', 'ride') THEN o.value ELSE -o.value END"

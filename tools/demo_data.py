@@ -1,4 +1,4 @@
-"""Demo data for the README screenshots: a made-up athlete ("Alex") in Warsaw.
+"""Demo data for trying Trailbook without real data: a made-up athlete ("Alex") in Warsaw.
 
 Writes gzipped GPX files (time, position, altitude, heart rate, cadence, power) into
 `<out>/alex/`, about two years of runs, rides and walks. The routes follow real streets: they

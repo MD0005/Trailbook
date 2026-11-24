@@ -169,7 +169,10 @@ data can be trusted:
   becomes a record. Rides recorded without a distance stream get no top speed.
 - Biggest climb: from a low point to its top; a dip on the way is allowed while it is at most
   25 % as long as the rise before it and loses at most a third of the height gained so far;
-  at least 20 m. Steepest 1 km: the highest average grade over 1 km of distance.
+  at least 20 m. Steepest 1 km: the highest average grade over 1 km of distance. Both also for
+  walks and hikes (Records › Walking & hiking).
+- Steps of a walk or a hike: the cadence (steps per minute) times the time of each sample; a
+  gap of more than 10 s between samples (a pause) counts no steps.
 - Altitude jumps (more than 4 m/s between two samples) are taken out before. A 1 km stretch
   counts only when the height was gained at most 1,5 m/s, its grade is at most 40 % and no 50 m
   of it is steeper than 30 % (the distance jumped, or the barometer drifted while standing).

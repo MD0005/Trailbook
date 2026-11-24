@@ -22,8 +22,9 @@ export, FIT/GPX/TCX files) are there to bring in older history or a second devic
 
 - [Features](#features)
 - [Installation](#installation)
+  - [Home Assistant add-on](#home-assistant-add-on)
   - [Windows app](#windows-app)
-  - [Without Home Assistant (Docker)](#without-home-assistant-docker)
+  - [Docker](#docker)
 - [First steps](#first-steps)
 - [Records in Home Assistant](#records-in-home-assistant)
 - [Updating](#updating)
@@ -33,132 +34,111 @@ export, FIT/GPX/TCX files) are there to bring in older history or a second devic
 - [Trademarks](#trademarks)
 - [License](#license)
 
-![Activity page](docs/screenshots/activity.png)
+<p align="center"><a href="docs/screenshots/activity.webp"><img src="docs/screenshots/activity.webp" alt="Activity page" width="640"></a><br><sub><em>Activity page</em></sub></p>
 
 ## Features
 
-### Activities
-- One list of everything, as tiles or a table: filter by sport, type, date and distance,
-  sort by any column.
-- 100+ activity types in sport groups (running, cycling, swimming, hiking, winter sports,
-  water sports, gym…), each with its own icon. The type can be changed per activity.
-- Training type of every run and ride (easy, tempo, intervals, long, race…), detected from
-  heart rate and pace and changeable by hand.
+**Activities** — every activity as tiles, charts or a table; 100+ sport types; easy, tempo,
+intervals or race detected for you.
 
-### Activity page
-- Route map coloured by pace, heart rate, power, altitude or gradient, with kilometre
-  markers, weather at the start and road surface (asphalt, gravel, trail…).
-- Charts of heart rate, pace/speed, power, cadence, altitude and more, with interval and
-  climb sections drawn in and editable.
-- Laps, best efforts, heart rate and power zones, power curve, gear used.
+**Activity page** — the route coloured by pace or heart rate, charts with intervals and climbs,
+zones, curves, best efforts, road surface and the weather that helped or held you back.
 
-![Activities](docs/screenshots/activities.png)
+<table><tr><td align="center" valign="top"><a href="docs/screenshots/heart-rate.png"><img src="docs/screenshots/heart-rate.png" alt="Activity › heart rate of an interval workout" width="520"></a><br><sub><em>Activity › heart rate of an interval workout</em></sub></td></tr></table>
 
-### Map
-- Every route on one map with a heatmap effect.
-- Base maps: OpenStreetMap, Humanitarian, OpenTopoMap and CyclOSM, with shaded relief and
-  marked hiking, cycling or MTB trails on top; colours that follow the light or dark theme.
-- Explorer tiles: all map squares you have visited, your biggest square and cluster.
+<table><tr><td align="center" valign="top"><a href="docs/screenshots/zones.png"><img src="docs/screenshots/zones.png" alt="Activity › zones, surface and power curve" width="330"></a><br><sub><em>Activity › zones, surface and power curve</em></sub></td><td align="center" valign="top"><a href="docs/screenshots/weather.png"><img src="docs/screenshots/weather.png" alt="Activity › weather on the route" width="210"></a><br><sub><em>Activity › weather on the route</em></sub></td></tr></table>
 
-![Map](docs/screenshots/map.png)
+**Calendar** — your weeks at a glance, a suggested next workout, and structured workouts sent
+to your Garmin watch.
 
-### Segments
-- Create segments from an activity or by drawing on the map; every activity that passes
-  through is matched automatically, with a leaderboard of your efforts.
+<table><tr><td align="center" valign="top"><a href="docs/screenshots/calendar.png"><img src="docs/screenshots/calendar.png" alt="Calendar with Next workout and workouts" width="430"></a><br><sub><em>Calendar with Next workout and workouts</em></sub></td><td align="center" valign="top"><a href="docs/screenshots/workout.png"><img src="docs/screenshots/workout.png" alt="Calendar › workout builder" width="300"></a><br><sub><em>Calendar › workout builder</em></sub></td></tr></table>
 
-### Fitness and statistics
-- Training load of every activity, and fitness, fatigue and form over time.
-- Records and best efforts (fastest 5 km, best 20 min power…) with their curves.
-- Years compared: distance, activities, elevation and time per week or month, each year a
-  line, with running totals; explorer tiles of every size over time; a calendar of your training.
-- Compare people side by side.
+**Map** — a heatmap of every route and the explorer tiles you have visited, on maps with
+shaded relief and marked trails.
 
-![Fitness](docs/screenshots/fitness.png)
+<table><tr><td align="center" valign="top"><a href="docs/screenshots/map.webp"><img src="docs/screenshots/map.webp" alt="Map › Heatmap" width="390"></a><br><sub><em>Map › Heatmap</em></sub></td><td align="center" valign="top"><a href="docs/screenshots/tiles.webp"><img src="docs/screenshots/tiles.webp" alt="Map › Explorer tiles" width="390"></a><br><sub><em>Map › Explorer tiles</em></sub></td></tr></table>
 
-![Statistics](docs/screenshots/statistics.png)
+**Segments** — your own segments, matched automatically, with a leaderboard and a trend.
 
-### People
-- Several people in one install, each with their own activities, heart rate and power
-  thresholds (with the date they changed) and settings.
+<table><tr><td align="center" valign="top"><a href="docs/screenshots/segment.png"><img src="docs/screenshots/segment.png" alt="Segment" width="430"></a><br><sub><em>Segment</em></sub></td></tr></table>
 
-### Garmin Connect — the main source
-- Connect with your personal Garmin Connect API key: the whole history is downloaded once,
-  then new activities arrive automatically.
-- You get everything your Garmin recorded: the original FIT files with all their data
-  (heart rate, power, running dynamics, laps, workout steps, the thresholds your watch used),
-  plus what only Garmin Connect knows — activity titles, the place, training effect, Garmin's
-  training load and Body Battery change.
-- 🚧 Coming next from Garmin: sleep, stress, HRV, resting heart rate, steps and weight.
+**Fitness** — training load, fitness, fatigue and form over time.
 
-### Other sources — for older history
-- **Strava** — upload the export ZIP (titles, descriptions and activities entered by hand
-  come with it, in any export language) or single files; pick a date range to bring in only
-  the years before your Garmin. Only what is imported is kept.
-- **A folder** — FIT, GPX and TCX files (also `.gz`) saved to a folder, for example by a
-  Home Assistant automation; one subfolder per person, or the watch decides.
-- **Upload** — a Garmin export ZIP or single files.
-- Activities you already have are recognised and skipped, whatever the source.
+<table><tr><td align="center" valign="top"><a href="docs/screenshots/fitness.png"><img src="docs/screenshots/fitness.png" alt="Fitness › fitness, fatigue and form" width="520"></a><br><sub><em>Fitness › fitness, fatigue and form</em></sub></td></tr></table>
 
-### Backup and moving
-- One-click export of everything (database, settings and all files) to a single ZIP, and
-  restore on a new device. The add-on is also part of Home Assistant backups.
+**Statistics** — years compared, a timeline of when, where and in what weather you train,
+and your records.
 
-### Light on resources
-- Near-zero CPU when idle; imports run in the background at the lowest priority.
-- CPU and memory go up only while activities are being added and while the road surface is
-  looked up for them. You notice it only when a large batch comes in at once (the first
-  Garmin download, a Strava export); everyday syncing stays in the background.
+<table><tr><td align="center" valign="top"><a href="docs/screenshots/statistics.png"><img src="docs/screenshots/statistics.png" alt="Statistics › Compare years" width="260"></a><br><sub><em>Statistics › Compare years</em></sub></td><td align="center" valign="top"><a href="docs/screenshots/timeline.png"><img src="docs/screenshots/timeline.png" alt="Statistics › Timeline" width="260"></a><br><sub><em>Statistics › Timeline</em></sub></td><td align="center" valign="top"><a href="docs/screenshots/records.png"><img src="docs/screenshots/records.png" alt="Statistics › Records" width="260"></a><br><sub><em>Statistics › Records</em></sub></td></tr></table>
 
-![Settings](docs/screenshots/settings.png)
+**And more**
+- Several people in one install, and a side-by-side comparison of everyone.
+- A built-in manual that explains every number.
+- Garmin Connect as the main source: the whole history, then every new activity on its own.
+- Older history from a Strava export, a folder or an upload; duplicates are skipped.
+- One-click backup and move to another device.
+- Light on resources: near-zero CPU when idle.
+- 🚧 Wellbeing — sleep, stress, HRV and more — is coming.
 
 ## Installation
 
-Three ways to run Trailbook, the same app in all of them:
+Trailbook runs in three ways; the app is the same in all of them.
 
-- **Home Assistant add-on** (recommended) — for Home Assistant OS and Supervised installs.
-- **Windows app** — no Docker, no Home Assistant: an installer for one PC. See
-  [Windows app](#windows-app).
-- **Docker** — for everyone else: no Home Assistant at all, or Home Assistant Container / Core,
-  which have no add-ons. See [Without Home Assistant](#without-home-assistant-docker).
+- [Home Assistant add-on](#home-assistant-add-on) (recommended) — Home Assistant OS or
+  Supervised.
+- [Windows app](#windows-app) — one Windows PC, without Docker or Home Assistant.
+- [Docker](#docker) — any other machine, also Home Assistant Container or Core (they have no
+  add-ons).
+
+### Home Assistant add-on
 
 [![Add repository to my Home Assistant](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2FMD0005%2FTrailbook)
 
-Or by hand:
+1. Click the button above, or in Home Assistant open **Settings › Add-ons › Add-on store**,
+   click **⋮ › Repositories**, paste `https://github.com/MD0005/Trailbook` and click **Add**.
+2. Find **Trailbook** in the store and click **Install**.
+3. Click **Start**, then **Open web UI** (or turn on *Show in sidebar*).
 
-1. In Home Assistant open **Settings › Add-ons › Add-on store**.
-2. Click **⋮ › Repositories**, paste `https://github.com/MD0005/Trailbook` and click **Add**.
-3. Find **Trailbook** in the store and click **Install**.
-4. Click **Start**, then **Open web UI** (or turn on *Show in sidebar*).
+- **Data:** inside the add-on; it is part of Home Assistant backups.
+- **Updates:** Home Assistant offers them (see [Updating](#updating)).
+- **Access:** through Home Assistant, with its login.
 
 ### Windows app
 
 1. Download `Trailbook-Setup-<version>.exe` from the newest
    [release](https://github.com/MD0005/Trailbook/releases/latest) and run it. Windows may warn
    about an unknown publisher (the installer is not signed): click **More info › Run anyway**.
-2. Trailbook starts and opens in the browser at `http://localhost:8099`. Its icon in the
-   notification area (next to the clock) opens it again or quits it.
+   No administrator rights are needed.
+2. Trailbook starts in a window of its own (Microsoft Edge as an app, else your browser) at
+   `http://trailbook.localhost:8099`. Its icon next to the clock opens it again or quits it.
 
-No administrator rights are needed. The data lives in `%LOCALAPPDATA%\Trailbook`; updating or
-uninstalling keeps it. A new version shows up in **Settings › General › Updates**: one click
-downloads it, installs it and restarts Trailbook. Imports and downloads run only while Trailbook
-runs; the installer can start it with Windows. It is reached from this PC only.
+- **Data:** `%LOCALAPPDATA%\Trailbook`. Updating keeps it; uninstalling asks whether to delete
+  it too (No keeps it for a later install).
+- **Updates:** **Settings › General › Updates** — one click downloads, installs and restarts.
+- **Access:** this PC only. Imports and downloads run while Trailbook runs; the installer can
+  start it with Windows.
 
-### Without Home Assistant (Docker)
+### Docker
 
 The same image runs on any machine with Docker (amd64 or arm64, e.g. a Raspberry Pi or a NAS).
-Download [`docker-compose.yml`](docker-compose.yml), put a password next to it and start:
 
-```bash
-echo "TRAILBOOK_PASSWORD=pick-a-password" > .env
-docker compose up -d                       # then open http://<this machine>:8099
-```
+1. Download [`docker-compose.yml`](docker-compose.yml).
+2. Put a password next to it and start:
 
-The database lives in `./data`; put FIT files in `./share/trailbook` and choose
-`/share/trailbook` as the watched folder. Exports land in `./share/trailbook-exports`.
-Update with `docker compose pull && docker compose up -d`. Log out at `/logout`.
-The compose file does not start without `TRAILBOOK_PASSWORD`; with a plain `docker run` and no
-password there is no login at all, so leave it out only if nobody else can reach the port.
-Home Assistant notifications and the records sensor are not available outside the add-on.
+   ```bash
+   echo "TRAILBOOK_PASSWORD=pick-a-password" > .env
+   docker compose up -d
+   ```
+
+3. Open `http://<this machine>:8099`.
+
+- **Data:** the database in `./data`; FIT files go to `./share/trailbook` (choose
+  `/share/trailbook` as the watched folder); exports land in `./share/trailbook-exports`.
+- **Updates:** `docker compose pull && docker compose up -d`.
+- **Access:** a login with that password (log out at `/logout`). The compose file does not
+  start without it; a plain `docker run` without a password has no login at all, so use that
+  only if nobody else can reach the port.
+- Home Assistant notifications and the records sensor are only in the add-on.
 
 ## First steps
 
