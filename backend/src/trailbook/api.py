@@ -1175,9 +1175,10 @@ def create_app(db_path: str | Path) -> Starlette:
     async def basemap_tile(request: Request):
         source = request.path_params["source"]
         z, x, y = (request.path_params[k] for k in ("z", "x", "y"))
-        if source not in basemap.SOURCES:
+        known = basemap.SOURCES.get(source) or basemap.OVERLAYS.get(source)
+        if not known:
             raise HTTPException(404, "unknown base map")
-        template, max_zoom, _, _ = basemap.SOURCES[source]
+        template, max_zoom, _, _ = known
         if not (0 <= z <= max_zoom and 0 <= x < 2**z and 0 <= y < 2**z):
             raise HTTPException(404, "tile out of range")
         try:
@@ -1233,6 +1234,10 @@ def create_app(db_path: str | Path) -> Starlette:
         FIT, GPX and TCX (also .gz) and ZIPs of them: Garmin and Strava exports."""
         pid = request.query_params.get("person", "")
         name = Path(request.query_params.get("name", "")).name
+        # optional: of a Strava export only the activities of these days (both included)
+        span = [request.query_params.get(k) or None for k in ("from", "to")]
+        if any(d and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", d) for d in span):
+            raise HTTPException(400, "dates as YYYY-MM-DD")
         if not name.lower().endswith((".zip", *importer.ACTIVITY_SUFFIXES)):
             raise HTTPException(
                 400, "only .zip, .fit, .gpx or .tcx files (also .gz) can be uploaded"
@@ -1261,7 +1266,7 @@ def create_app(db_path: str | Path) -> Starlette:
             raise HTTPException(400, "empty file")
         try:
             with closing(conn()) as c:
-                queued = importer.register_upload(c, uploads_dir, pid, target)
+                queued = importer.register_upload(c, uploads_dir, pid, target, *span)
         except zipfile.BadZipFile as exc:
             target.unlink(missing_ok=True)
             raise HTTPException(400, "not a valid ZIP file") from exc

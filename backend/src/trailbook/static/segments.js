@@ -40,7 +40,8 @@ function worldPx(lat, lon, z) {
 function staticMap(polyline, { W = 560, H = 230, cls = "seg-map", tiles: tileCls = "seg-tiles", dashed = false, twoWay = false } = {}) {
   const pts = decodePolyline(polyline);
   if (pts.length < 2) return "";
-  const source = loadMapSettings().map.source;
+  const { source, relief, trails } = loadMapSettings().map;
+  const trail = trails && trails !== "none" ? trails : null;
   const src = (BASEMAPS || []).find((b) => b.key === source);
   const maxZ = Math.min(16, src?.max_zoom ?? 16);
   let z = maxZ, px;
@@ -53,20 +54,24 @@ function staticMap(polyline, { W = 560, H = 230, cls = "seg-map", tiles: tileCls
   const xs = px.map((p) => p[0]), ys = px.map((p) => p[1]);
   const x0 = (Math.min(...xs) + Math.max(...xs)) / 2 - W / 2, y0 = (Math.min(...ys) + Math.max(...ys)) / 2 - H / 2;
   const n = 2 ** z;
-  let tiles = "";
-  if (src) {
+  let tiles = "", shade = "", marked = "";
+  if (src || relief === "on" || trail) {
     for (let tx = Math.floor(x0 / TILE_PX); tx <= Math.floor((x0 + W) / TILE_PX); tx++) {
       for (let ty = Math.floor(y0 / TILE_PX); ty <= Math.floor((y0 + H) / TILE_PX); ty++) {
         if (ty < 0 || ty >= n) continue;
         const wx = ((tx % n) + n) % n;
-        tiles += `<image href="api/basemap/${src.key}/${z}/${wx}/${ty}.png" x="${tx * TILE_PX - x0}" y="${ty * TILE_PX - y0}" width="${TILE_PX}" height="${TILE_PX}"/>`;
+        const at = `x="${tx * TILE_PX - x0}" y="${ty * TILE_PX - y0}" width="${TILE_PX}" height="${TILE_PX}"`;
+        if (src) tiles += `<image href="api/basemap/${src.key}/${z}/${wx}/${ty}.png" ${at}/>`;
+        if (relief === "on") shade += `<image data-relief="${z}/${wx}/${ty}" ${at}/>`; // filled by fillRelief
+        if (trail) marked += `<image href="api/basemap/trails-${trail}/${z}/${wx}/${ty}.png" ${at}/>`;
       }
     }
   }
   const d = px.map(([x, y], i) => `${i ? "L" : "M"}${(x - x0).toFixed(1)},${(y - y0).toFixed(1)}`).join("");
   const [sx, sy] = px[0], [ex, ey] = px[px.length - 1];
+  if (shade) setTimeout(fillRelief, 0); // once the caller has put the map on the page
   return `<svg class="${cls}" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
-    <g class="${tileCls}">${tiles}</g>
+    <g class="${tileCls}">${tiles}</g>${shade ? `<g class="relief-tiles">${shade}</g>` : ""}${marked ? `<g class="trail-tiles">${marked}</g>` : ""}
     <path d="${d}" fill="none" style="stroke:var(--map-halo)" stroke-width="7" stroke-linejoin="round" stroke-linecap="round" opacity=".8"/>
     <path d="${d}" fill="none" stroke="var(--accent)" stroke-width="4" stroke-linejoin="round" stroke-linecap="${dashed ? "butt" : "round"}"${dashed ? ` stroke-dasharray="5 2"` : ""}/>
     <circle cx="${sx - x0}" cy="${sy - y0}" r="5" fill="${twoWay ? SEG_TWO_WAY_END : "#3ecf8e"}" style="stroke:var(--map-halo)" stroke-width="2"/>

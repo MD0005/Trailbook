@@ -7,7 +7,7 @@ Layout of an export::
     ├── trailbook.db      consistent snapshot (SQLite online backup API)
     └── files/
         ├── root/...      watched-folder files not archived yet, same structure
-        └── uploads/...   the archive: uploads, Garmin downloads, folder copies (_folder/)
+        └── uploads/...   the whole archive: uploads, Garmin downloads, folder copies (_folder/)
 
 Settings live in the database, so they travel with it. Garmin access tokens never do; Garmin
 API keys only when asked for. The archive is written and read in chunks (ZIP64), never held
@@ -37,7 +37,8 @@ MANIFEST = "manifest.json"
 DB_NAME = "trailbook.db"
 CHUNK = 1 << 20
 EXPORT_RE = re.compile(r"^trailbook-export-[0-9A-Za-z_.-]+\.zip$")
-FILE_SUFFIXES = (".fit", ".zip", ".gz", ".gpx", ".tcx")
+FILE_SUFFIXES = (".fit", ".zip", ".gz", ".gpx", ".tcx")  # watched folder: these only
+PARTIAL_SUFFIXES = (".part", ".tmp")  # unfinished writes, never exported
 # Machine-specific or transient settings that must not move with the database.
 TRANSIENT_SETTINGS = ("import_progress", "garmin_ha_notified")  # garmin.HA_NOTIFIED_SETTING
 
@@ -127,14 +128,17 @@ class ExportResult:
     bytes: int = 0
 
 
-def _collect(base: Path | None, arc_prefix: str) -> list[tuple[Path, str]]:
+def _collect(base: Path | None, arc_prefix: str, every: bool = False) -> list[tuple[Path, str]]:
+    """Files under `base`: the activity kinds (FILE_SUFFIXES: activities, sleep, monitoring
+    and every other FIT), or with `every` all of them (the archive is Trailbook's own)."""
     if not base or not base.is_dir():
         return []
     found = []
     for dirpath, dirnames, filenames in os.walk(base):
         dirnames.sort()
         for name in sorted(filenames):
-            if name.lower().endswith(FILE_SUFFIXES):
+            low = name.lower()
+            if (every and not low.endswith(PARTIAL_SUFFIXES)) or low.endswith(FILE_SUFFIXES):
                 p = Path(dirpath) / name
                 found.append((p, f"{arc_prefix}/{p.relative_to(base).as_posix()}"))
     return found
@@ -214,7 +218,7 @@ def export(
             (p, arc) for p, arc in _collect(root, "files/root")
             if arc[len(prefix):] not in archived
         ]  # fmt: skip
-        items = root_items + _collect(uploads_dir(db_path), "files/uploads")
+        items = root_items + _collect(uploads_dir(db_path), "files/uploads", every=True)
     total_bytes = sum(p.stat().st_size for p, _ in items)
 
     try:

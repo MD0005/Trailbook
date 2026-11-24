@@ -39,6 +39,53 @@ SOURCES: dict[str, tuple[str, int, str, str]] = {
         "© OpenStreetMap contributors · style © CyclOSM",
         "CyclOSM (cycling & trails)",
     ),
+    "hot": (
+        "https://a.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png",
+        19,
+        "© OpenStreetMap contributors · style © Humanitarian OpenStreetMap Team, OSM France",
+        "Humanitarian (HOT)",
+    ),
+    # CARTO basemaps: free without a key for non-commercial use (up to 75k map views a month)
+    "positron": (
+        "https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png",
+        20,
+        "© OpenStreetMap contributors © CARTO",
+        "CARTO Positron (light)",
+    ),
+    "voyager": (
+        "https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png",
+        20,
+        "© OpenStreetMap contributors © CARTO",
+        "CARTO Voyager",
+    ),
+    "darkmatter": (
+        "https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png",
+        20,
+        "© OpenStreetMap contributors © CARTO",
+        "CARTO Dark Matter (dark)",
+    ),
+}
+
+# Elevation tiles for the Relief option (hills shaded over the base map, worked out in the
+# browser): Terrain Tiles, open data on AWS, Terrarium encoding (height = R*256 + G + B/256 -
+# 32768 m). Not a base map of their own, so not in SOURCES (the Base map list).
+OVERLAYS: dict[str, tuple[str, int, str, str]] = {
+    "terrain": (
+        "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png",
+        15,
+        "Relief: Terrain Tiles (Mapzen, AWS Open Data; SRTM, GMTED, ETOPO1 and others)",
+        "Relief",
+    ),
+    # Waymarked Trails: marked routes, transparent, drawn over the base map (Trails option)
+    **{
+        f"trails-{kind}": (
+            f"https://tile.waymarkedtrails.org/{kind}/{{z}}/{{x}}/{{y}}.png",
+            18,
+            "Trails © waymarkedtrails.org, OpenStreetMap contributors (CC-BY-SA)",
+            label,
+        )
+        for kind, label in (("hiking", "Hiking"), ("cycling", "Cycling"), ("mtb", "MTB"))
+    },
 }
 
 

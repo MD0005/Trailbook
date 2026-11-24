@@ -435,13 +435,37 @@ def backfill_tiles(conn: sqlite3.Connection, progress=None) -> int:
     return len(ids)
 
 
-def register_upload(conn: sqlite3.Connection, uploads_dir: Path, person_id: str, path: Path) -> int:
-    """Queue an uploaded activity file or ZIP (already saved under `uploads_dir`)."""
+def register_upload(
+    conn: sqlite3.Connection,
+    uploads_dir: Path,
+    person_id: str,
+    path: Path,
+    date_from: str | None = None,
+    date_to: str | None = None,
+) -> int:
+    """Queue an uploaded activity file or ZIP (already saved under `uploads_dir`).
+
+    `date_from` / `date_to` (YYYY-MM-DD, both ends included): of a Strava export only the
+    activities whose date in activities.csv is in the range; members without a date are kept."""
     rel = UPLOADS_PREFIX + path.relative_to(uploads_dir).as_posix()
     st = path.stat()
     if path.suffix.lower() == ".zip":
         with zipfile.ZipFile(path) as zf:
             members = zip_members(zf)
+            if date_from or date_to:
+                try:
+                    rows = strava.read_zip(zf)
+                except (KeyError, UnicodeError, ValueError):
+                    rows = {}
+
+                def inside(m: str) -> bool:
+                    row = rows.get(m)
+                    if row is None or row.start is None:
+                        return True
+                    day = row.start.date().isoformat()
+                    return (not date_from or day >= date_from) and (not date_to or day <= date_to)
+
+                members = [m for m in members if inside(m)]
     else:
         members = [""]
     stamp = now_iso()

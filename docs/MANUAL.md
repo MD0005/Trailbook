@@ -414,6 +414,9 @@ neighbour closer in heart rate, until none is shorter.
   (LT1), moderate between it and the lactate threshold (LTHR), hard above LTHR. LTHR is the
   activity's (the watch's, yours, or 90 % of the max HR); Garmin records no aerobic threshold, so
   LT1 = 89 % of LTHR (LTHR 167 → LT1 149 bpm). The time comes from every second of the heart rate.
+  Each sport is split by its own threshold (a run's LTHR is usually higher than a ride's); the
+  tooltip lists the bpm per sport. Garmin's zone 5 often starts below LTHR, so the hard time
+  here can be shorter than the activity's zone 5.
   Backup, for an activity without a heart rate stream or a threshold: Garmin's time in zones —
   zones 1–2 and below easy, 3–4 moderate, 5 hard. Activities without heart rate do not count.
 - A planned step by its target: heart rate by the middle of its range in bpm against the same

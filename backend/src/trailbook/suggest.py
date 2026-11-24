@@ -99,11 +99,13 @@ def suggest(
     hard_days = set()
     cache: dict = {}
     lims_now, by_lims = None, 0  # the latest limits (shown), activities split by them
+    by_sport: dict[str, tuple] = {}  # the limits each sport was split by (latest)
     for a in week:
         lims = limits(analysis.activity_thresholds(conn, a, cache))
         sp = _by_limits(conn, a["id"], lims) if lims else None
         if sp:
             lims_now, by_lims = lims, by_lims + 1
+            by_sport[a["category"]] = lims
         else:
             sp = _split(a["zones"])
         if sp:
@@ -243,6 +245,8 @@ def suggest(
                  "reasons": reasons},
         "notes": notes,
         "limits": [round(x) for x in lims_now] if lims_now else None,
+        # each sport by its own lactate threshold (a run's and a ride's differ)
+        "limits_by_sport": {k: [round(x) for x in v] for k, v in by_sport.items()},
         "by_limits": by_lims, "activities": sum(1 for a in week if a["zones"] or a["id"]),
     }  # fmt: skip
 

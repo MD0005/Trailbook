@@ -245,6 +245,17 @@ def test_damaged_files_are_skipped(conn, tmp_path):
     assert "no track points" in row["skip_reason"]
 
 
+def test_strava_zip_date_range(conn, tmp_path):
+    add_person(conn)
+    path = strava_zip(tmp_path / "uploads" / "alice" / "export.zip")
+    uploads = tmp_path / "uploads"
+    # 1 and 2 on 1 June, the manual one (3) on 2 June
+    assert importer.register_upload(conn, uploads, "alice", path, "2019-06-02", None) == 1
+    members = {r[0] for r in conn.execute("SELECT zip_member FROM files")}
+    assert members == {"activities.csv#3"}
+    assert importer.register_upload(conn, uploads, "alice", path, None, "2019-06-01") == 2
+
+
 def test_eu_summer():
     assert importer.eu_summer(datetime(2024, 3, 31, 0, 59, tzinfo=UTC)) == 0
     assert importer.eu_summer(datetime(2024, 3, 31, 1, 0, tzinfo=UTC)) == 1

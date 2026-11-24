@@ -341,8 +341,8 @@ async function renderCalendar(params) {
   const showNext = single && (TAB.next ?? false);
   const sw = switchHtml("calview", [["month", `${ICON_CAL_MONTH}<span>Weeks</span>`], ["year", `${ICON_CAL_YEAR}<span>Year</span>`]], mode);
   view.innerHTML = `${pageHead("Calendar", `${gotoBadge(target)}${single ? `${badgeHtml("ctargets", "Targets", "", { panel: `<div class="opt-panel targets-panel" data-targets></div>` })}<button class="badge ${showTray ? "on" : ""}" data-cworkouts>Workouts</button><button class="badge ${showNext ? "on" : ""}" data-cnext-toggle>Next workout</button>` : ""}<button class="badge ${showSummary ? "on" : ""}" data-ckpis>Summary</button>`, sw)}
+    <div class="cal-summary" data-csummary ${showSummary ? "" : "hidden"}></div>
     <div class="cal-top">
-      <div data-csummary ${showSummary ? "" : "hidden"}></div>
       <div data-cnext ${showNext ? "" : "hidden"}></div>
       <div data-ctray ${showTray ? "" : "hidden"}></div>
     </div>
@@ -363,12 +363,18 @@ async function renderCalendar(params) {
     location.hash = "#/calendar?" + new URLSearchParams(b.dataset.value === "year" ? { view: "year", year: (target || today).slice(0, 4) } : {});
   });
 
-  // The weekday names stay under the page header; the summary and the workouts scroll away
-  // under it (as the summary of Activities). The summary is the month of the first week row
-  // under the weekday names (its Thursday's month).
+  // The summary (wider than a phone) and the weekday names under it stay under the page header,
+  // so other months' summaries can be read while scrolling; Next workout and the workouts scroll
+  // away. The summary is the month of the first week row under the weekday names (its
+  // Thursday's month).
   const sticky = view.querySelector("[data-csticky]"), weeks = view.querySelector("[data-weeks]");
-  const head = view.querySelector(".page-head");
-  const placeSticky = () => { sticky.style.top = `${parseFloat(getComputedStyle(head).top) + head.offsetHeight + 6}px`; };
+  const head = view.querySelector(".page-head"), sumBox = view.querySelector("[data-csummary]");
+  const placeSticky = () => {
+    const top = parseFloat(getComputedStyle(head).top) + head.offsetHeight + 6;
+    sumBox.style.top = `${top}px`;
+    const stuck = !sumBox.hidden && getComputedStyle(sumBox).position === "sticky";
+    sticky.style.top = `${top + (stuck ? sumBox.offsetHeight : 0)}px`;
+  };
   placeSticky();
   let month = null;
   const activeMonth = () => {
@@ -384,7 +390,7 @@ async function renderCalendar(params) {
     if (m === month) return;
     month = m;
     const html = await calMonthSummary(m);
-    if (month === m) box.innerHTML = html;
+    if (month === m) { box.innerHTML = html; placeSticky(); }
   };
   const onScroll = () => {
     if (!document.body.contains(weeks)) { window.removeEventListener("scroll", onScroll); window.removeEventListener("resize", placeSticky); return; }
@@ -406,6 +412,7 @@ async function renderCalendar(params) {
     e.currentTarget.classList.toggle("on", on);
     view.querySelector("[data-csummary]").hidden = !on;
     month = null;
+    placeSticky();
     paintSummary();
     if (on) window.scrollTo({ top: 0, behavior: "smooth" }); // show what was opened
   };
@@ -533,9 +540,20 @@ async function renderCalendar(params) {
 // suggested next session with its reasons; notes when the plan pulls away from the model.
 // [key, label, colour, what it is without thresholds (Garmin's zones, the backup)]
 const NEXT_LEVELS = [["easy", "Easy", "#43a047", "heart rate zones 1–2"], ["moderate", "Moderate", "#f2c200", "heart rate zones 3–4"], ["hard", "Hard", "#e53935", "heart rate zone 5"]];
-// with thresholds: the range of each level in bpm (LT1 estimated: Garmin records none)
-const nextRange = (k, [lt1, lthr]) => (k === "easy" ? `under ${num(lt1)} bpm, the aerobic threshold (89 % of the lactate threshold)`
-  : k === "moderate" ? `${num(lt1)}–${num(lthr)} bpm, between the aerobic and the lactate threshold` : `over ${num(lthr)} bpm, the lactate threshold`);
+// with thresholds: the range of each level in bpm (LT1 estimated: Garmin records none); each
+// sport split by its own lactate threshold, so with several the bpm per sport
+const nextRange = (k, [lt1, lthr], bySport = {}) => {
+  const sports = Object.entries(bySport);
+  if (sports.length > 1) {
+    const per = (f) => sports.map(([g, l]) => `${groupLabel(g).toLowerCase()} ${f(l)}`).join(", ");
+    return k === "easy" ? `under the aerobic threshold, 89 % of the lactate threshold: ${per(([a]) => num(a))} bpm`
+      : k === "moderate" ? `between the aerobic and the lactate threshold: ${per(([a, b]) => `${num(a)}–${num(b)}`)} bpm`
+      : `over the lactate threshold: ${per(([, b]) => num(b))} bpm`;
+  }
+  if (sports.length) [lt1, lthr] = sports[0][1];
+  return k === "easy" ? `under ${num(lt1)} bpm, the aerobic threshold (89 % of the lactate threshold)`
+    : k === "moderate" ? `${num(lt1)}–${num(lthr)} bpm, between the aerobic and the lactate threshold` : `over ${num(lthr)} bpm, the lactate threshold`;
+};
 const NEXT_KIND = { rest: "Rest day", easy: "Easy", long: "Long", tempo: "Tempo", intervals: "Intervals" };
 const ICON_NEXT = svg(`<path d="M5 12h12"/><path d="M13 7l5 5-5 5"/><path d="M5 5v14"/>`);
 // Form in words: what the zone means for the next session (zones as on Fitness › Form).
@@ -558,7 +576,7 @@ async function renderNextPanel(box, today) {
   const total = sumOf(d.done) + sumOf(d.planned);
   const rows = NEXT_LEVELS.map(([k, label, color, tip]) => {
     const dn = total ? d.done[k] / total : 0, pl = total ? d.planned[k] / total : 0, tg = d.target[k];
-    const what = d.limits ? nextRange(k, d.limits) : tip;
+    const what = d.limits ? nextRange(k, d.limits, d.limits_by_sport) : tip;
     return `<div class="nx-row" data-tip="${esc(`${label} (${what}): ${hm(d.done[k])} done${d.planned[k] ? `, ${hm(d.planned[k])} planned` : ""} · the model asks ${num(tg * 100)} %`)}">
       <span class="nx-label">${label}</span><span class="nx-bar"><i style="width:${dn * 100}%;background:${color}"></i><b style="width:${pl * 100}%;--c:${color}"></b><u style="left:${tg * 100}%"></u></span>
       <span class="nx-val">${num((dn + pl) * 100)}%<small> / ${num(tg * 100)}%</small></span></div>`;
@@ -987,7 +1005,7 @@ async function renderStatCharts(params, sw, tab) {
       const onToggle = (label, off) => STAT_CHARTS.forEach((c) => c.toggleLine(label, off));
       for (const s of byMonth.series.filter((c) => !c.key.endsWith("-cum"))) {
         const cum = byWeek.series.find((c) => c.key === `${s.key}-cum`);
-        for (const [b, one] of [[byMonth, s], [byWeek, cum]]) {
+        for (const [b, one] of [[byWeek, cum], [byMonth, s]]) {
           if (!one) continue;
           const el = box.appendChild(document.createElement("div"));
           STAT_CHARTS.push(chartGroup(el, { ...b, series: [one], onToggle, shared }));
@@ -995,6 +1013,7 @@ async function renderStatCharts(params, sw, tab) {
       }
     }
     STAT_CHARTS.forEach((c) => c.realign());
+    if (bars && YEAR_PINNED) STAT_CHARTS.forEach((c) => c.emphasize?.(YEAR_PINNED)); // the clicked year stays marked
   };
   head.querySelectorAll('[data-pick="stat-x"]').forEach((b) => b.onclick = () => {
     head.querySelectorAll('[data-pick="stat-x"]').forEach((o) => { o.classList.toggle("on", o === b); o.setAttribute("aria-checked", o === b); });
@@ -1010,10 +1029,11 @@ async function renderStatCharts(params, sw, tab) {
 // year a column in its series colour, split into running (bottom), cycling and other (top) in
 // three shades of it, in a framed plot with a y axis (nice steps, dashed grid) and axis titles
 // (docs/CHARTS.md); the year's total above its column. Hovering a part shows that part only;
-// hovering a year marks it on all three and fades the other years below.
+// hovering a year marks it on all three and fades the other years below; a click keeps it.
 const YEAR_BARS = [["distance_m", "Distance", "km", (v) => v / 1000, "distance_total"], ["count", "Activities", "", (v) => v, "type"],
   ["ascent_m", "Elevation gain", "m", (v) => v, "total_ascent"]];
 const YEAR_BAR_TICKS = 4; // about this many steps on the y axis
+let YEAR_PINNED = null; // the year clicked in the column charts: marked until clicked again or a reload
 const BAR_PARTS = [["run", "Running", 100], ["ride", "Cycling", 62], ["other", "Other", 34]];
 async function yearBarsData(params) {
   const d = await api("stats/totals?" + new URLSearchParams({ person: CURRENT, by: "year", parts: 1, ...filterQuery(params) }));
@@ -1047,11 +1067,20 @@ function yearBars(el, { years, parts }) {
         <div class="yb-plot">${grid}${cols}</div><span></span><span></span><div class="yb-xaxis">${years}</div>
         <span></span><span></span><span class="yb-xtitle">Year</span></div></div>`;
   }).join("");
+  // hovering marks a year; a click keeps it marked (until another click on it or a reload)
   const mark = (y) => {
+    y ??= YEAR_PINNED;
     el.querySelectorAll(".yb-col, .yb-xaxis span").forEach((c) => c.classList.toggle("dim", y != null && c.dataset.year !== y));
+    el.querySelectorAll(".yb-col").forEach((c) => c.classList.toggle("pinned", c.dataset.year === YEAR_PINNED));
     STAT_CHARTS.forEach((c) => c.emphasize?.(y));
   };
-  el.querySelectorAll(".yb-col").forEach((c) => { c.onmouseenter = () => mark(c.dataset.year); c.onmouseleave = () => mark(null); });
+  el.querySelectorAll(".yb-col").forEach((c) => {
+    c.onmouseenter = () => mark(c.dataset.year);
+    c.onmouseleave = () => mark(null);
+    c.onclick = () => { YEAR_PINNED = YEAR_PINNED === c.dataset.year ? null : c.dataset.year; mark(c.dataset.year); };
+  });
+  if (!years.includes(YEAR_PINNED)) YEAR_PINNED = null;
+  mark(null);
 }
 
 // The days the filter covers: [first, last] (the first activity … today without one).
@@ -1100,7 +1129,7 @@ async function yearCharts(params, by) {
   for (const [key, title, unit, conv, dec, icon] of STAT_METRICS) {
     if (key === "steps" && !(data.steps || []).length) continue;
     const fmt = (v) => `${num(v, v >= 100 ? 0 : dec)}${unit ? ` ${unit}` : ""}`;
-    for (const cumulative of [false, true]) {
+    for (const cumulative of [true, false]) { // the running total first, then per period
       const lines = years.map((y, k) => {
         let run = 0;
         const values = xs.map((p) => {
@@ -1369,7 +1398,7 @@ function activityTrainingHtml(a) {
 
 // ---- Statistics › Timeline ----------------------------------------------------------------
 // Always on top a summary strip; then half-width cards: time of day | day of the week
-// (line, columns or pie: three icons in each card's head, one choice for both), activity types |
+// (columns or pie: two icons in each card's head, one choice for both), activity types |
 // countries (pie or columns, the same way; countries with or without virtual routes); three
 // table cards in a row: distance (running and cycling each a table of its own) | weather |
 // temperature breakdown; at the bottom Explorer tiles: its summary strip and two charts
@@ -1377,7 +1406,7 @@ function activityTrainingHtml(a) {
 // Explorer tiles; one choice for all three). Charts as docs/CHARTS.md: framed plot, axis titles,
 // dashed grid. All of it from /api/stats/activities and the routes, worked out here.
 const WEEKDAYS_FULL = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
-const DIST_CHOICES = [["line", "Line"], ["bars", "Columns"], ["pie", "Pie"]];
+const DIST_CHOICES = [["bars", "Columns"], ["pie", "Pie"]];
 const SHARE_CHOICES = [["pie", "Pie"], ["bars", "Columns"]];
 const ICON_LINE = svg(`<path d="M3 17l5-6 4 3 7-8"/><path d="M3 20h18"/>`);
 const ICON_PIE = svg(`<path d="M12 3a9 9 0 1 0 9 9h-9z"/><path d="M14.5 2.8a9 9 0 0 1 6.7 6.7h-6.7z"/>`);
@@ -1414,7 +1443,7 @@ async function renderTimeline(params, sw) {
   const acts = data.items.map((r) => Object.fromEntries(Object.entries(F).map(([k, i]) => [k, r[i]])));
   if (!acts.length) { box.innerHTML = `<div class="card">${hint("No activities match the filters.")}</div>`; return; }
   const onFoot = acts.every((a) => ON_FOOT.has(a.group));
-  TAB.tlChart ??= "line"; TAB.tlShare ??= "pie"; TAB.tlVirtual ??= "in";
+  if (!DIST_CHOICES.some(([k]) => k === TAB.tlChart)) TAB.tlChart = "bars"; TAB.tlShare ??= "pie"; TAB.tlVirtual ??= "in";
   box.innerHTML = `${tlSummary(acts, data.steps)}
     <div class="tl-grid">
       <div class="card tl-card" data-tl-card="hours"></div><div class="card tl-card" data-tl-card="days"></div>
@@ -1505,16 +1534,12 @@ function tlDays(acts, onFoot) {
   for (const a of acts) per[(new Date(localMs(a.start)).getUTCDay() + 6) % 7].push(a);
   return { items: per.map((l, d) => ({ label: WEEKDAYS[d], value: l.length, color: SERIES_COLORS[d % SERIES_COLORS.length], tip: tlTip(WEEKDAYS_FULL[d], l.length, l, onFoot) })), every: 1, oneColor: true };
 }
-// A share chart's items: the biggest first; past `most`, and those under `minShare` of all, the
-// rest as Other. Colours: the series
-// colours, then further hues (no colour twice on one ring).
+// A share chart's items: every group its own, the biggest first. Colours: the series colours,
+// then further hues (no colour twice on one ring).
 const shareColor = (k) => (k < SERIES_COLORS.length ? SERIES_COLORS[k] : `hsl(${(k * 67 + 20) % 360} 42% 62%)`);
-function tlShares(groups, onFootOf = () => false, most = 8, minShare = 0) {
+function tlShares(groups, onFootOf = () => false) {
   const list = [...groups].sort((p, q) => q[1].length - p[1].length);
-  const all = list.reduce((t, [, l]) => t + l.length, 0) || 1;
-  const keep = Math.min(list.length > most ? most - 1 : most, list.filter(([, l]) => l.length / all >= minShare).length);
-  const top = keep < list.length ? [...list.slice(0, keep), ["Other", list.slice(keep).flatMap(([, l]) => l)]] : list;
-  return { items: top.map(([label, l], k) => ({ label, value: l.length, color: shareColor(k),
+  return { items: list.map(([label, l], k) => ({ label, value: l.length, color: shareColor(k),
     tip: `${tlTip(label, l.length, l, onFootOf(l))}\nDistance <b>${km(l.reduce((t, a) => t + a.distance_m, 0))}</b>\nTime <b>${hours(l.reduce((t, a) => t + a.time_s, 0))}</b>` })) };
 }
 function tlTypes(acts) {
@@ -1522,7 +1547,6 @@ function tlTypes(acts) {
   for (const a of acts) { const k = typeLabel(a.type); by.set(k, [...(by.get(k) || []), a]); }
   return { ...tlShares(by, (l) => l.every((a) => ON_FOOT.has(a.group))), middle: [by.size, by.size === 1 ? "type" : "types"] };
 }
-const TL_COUNTRIES = 20, TL_COUNTRY_MIN = 0.02; // countries one by one: up to 20, each at least 2 %
 function tlCountries(acts, names, withVirtual) {
   const by = new Map();
   for (const a of acts) {
@@ -1531,7 +1555,7 @@ function tlCountries(acts, names, withVirtual) {
     by.set(k, [...(by.get(k) || []), a]);
   }
   const n = [...by.keys()].filter((k) => k !== "Indoor" && k !== "No route").length; // real countries only
-  return { ...tlShares(by, (l) => l.every((a) => ON_FOOT.has(a.group)), TL_COUNTRIES, TL_COUNTRY_MIN), middle: [n, n === 1 ? "country" : "countries"] };
+  return { ...tlShares(by, (l) => l.every((a) => ON_FOOT.has(a.group))), middle: [n, n === 1 ? "country" : "countries"] };
 }
 
 // Line or columns: one value per item, drawn at the card's own width (1 px = 1 px, so the text
@@ -1563,7 +1587,7 @@ function tlBars({ items, every = 1, xTitle = "", yTitle = "Activities", oneColor
 // Pie: a ring in the middle of the card, each slice labelled beside it (name and share) on a
 // short leader line; labels on one side pushed apart so they never overlap. No total inside.
 // Slices under PIE_LABEL_MIN of the ring get no label (their tooltip still tells).
-const PIE_LABEL_MIN = 0.03;
+const PIE_LABEL_MIN = 0.01;
 // middle: [count, word] in the ring (how many countries, types), or nothing (hours, days).
 function tlPie({ items, middle = null }, W = 480) {
   const total = items.reduce((t, i) => t + i.value, 0) || 1;
@@ -1607,7 +1631,9 @@ ${middle ? `<text x="${cx}" y="${cy + 2}" class="tl-pie-total">${num(middle[0])}
 function tlTable(title, icon, sections, tip) {
   const tables = sections.map(([headHtml, rows]) => {
     const n = rows.reduce((t, [, l]) => t + l.length, 0) || 1;
-    return `<table class="data tl-table"><thead><tr><th class="tl-sub">${headHtml || ""}</th><th class="num">Activities</th><th class="num">Distance</th><th class="num">Share</th></tr></thead>
+    // tables one under another: one set of column widths, so they line up
+    const cols = sections.length > 1 ? `<colgroup><col><col style="width:21%"><col style="width:31%"><col style="width:15%"></colgroup>` : "";
+    return `<table class="data tl-table${cols ? " tl-fixed" : ""}">${cols}<thead><tr><th class="tl-sub">${headHtml || ""}</th><th class="num">Activities</th><th class="num">Distance</th><th class="num">Share</th></tr></thead>
       <tbody>${rows.map(([label, l]) => `<tr${l.length ? "" : ' class="tl-zero"'}><td>${label}</td><td class="num">${num(l.length)}</td>
       <td class="num">${km(l.reduce((t, a) => t + a.distance_m, 0))}</td><td class="num">${num((l.length / n) * 100)}%</td></tr>`).join("")}</tbody></table>`;
   }).join("");
@@ -1632,6 +1658,7 @@ function tlWeatherTable(acts, what) {
   const temp = TEMP_BANDS.map(([a, b, l]) => [l, known.filter((x) => x.weather[0] >= a && x.weather[0] < b)]);
   const kind = WEATHER_KINDS.map(([l, , sky]) => [skyLabel(l, sky), []]);
   for (const a of known) { const k = WEATHER_KINDS.findIndex(([, f]) => f(a.weather[1] ?? 0)); if (k >= 0) kind[k][1].push(a); }
+  kind.sort((p, q) => q[1].length - p[1].length); // the most common first; Unknown stays last
   const unk = unknown.length ? [["Unknown", unknown]] : [];
   const tip = "Outdoor activities only (a route, not indoor, not virtual), from the weather of the hour and the area (not the watch's sensor). Unknown: its weather is still being fetched in the background (or the weather server had none).";
   const unkSky = unknown.length ? [[skyLabel("Unknown", null), unknown]] : [];
@@ -1680,14 +1707,15 @@ async function tlTiles(el, params, by) {
   const fresh = total.map((v, k) => v - (k ? total[k - 1] : before));
   const color = SERIES_COLORS[TILE_SIZES.findIndex(([k]) => k === z) % SERIES_COLORS.length];
   const name = TILE_SIZE_NAMES[z].toLowerCase();
-  const last = total.length - 1, top = Math.max(...fresh);
+  const last = total.length - 1, top = Math.max(...fresh), avg = fresh.reduce((t, v) => t + v, 0) / (fresh.length || 1);
   STAT_CHARTS = [chartGroup(chartsBox, {
     x: { date: starts.map((d) => dayMs(d) / 1000) }, kind: "date",
     series: [
       { key: "tiles-total", label: "Tiles", title: `${TILE_SIZE_NAMES[z]}, cumulative`, icon: "tiles", yTitle: "Tiles visited", unit: "", dec: 0, values: total, color, height: 300, headHtml: sizeSwitch,
         tip: `All ${name} visited by the end of each period.`, tags: [{ label: "Tiles", value: total[last], i: last, color, text: num(total[last]) }] },
       { key: "tiles-new", label: "New", title: `New ${name} per ${by}`, icon: "tiles", yTitle: "New tiles", unit: "", dec: 0, values: fresh, color, bars: true, height: 240, headHtml: sizeSwitch,
-        tip: `${TILE_SIZE_NAMES[z]} visited for the first time in each period.`, tags: [{ label: "Most", value: top, i: fresh.indexOf(top), color, text: num(top) }] },
+        tip: `${TILE_SIZE_NAMES[z]} visited for the first time in each period.`, tags: [{ label: "Most", value: top, i: fresh.indexOf(top), color, text: num(top) },
+          { label: `Avg / ${by}`, value: avg, i: last, color, text: num(avg, avg < 10 ? 1 : 0) }] }, // the average over the periods shown
     ],
   })];
   bindSize(chartsBox);

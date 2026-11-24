@@ -36,6 +36,7 @@ def source(tmp_path):
     upload = data / "uploads" / "alice" / "up.fit"
     _write(upload, make_fit(49, serial=3, created=T0 + 120))
     importer.register_upload(c, data / "uploads", "alice", upload)
+    _write(data / "uploads" / "alice" / "extra.json", b"{}")  # any file of the archive travels
     importer.run_queue(c, root, uploads_dir=data / "uploads")
     c.execute(
         """INSERT INTO activities (person_id, fit_uid, start_time_utc, category, activity_type,
@@ -62,7 +63,7 @@ def _counts(path):
 def test_export_contains_snapshot_files_and_manifest(source, tmp_path):
     path, _ = source
     r = backup.export(path, tmp_path / "out")
-    assert r.path.name.startswith("trailbook-export-") and r.files == 3
+    assert r.path.name.startswith("trailbook-export-") and r.files == 4
     with zipfile.ZipFile(r.path) as zf:
         names = set(zf.namelist())
         manifest = json.loads(zf.read("manifest.json"))
@@ -71,6 +72,7 @@ def test_export_contains_snapshot_files_and_manifest(source, tmp_path):
         "files/root/alice/one.fit",
         "files/root/bob/sub/two.fit",
         "files/uploads/alice/up.fit",
+        "files/uploads/alice/extra.json",
         "trailbook.db",
     } <= names
     assert not any(n.endswith(".txt") for n in names)
@@ -101,7 +103,8 @@ def test_restore_on_a_fresh_install_matches_the_disk(source, tmp_path):
     new_db = tmp_path / "b" / "trailbook.db"
     db.connect(new_db).close()
     r = backup.restore(new_db, archive)
-    assert r.files == 3 and r.activities == 1
+    assert r.files == 4 and r.activities == 1
+    assert (new_db.parent / "uploads" / "alice" / "extra.json").is_file()
     # Folder files of the old install land in the archive, not in a folder.
     uploads = new_db.parent / "uploads"
     assert (uploads / "_folder" / "bob" / "sub" / "two.fit").is_file()

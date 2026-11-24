@@ -2190,7 +2190,7 @@ function defaultMapSettings() {
   return {
     layer: "heatmap",
     kpis: false,
-    map: { source: "osm", tone: "dusk" }, // until the person picks one: Dusk in both themes
+    map: { source: "osm", tone: "dusk", relief: "off", trails: "none" }, // until the person picks one: Dusk in both themes
     heatmap: { style: "density", color: "#e8590c", ramp: "fire", width: 2, intensity: 0.45, perPerson: true },
     tiles: { zoom: 14, style: "coverage", color: "#0f766e", ramp: "viridis", display: "grid",
              square: true, cluster: true, routes: true, regions: [] },
@@ -2233,7 +2233,90 @@ function baseStyle(mapSettings) {
     style.sources.base = { type: "raster", tiles: [tiles], tileSize: 256, maxzoom: src.max_zoom, attribution: src.attribution };
     style.layers.push({ id: "base", type: "raster", source: "base", paint: toneOf(mapSettings.tone) });
   }
+  if (mapSettings.relief === "on") { // hills shaded over the base map (under the routes)
+    const dem = new URL("api/basemap/terrain/", document.baseURI).href + "{z}/{x}/{y}.png";
+    style.sources.dem = { type: "raster-dem", tiles: [dem], tileSize: 256, maxzoom: RELIEF_MAX_Z, encoding: "terrarium", attribution: RELIEF_ATTRIBUTION };
+    style.layers.push({ id: "relief", type: "hillshade", source: "dem", paint: { "hillshade-exaggeration": 0.45, "hillshade-illumination-direction": 315,
+      "hillshade-shadow-color": "rgba(0,0,0,0.55)", "hillshade-highlight-color": "rgba(255,255,255,0.35)", "hillshade-accent-color": "rgba(0,0,0,0.25)" } });
+  }
+  if (TRAILS.some(([k]) => k === mapSettings.trails && k !== "none")) { // marked routes, transparent
+    const t = new URL(`api/basemap/trails-${mapSettings.trails}/`, document.baseURI).href + "{z}/{x}/{y}.png";
+    style.sources.trails = { type: "raster", tiles: [t], tileSize: 256, maxzoom: 18, attribution: TRAILS_ATTRIBUTION };
+    style.layers.push({ id: "trails", type: "raster", source: "trails", paint: { "raster-opacity": 0.85 } });
+  }
   return style;
+}
+
+// Trails: marked routes of Waymarked Trails over the base map (basemap.OVERLAYS `trails-<kind>`).
+const TRAILS = [["none", "None"], ["hiking", "Hiking"], ["cycling", "Cycling"], ["mtb", "MTB"]];
+const TRAILS_ATTRIBUTION = "Trails © waymarkedtrails.org";
+
+// Relief: elevation tiles (Terrain Tiles, open data; basemap.OVERLAYS) through the server's
+// tile cache. Interactive maps shade them themselves (a hillshade layer); the static route
+// maps (staticMap) get the shading drawn here on a canvas, one image per tile, kept for the visit.
+const RELIEF_MAX_Z = 15;
+const RELIEF_ATTRIBUTION = "Relief: Terrain Tiles (Mapzen, AWS Open Data)";
+const RELIEF_CACHE = new Map();
+function reliefShade(z, x, y) { // a canvas of the shading of elevation tile z/x/y (a promise)
+  const key = `${z}/${x}/${y}`;
+  if (!RELIEF_CACHE.has(key)) RELIEF_CACHE.set(key, new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onerror = reject;
+    img.onload = () => {
+      const N = 256, cv = document.createElement("canvas");
+      cv.width = cv.height = N;
+      const ctx = cv.getContext("2d", { willReadFrequently: true });
+      ctx.drawImage(img, 0, 0);
+      const src = ctx.getImageData(0, 0, N, N).data, out = ctx.createImageData(N, N), o = out.data;
+      const h = new Float32Array(N * N);
+      for (let i = 0; i < N * N; i++) h[i] = src[i * 4] * 256 + src[i * 4 + 1] + src[i * 4 + 2] / 256 - 32768;
+      // metres per pixel at the tile's middle; the slopes RELIEF_STEEP x steeper, so gentle hills show too
+      const lat = Math.atan(Math.sinh(Math.PI * (1 - (2 * (y + 0.5)) / 2 ** z)));
+      const cell = (40075016.7 * Math.cos(lat)) / (N * 2 ** z) / RELIEF_STEEP;
+      const zen = Math.PI / 4, az = (135 * Math.PI) / 180, flat = Math.cos(zen); // sun from the north-west, 45° high
+      const at = (c, r) => h[Math.min(N - 1, Math.max(0, r)) * N + Math.min(N - 1, Math.max(0, c))];
+      for (let r = 0; r < N; r++) for (let c = 0; c < N; c++) {
+        const a = at(c - 1, r - 1), b = at(c, r - 1), cc = at(c + 1, r - 1), d = at(c - 1, r), f = at(c + 1, r);
+        const g = at(c - 1, r + 1), hh = at(c, r + 1), i = at(c + 1, r + 1);
+        const dx = (cc + 2 * f + i - (a + 2 * d + g)) / (8 * cell), dy = (g + 2 * hh + i - (a + 2 * b + cc)) / (8 * cell);
+        const slope = Math.atan(Math.hypot(dx, dy)), aspect = Math.atan2(dy, -dx);
+        const v = Math.cos(zen) * Math.cos(slope) + Math.sin(zen) * Math.sin(slope) * Math.cos(az - aspect) - flat;
+        const k = (r * N + c) * 4, w = v > 0 ? 255 : 0; // shadows black, lit slopes white
+        o[k] = o[k + 1] = o[k + 2] = w;
+        o[k + 3] = Math.min(255, Math.abs(v) * (v > 0 ? 160 : 300));
+      }
+      ctx.putImageData(out, 0, 0);
+      resolve(cv);
+    };
+    img.src = `api/basemap/terrain/${key}.png`;
+  }));
+  return RELIEF_CACHE.get(key);
+}
+const RELIEF_STEEP = 3;
+// The relief image of map tile z/x/y (above RELIEF_MAX_Z: a part of the bigger tile, enlarged).
+const RELIEF_URLS = new Map();
+function reliefUrl(z, x, y) {
+  const key = `${z}/${x}/${y}`;
+  if (!RELIEF_URLS.has(key)) RELIEF_URLS.set(key, (async () => {
+    const dz = Math.min(z, RELIEF_MAX_Z), n = 2 ** (z - dz), px = Math.floor(x / n), py = Math.floor(y / n);
+    let cv = await reliefShade(dz, px, py);
+    if (n > 1) {
+      const part = document.createElement("canvas"), s = 256 / n;
+      part.width = part.height = 256;
+      part.getContext("2d").drawImage(cv, (x - px * n) * s, (y - py * n) * s, s, s, 0, 0, 256, 256);
+      cv = part;
+    }
+    return new Promise((resolve) => cv.toBlob((b) => resolve(URL.createObjectURL(b))));
+  })());
+  return RELIEF_URLS.get(key);
+}
+// Fill the relief images of the static maps on the page (staticMap leaves them empty).
+function fillRelief() {
+  document.querySelectorAll("image[data-relief]").forEach((im) => {
+    const [z, x, y] = im.dataset.relief.split("/").map(Number);
+    im.removeAttribute("data-relief");
+    reliefUrl(z, x, y).then((u) => im.setAttribute("href", u), () => im.remove());
+  });
 }
 
 function boundsOf(coordsList) {
@@ -2657,7 +2740,9 @@ function renderSettingsPanel() {
   const styleLabel = { density: "Density", coverage: "Coverage", glow: "Heat glow" }[H.style];
   const glow = H.style === "glow", byVisits = T.style === "heat";
   const mapBody = row("Base map", pickList("map.source", [...(BASEMAPS || []).map((b) => [b.key, b.label]), ["none", "None"]], M.source))
-    + row("Colours", pickList("map.tone", BASE_TONES.map(([k, l]) => [k, l]), M.tone));
+    + row("Colours", pickList("map.tone", BASE_TONES.map(([k, l]) => [k, l]), M.tone))
+    + row("Relief", pickList("map.relief", [["off", "Off"], ["on", "On — hills shaded"]], M.relief))
+    + row("Trails", pickList("map.trails", TRAILS, M.trails || "none"));
   const heatBody = row("Style", pickList("heatmap.style", [["density", "Density — overlaps get stronger"], ["coverage", "Coverage — solid lines"], ["glow", "Heat glow — colour gradient"]], H.style))
     + row("Line colour", colorPicker("heatmap.color", H.color), glow)
     + (heat.isAll ? row("People", checkCtl("heatmap.perPerson", H.perPerson, "A colour per person"), glow ? "Not used by Heat glow" : "") : "")
@@ -2676,7 +2761,7 @@ function renderSettingsPanel() {
   heat.openAcc ??= "map";
   const el = view.querySelector("[data-settings]");
   el.innerHTML = accordion([
-    ["map", "Map", `${srcLabel} · ${toneLabel}`, mapBody],
+    ["map", "Map", `${srcLabel} · ${toneLabel}${M.relief === "on" ? " · Relief" : ""}${M.trails && M.trails !== "none" ? " · Trails" : ""}`, mapBody],
     ["heatmap", "Heatmap", styleLabel, heatBody],
     ["tiles", "Explorer tiles", sizeLabel, tilesBody],
   ], heat.openAcc);
@@ -2698,7 +2783,7 @@ function bindSettingsPanel(el) {
   };
   const shown = (path) => path.startsWith("map.") || path.startsWith(s.layer + ".");
   const refresh = (path, kind) => {
-    if (path === "map.source") return applyBase(true);
+    if (path === "map.source" || path === "map.relief" || path === "map.trails") return applyBase(true);
     if (path === "map.tone") return applyBase(false);
     if (!shown(path)) return;
     if (kind === "paint") updatePaint(); else drawHeatLayers();
@@ -3151,6 +3236,11 @@ async function settingsGeneral(el, tab = "general") {
         <li>Upload the ZIP from the e-mail, or single .fit, .gpx and .tcx files (also .gz).</li>
       </ol>
       <div class="hint">The ZIP also brings titles, descriptions and activities entered by hand. Activities you already have are skipped.</div>
+      <div class="garmin-form strava-range">
+        <label><span class="opt-label">From</span><input type="date" name="strava-from" title="Empty = from the first activity"></label>
+        <label><span class="opt-label">To</span><input type="date" name="strava-to" title="Empty = up to the last activity"></label>
+        <span class="hint">Only the ZIP's activities from these days (both included).</span>
+      </div>
       <div class="upload-row">
         <select name="strava-person"><option value="">Choose a person…</option>${people.map((p) => `<option value="${esc(p.id)}">${esc(p.label)}</option>`).join("")}</select>
         ${filePicker("strava-files", ".zip,.fit,.gpx,.tcx,.gz", true)}
@@ -3180,6 +3270,7 @@ async function settingsGeneral(el, tab = "general") {
   const icuCard = `
     <div class="card">
       <h3>Other sources: Intervals.icu</h3>
+      <div class="hint">Testing phase — not working yet.</div>
       <div class="garmin-people">${icuPeople.map(icuRow).join("") || hint("Add the intervals.icu API key first (Settings › Workouts API).")}</div>
     </div>`;
 
@@ -3387,7 +3478,9 @@ async function settingsGeneral(el, tab = "general") {
     if (!pid || !files.length) { out.innerHTML = state("Choose a person and files", "warn"); return; }
     sup.disabled = true;
     try {
-      const r = await uploadFiles(pid, files, out);
+      const range = { from: el.querySelector("[name=strava-from]").value, to: el.querySelector("[name=strava-to]").value };
+      if (range.from && range.to && range.from > range.to) { out.innerHTML = state("From is after To", "warn"); sup.disabled = false; return; }
+      const r = await uploadFiles(pid, files, out, range);
       out.innerHTML = state(`Uploaded · ${num(r.queued)} activities queued${r.failed ? ` · ${num(r.failed)} files refused` : ""} — progress in Settings › Imported`, r.failed ? "warn" : "ok");
     } catch (e) { out.innerHTML = state(esc(e.message), "bad"); }
     sup.disabled = false;
@@ -3409,14 +3502,15 @@ async function settingsGeneral(el, tab = "general") {
 }
 
 // Upload files one after another; the import job picks up each one as it arrives.
-async function uploadFiles(pid, files, out) {
+async function uploadFiles(pid, files, out, range = {}) {
+  const span = Object.fromEntries(Object.entries(range).filter(([, v]) => v)); // from / to: ZIPs of a Strava export only
   let queued = 0, failed = 0;
   for (const [i, file] of files.entries()) {
     out.innerHTML = state(files.length > 1
       ? `Uploading ${num(i + 1)} of ${num(files.length)}: ${esc(file.name)}…`
       : `Uploading ${esc(file.name)} (${num(file.size / 1048576, 1)} MB)…`);
     try {
-      const r = await api(`uploads?${new URLSearchParams({ person: pid, name: file.name })}`, { method: "POST", body: file, headers: {} });
+      const r = await api(`uploads?${new URLSearchParams({ person: pid, name: file.name, ...span })}`, { method: "POST", body: file, headers: {} });
       queued += r.queued;
     } catch (e) {
       failed++;

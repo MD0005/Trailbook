@@ -177,8 +177,9 @@ performance condition, stamina and potential stamina. Streams without data are n
   steps and a dashed grid, the y title with the unit and the years under the x axis with the
   title Year (plain HTML, not uPlot). Hovering a year dims the other
   columns of all three and fades the other years' lines on every chart below
-  (`api.emphasize(label)`).
-  Then four pairs of charts (per period, then cumulative), each the full width, one under the
+  (`api.emphasize(label)`); a click on a column keeps its year marked until it is clicked again
+  or the page reloads.
+  Then four pairs of charts (cumulative, then per period), each the full width, one under the
   other, and Steps per period and their running total (daily data, the Type filter does not apply).
   The per-period charts (not the running totals) have a **Max** pill among the year pills, at
   its height (pushed aside like them when they would overlap): the highest week or month of all

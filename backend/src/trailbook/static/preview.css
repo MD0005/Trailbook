@@ -249,6 +249,8 @@ header button.icon svg { width: 18px; height: 18px; }
 svg.tile-track { width: 100%; height: 100%; }
 /* Large tiles: static map in one style, Faded light, in both themes */
 .faded-tiles { filter: saturate(.2) contrast(.7) brightness(1.15); }
+.relief-tiles { opacity: .8; }
+:root[data-theme="dark"] .relief-tiles { opacity: .55; }
 /* dark theme: the tile maps dark too, like the segment maps */
 :root[data-theme="dark"] .faded-tiles { filter: grayscale(1) invert(1) brightness(.78) contrast(.82); }
 
@@ -669,9 +671,13 @@ tr.filters-row .tpick { min-width: 150px; }
 }
 .cal-sticky { position: sticky; z-index: 4; background: var(--bg); padding: 8px 11px 2px; margin: -8px -1px 0; }
 /* Summary and the Workouts tray: the plain summary strip of Activities, as wide as the header;
-   they scroll away under the header, only the weekday names stay */
-.cal-top { padding: 0 11px; margin: 0 -1px; }
-.cal-top [data-csummary] .stat-strip, .cal-top .wo-panel { margin: 0 -10px 8px; border-radius: 8px;
+   the summary and the weekday names stay under the header (not on phones), the rest scrolls away */
+.cal-top, .cal-summary { padding: 0 11px; margin: 0 -1px; }
+/* the summary stays under the page header, the weekday names under it (not on phones) */
+@media (min-width: 761px) {
+  .cal-summary { position: sticky; z-index: 4; background: var(--bg); padding-top: 8px; margin-top: -8px; }
+}
+.cal-summary .stat-strip, .cal-top .wo-panel { margin: 0 -10px 8px; border-radius: 8px;
   background: var(--surface); border: 1px solid var(--line); box-shadow: none; }
 .cal-mstat { justify-content: center; }
 .cal-mname { font-size: 16px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
@@ -1721,7 +1727,9 @@ svg.tile-chart { width: 100%; height: 100%; display: block; }
    A planned workout looks like an activity tile with its header in the plan colour (--plan),
    the same colour as the planned part of the week's bars. */
 .garmin-form.one { grid-template-columns: minmax(220px, 1fr) auto; }
-@media (max-width: 760px) { .garmin-form.one { grid-template-columns: 1fr; } }
+.garmin-form.strava-range { grid-template-columns: 170px 170px 1fr; margin-bottom: 10px; }
+.strava-range .hint { align-self: center; }
+@media (max-width: 760px) { .garmin-form.one, .garmin-form.strava-range { grid-template-columns: 1fr; } }
 .cal-act.plan { border-color: color-mix(in srgb, var(--plan) 45%, var(--line)); cursor: grab; position: relative; }
 .cal-act.plan:hover { border-color: color-mix(in srgb, var(--plan) 80%, var(--line)); }
 .cal-act.plan .cal-act-head { background: color-mix(in srgb, var(--plan) 22%, var(--surface)); }
@@ -2071,7 +2079,7 @@ svg.tile-chart { width: 100%; height: 100%; display: block; }
 .yb-yaxis span { position: absolute; right: 0; transform: translateY(50%); white-space: nowrap; }
 .yb-plot { position: relative; display: flex; align-items: stretch; gap: 6px; padding: 0 6px; border: 1px solid var(--chart-frame, var(--line)); }
 .yb-grid { position: absolute; left: 0; right: 0; border-top: 1px dashed var(--chart-grid, var(--line)); pointer-events: none; }
-.yb-col { position: relative; flex: 1 1 0; min-width: 0; display: flex; justify-content: center; cursor: default; transition: opacity .15s; }
+.yb-col { position: relative; flex: 1 1 0; min-width: 0; display: flex; justify-content: center; cursor: pointer; transition: opacity .15s; }
 .yb-col.dim, .yb-xaxis span.dim { opacity: .28; }
 .yb-bar { position: relative; width: 100%; max-width: 46px; display: flex; flex-direction: column-reverse; gap: 1px; }
 .yb-bar i { display: block; width: 100%; flex: none; border-radius: 2px; }
@@ -2121,6 +2129,7 @@ svg.tile-chart { width: 100%; height: 100%; display: block; }
 /* chart kind and tile size: icons only */
 .icon-switch button { padding: 0 8px; }
 .tl-table { width: 100%; font-size: 12.5px; }
+.tl-table.tl-fixed { table-layout: fixed; } /* tables one under another line up (widths in tlTable) */
 .tl-table td, .tl-table th { padding: 3px 6px; }
 .tl-table .tl-sec td { font-weight: 600; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .03em; padding-top: 8px; }
 .tl-table .tl-zero td { color: var(--muted); }

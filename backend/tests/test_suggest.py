@@ -90,6 +90,7 @@ def test_split_by_thresholds(tmp_path):
     out = suggest.suggest(c, "anna", date(2026, 11, 23))
     assert out["done"] == {"easy": 600, "moderate": 600, "hard": 300}  # the stream, not the zones
     assert out["limits"] == [151, 170] and out["by_limits"] == 1
+    assert list(out["limits_by_sport"].values()) == [[151, 170]]
     # a planned zone 4 step (Garmin's 153-168 here): between the thresholds, so moderate
     ctx = {"ride": {"hr": [95, 112, 131, 153, 168, 187], "power": None, "speed": 8.0,
                     "limits": (151.3, 170.0)}}  # fmt: skip
