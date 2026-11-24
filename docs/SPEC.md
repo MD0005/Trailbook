@@ -1192,7 +1192,8 @@ workouts* on. Code: `planner.py` (workouts, estimates, text), `icu.py` (key, syn
   `desktop: true`.
 - **Windows build in CI:** the `windows` job of `addon.yml` runs with the image builds (a new
   version), builds the installer on `windows-latest` and creates the GitHub release
-  `v<version>` with `Trailbook-Setup-<version>.exe` and the changelog section as its notes.
+  `v<version>` with `Trailbook-Setup-<version>.exe` and the changelog section as its notes;
+  the older releases and their tags are deleted (only the newest is kept).
 - **Windows updates, one click** (`update.py`): `GET /api/update` compares this version with
   the newest GitHub release (asked at most once a day, an hour after a failure; `?check=1`
   asks now). A newer one shows a line in the header bar and the Updates card in Settings ›

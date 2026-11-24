@@ -100,7 +100,8 @@ jobs:
             "ghcr.io/md0005/trailbook-aarch64:$VERSION" "ghcr.io/md0005/trailbook-amd64:$VERSION"
 
   # The Windows app: Trailbook.exe and its installer, attached to a GitHub release of the
-  # version with its changelog section. The app offers that release as an update.
+  # version with its changelog section. The app offers that release as an update. Only the
+  # newest release is kept.
   windows:
     needs: [test, version]
     if: needs.version.outputs.build == 'true'
@@ -135,3 +136,7 @@ jobs:
             gh release create "v$VERSION" "$installer" --title "Trailbook $VERSION" \
               --notes-file notes.md --target "$GITHUB_SHA" --latest
           fi
+          # only the newest release is kept: the older ones (and their tags) are deleted
+          gh release list --limit 100 --json tagName --jq '.[].tagName' | while read -r tag; do
+            if [ "$tag" != "v$VERSION" ]; then gh release delete "$tag" --cleanup-tag --yes; fi
+          done
