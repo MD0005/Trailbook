@@ -209,10 +209,10 @@ gzipped (`.gz`); the content decides the parser (`trackfile.kind`), not the name
   row are kept) — e.g. only the years before Garmin. The stored ZIP is then cut down to the
   queued files and `activities.csv` (photos and the activities left out are deleted); with
   nothing to import the upload is deleted. After each import run (`importer.prune_uploads`)
-  the person's own uploads also lose what was not imported: duplicates (copies of activities
-  already there) and skipped files that are no activity (not FIT data such as sleep or
-  monitoring, which stay; errors stay too), files and their rows; a ZIP keeps the rest and its
-  activities.csv, an upload with nothing left is deleted. Garmin downloads and watched-folder
+  the person's own uploads lose their duplicates (copies of activities already there), files
+  and rows; skipped files and errors stay (a later version may read them); a ZIP keeps the rest
+  and its activities.csv, an upload with nothing left is deleted. Strava's TCX files start with
+  spaces before `<?xml`: white space and a BOM are dropped before parsing. Garmin downloads and watched-folder
   copies are never touched. Exports in another language (same columns, headers
   translated) are read by column place; Polish month names and activity types are translated.
 - No time zone in GPX/TCX/CSV: estimated (see `MANUAL.md` › Imported files without a time zone).

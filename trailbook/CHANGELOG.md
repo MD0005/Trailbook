@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.21
+
+### Fixed
+- Add-on page: the logo no longer shows a dark "Trailbook" title that was unreadable on the
+  dark theme; it is now just the icon.
+- Strava import: older activities saved as TCX files (with spaces before the XML header) were
+  skipped as damaged; they import now. Upload the export again to bring them in.
+- Uploads: files that could not be imported are kept (shown in Settings › Imported) instead
+  of being deleted after the import; only copies of activities you already have are deleted.
+
 ## 0.1.20
 
 ### Added

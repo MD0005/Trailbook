@@ -505,17 +505,12 @@ def _trim_zip(path: Path, keep: set[str]) -> None:
 
 
 def prune_uploads(conn: sqlite3.Connection, uploads_dir: Path) -> int:
-    """After an import: drop from the person's own uploads what was not imported - copies of
-    activities already there (duplicate) and files that are no activity at all (skipped, e.g.
-    not a FIT file); FIT data files (sleep, monitoring...) and errors stay. A ZIP keeps the
+    """After an import: drop from the person's own uploads the copies of activities already
+    there (duplicate). Skipped files and errors stay: a later version may read them (Strava's
+    TCX files with spaces before <?xml were once skipped as damaged). A ZIP keeps the
     rest (and its activities.csv); an upload with nothing left is deleted. Garmin downloads and
     watched-folder copies are left alone. Returns the number of files dropped."""
-    data_types = tuple(fitfile.FILE_TYPE_NAMES.values())
-    marks = ",".join("?" * len(data_types))
-    prunable = (
-        "(status = 'duplicate' OR (status = 'skipped'"
-        f" AND COALESCE(skip_reason, '') NOT IN ({marks})))"
-    )
+    prunable = "(status = 'duplicate')"
     uploads = [
         r[0] for r in conn.execute(
             f"""SELECT DISTINCT rel_path FROM files f
@@ -524,7 +519,7 @@ def prune_uploads(conn: sqlite3.Connection, uploads_dir: Path) -> int:
                                   AND n.status = 'new')
                   AND rel_path NOT IN (SELECT file_rel FROM garmin_activities
                                        WHERE file_rel IS NOT NULL)""",
-            (UPLOADS_PREFIX + "%", *data_types),
+            (UPLOADS_PREFIX + "%",),
         )
     ]  # fmt: skip
     dropped = 0
@@ -533,7 +528,7 @@ def prune_uploads(conn: sqlite3.Connection, uploads_dir: Path) -> int:
             continue
         rows = conn.execute(
             f"SELECT id, zip_member, {prunable} AS drop_it FROM files WHERE rel_path = ?",
-            (*data_types, rel),
+            (rel,),
         ).fetchall()
         gone = [r for r in rows if r["drop_it"]]
         keep = {r["zip_member"] for r in rows if not r["drop_it"]}

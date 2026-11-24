@@ -106,9 +106,13 @@ def parse(data: bytes) -> fitfile.ParsedActivity:
 # ---- XML helpers -----------------------------------------------------------------------
 
 
+XML_LEAD = bytes([0xEF, 0xBB, 0xBF, 0x20, 0x09, 0x0D, 0x0A])  # a BOM and white space before <?xml
+
+
 def _root(data: bytes) -> ET.Element:
     try:
-        root = ET.fromstring(data)
+        # Strava's TCX files start with spaces before <?xml (and some files with a BOM)
+        root = ET.fromstring(data.lstrip(XML_LEAD))
     except ET.ParseError as exc:
         raise TrackFileError(f"damaged XML: {exc}") from exc
     for el in root.iter():  # drop namespaces: files use several versions of each schema

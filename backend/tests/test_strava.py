@@ -185,26 +185,30 @@ def park_loop(conn):
     ).fetchall()
 
 
-def test_prune_uploads_keeps_only_imported(conn, tmp_path, monkeypatch):
+def test_prune_uploads_drops_duplicates_only(conn, tmp_path, monkeypatch):
     add_person(conn)
     uploads = tmp_path / "uploads"
     path = strava_zip(uploads / "alice" / "export.zip")
-    # the same export again: everything in it is a duplicate
+    # the same export again: its activities are duplicates; a file that is no track is skipped
     again = strava_zip(uploads / "alice" / "again.zip")
     with zipfile.ZipFile(again, "a") as zf:
-        zf.writestr("activities/9.gpx", b"not a track")  # skipped: no activity
+        zf.writestr("activities/9.gpx", b"not a track")
     importer.register_upload(conn, uploads, "alice", path)
     importer.run_queue(conn, None, uploads_dir=uploads)
     importer.register_upload(conn, uploads, "alice", again)
     importer.run_queue(conn, None, uploads_dir=uploads)
-    dropped = importer.prune_uploads(conn, uploads)
-    assert dropped >= 3
-    assert not again.exists()  # nothing imported from it
+    assert importer.prune_uploads(conn, uploads) == 3
     with zipfile.ZipFile(path) as zf:  # the first one keeps its imported files and the CSV
         assert set(zf.namelist()) == {"activities.csv", "activities/1.gpx.gz", "activities/2.tcx"}
-    rels = {r[0] for r in conn.execute("SELECT rel_path FROM files")}
-    assert rels == {"@uploads/alice/export.zip"}
+    with zipfile.ZipFile(again) as zf:  # the skipped file stays (a later version may read it)
+        assert set(zf.namelist()) == {"activities.csv", "activities/9.gpx"}
     assert importer.prune_uploads(conn, uploads) == 0  # nothing left to drop
+
+
+def test_tcx_with_spaces_before_the_declaration():
+    # Strava's TCX files start with spaces before <?xml
+    p = trackfile.parse(b"          " + tcx())
+    assert p.activity_type == "ride" and p.summary["distance_m"] == 870
 
 
 def test_watch_fit_replaces_strava_copy(conn, tmp_path, monkeypatch):
