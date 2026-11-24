@@ -11,6 +11,7 @@ const MANUAL_TABS = [
   ["effect", "Training effect", svg(`<path d="M3 12h4l3-8 4 16 3-8h4"/>`)],
   ["weather", "Weather help", svg(`<path d="M3 8h10a3 3 0 1 0-3-3M3 12h15a3 3 0 1 1-3 3M3 16h7"/>`)],
   ["fitness", "Fitness", svg(`<path d="M3 20h18"/><path d="M4 16l5-5 4 3 7-7"/><path d="M15 7h5v5"/>`)],
+  ["next", "Next workout", svg(`<path d="M5 12h12"/><path d="M13 7l5 5-5 5"/><path d="M5 5v14"/>`)],
   ["charts", "Activity charts", svg(`<rect x="3" y="4" width="18" height="16" rx="3"/><path d="M7 16v-3M10.5 16v-6M14 16v-4M17.5 16v-7"/>`)],
 ];
 
@@ -19,7 +20,7 @@ async function renderManual(tab) {
   tab = MANUAL_TABS.some(([k]) => k === tab) ? tab : "types";
   MAN_MISSING.clear();
   const sections = tab === "effect" ? manualEffect() : tab === "weather" ? manualWeather() : tab === "fitness" ? manualFitness()
-    : tab === "charts" ? manualCharts() : manualTypes();
+    : tab === "next" ? manualNext() : tab === "charts" ? manualCharts() : manualTypes();
   const cols = sections.length <= 4 ? sections.length : Math.ceil(sections.length / 2);
   view.innerHTML = `${pageHead("Manual", "", switchHtml("tab", MANUAL_TABS.map(([k, l, icon]) => [k, `${icon}<span>${l}</span>`]), tab))}
     <div class="man">
@@ -524,6 +525,73 @@ function manualCharts() {
         ["Heart rate lags", "Short sprints show little: the heart rate rises after the effort."],
         ["Computed on demand", "From the stored streams when the tiles load; nothing is saved."],
       ]),
+    },
+  ];
+}
+
+// Next workout: the panel of Calendar › Next workout. The numbers come from the server
+// (/api/types: next_rules, the values suggest.py decides with).
+function manualNext() {
+  const R = manRules(TYPES?.next_rules);
+  const F = TYPES?.fitness_rules || {};
+  const n = (v) => `${v < 0 ? "−" : v > 0 ? "+" : ""}${num(Math.abs(v))}`; // real minus, sign
+  const pts = (x) => `${num(Math.round(x * 100))} points`;
+  const days = (d) => `${num(d)} days`;
+  const models = Object.entries(R.models || {});
+  const level = (name, color) => `<span class="man-zone"><i style="background:${color}"></i><b>${name}</b></span>`;
+  return [
+    {
+      id: "what", title: "What the panel shows", sum: "Intensity, form, the next session",
+      body: mTiles([
+        ["Where", "Calendar › Next workout, for one person."],
+        ["Intensity", `Time easy, moderate and hard in the last ${days(R.window_days)} and the next ${days(R.plan_days)} planned, against a model.`],
+        ["Form", "Now, and estimated after the planned workouts."],
+        ["Next session", "Rest, easy, long, tempo or intervals, a sport and a length, with the reasons."],
+      ]),
+    },
+    {
+      id: "split", title: "Easy, moderate, hard", sum: "Split by two heart rate thresholds",
+      body: `${mTable(["Level", "Heart rate", "Without thresholds"], [
+          [level("Easy", "#43a047"), "Below the aerobic threshold (LT1)", "Zones 1–2 and below"],
+          [level("Moderate", "#f2c200"), "LT1 to the lactate threshold (LTHR)", "Zones 3–4"],
+          [level("Hard", "#e53935"), "Above LTHR", "Zone 5"],
+        ], ["fit", "fit", "*"])}
+        <p>Every second of the heart rate counts. LTHR is the activity's (the watch's, yours, or ${mPct(F.lthr_share_of_max ?? 0.9)} of HR max); Garmin records no aerobic threshold, so LT1 = ${mPct(R.lt1_share)} of LTHR. Each sport uses its own LTHR. Without a heart rate stream or a threshold: Garmin's time in zones. Activities without heart rate do not count.</p>
+        ${mPanel("Planned workouts")}
+        <p>Each step by its target: heart rate by the middle of its range; pace and heart rate without thresholds by zone 1–2 / 3–4 / 5; power zones 1–2 / 3–4 / 5–7; no target or rest = easy. Today's plan counts only while nothing of its sport is done today.</p>`,
+    },
+    {
+      id: "models", title: "Models", sum: "The share each intensity should have",
+      body: `<p>Pick the model with the Model badge on the panel; it is remembered per person.</p>
+        ${mTable(["Model", "Easy", "Moderate", "Hard"], models.map(([k, t]) => [`<b>${esc(k[0].toUpperCase() + k.slice(1))}</b>`, ...t.map(mPct)]), ["fit", "fit", "fit", "*"])}`,
+    },
+    {
+      id: "rules", title: "The next session", sum: "The first rule that fits",
+      body: `<p>For today, or for tomorrow when something is already done today. Form = fitness − fatigue (<button type="button" class="man-link" data-goto-tab="fitness">Fitness</button>).</p>
+        ${mRows([
+          ["Rest", `Form below ${n(R.rest_form)}.`],
+          ["Easy", `A hard day (at least ${mMin(R.hard_min_s)} hard) yesterday or today and form below ${n(R.fresh_form)}: keep 48 h between hard sessions. Rest with form below ${n(R.tired_form)}.`],
+          ["Long", `No session of ${mMin(R.long_s)} or more in the last ${days(R.window_days)} and none planned.`],
+          ["Intervals", `Hard time short of the model by the most, at least ${pts(R.gap_min)}.`],
+          ["Tempo", `Moderate time short of the model by at least ${pts(R.gap_min)}.`],
+          ["Easy", "Otherwise."],
+        ], ["Session", "When"])}
+        <p>Long, intervals and tempo need form ${n(R.tired_form)} or higher.</p>`,
+    },
+    {
+      id: "sport", title: "Sport and length", sum: `From the last ${days(R.sport_days)}`,
+      body: mTable(["What", "Rule"], [
+        ["<b>Sport</b>", `Of the endurance sports done at least twice in the last ${days(R.sport_days)} (${esc((R.endurance || []).map((g) => groupLabel(g).toLowerCase()).join(", "))}), the one whose share of the time fell most this week, plan included.`],
+        ["<b>Length</b>", `The sport's usual session (median of ${days(R.sport_days)}); long = ${mX(R.long_factor)} that, at least ${mMin(R.long_s)}. Rounded to 5 min.`],
+      ], ["fit", "*"]),
+    },
+    {
+      id: "form", title: "Form and plan notes", sum: "Now, after the plan, what to change",
+      body: mTable(["What", "Rule"], [
+        ["<b>Form now</b>", `From the training done, as on <button type="button" class="man-link" data-goto-tab="fitness">Fitness</button> › Form; planned workouts not counted.`],
+        ["<b>After the plan</b>", "The fitness model run on with the planned workouts' estimated loads, for the day after the last one."],
+        ["<b>Plan note</b>", `An intensity more than ${pts(R.plan_off)} past the model with the plan: the planned workout with the most of it is named, to make easier (or to add hard work when easy is too much).`],
+      ], ["fit", "*"]),
     },
   ];
 }

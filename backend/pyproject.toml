@@ -27,7 +27,7 @@ trailbook = "trailbook.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-trailbook = ["static/*", "static/vendor/*", "static/vendor/fonts/*", "static/icons/*", "static/regions/*"]
+trailbook = ["static/*", "static/vendor/*", "static/vendor/fonts/*", "static/icons/*", "static/ha/*", "static/regions/*"]
 
 [tool.ruff]
 line-length = 100

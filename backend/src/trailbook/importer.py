@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
 import shutil
@@ -22,6 +23,7 @@ TRACK_TOLERANCE_M = 5.0
 # Bump when the tile computation changes; activities are then re-tiled from stored streams.
 TILES_VERSION = 2  # 2: tiles whose corner the line cuts count too
 WATCH_VERSION = 1  # watch thresholds read from the FIT file, see backfill_watch
+METRICS_VERSION = 1  # Garmin's values read from the FIT file, see backfill_metrics
 
 STATUSES = ("new", "imported", "skipped", "duplicate", "error", "missing", "removed")
 
@@ -345,6 +347,37 @@ def backfill_watch(
                        watch_version = ?{", analysis_version = 0" if found else ""}
                 WHERE id = ?""",
             (*(values.get(k) for k in WATCH_FIELDS), WATCH_VERSION, r["id"]),
+        )
+        if progress:
+            progress(i, len(rows))
+    return len(rows)
+
+
+def backfill_metrics(
+    conn: sqlite3.Connection, root: Path | None, uploads_dir: Path | None = None, progress=None
+) -> int:
+    """Garmin's own values of each activity from its FIT file (training effect, training load,
+    recovery time; fitfile.garmin_metrics), once per activity: new ones after their import,
+    older ones the first time. Nothing else of the activity changes."""
+    rows = conn.execute(
+        """SELECT a.id, f.rel_path, f.zip_member FROM activities a
+           LEFT JOIN files f ON f.id = (SELECT MIN(id) FROM files
+                                        WHERE activity_id = a.id AND status = 'imported')
+           WHERE a.metrics_version < ?""",
+        (METRICS_VERSION,),
+    ).fetchall()
+    for i, r in enumerate(rows, start=1):
+        values: dict = {}
+        if r["rel_path"] and not strava.is_manual(r["zip_member"] or ""):
+            try:
+                data = read_file_bytes(root, r["rel_path"], r["zip_member"] or "", uploads_dir)
+                if trackfile.kind(data) == "fit":
+                    values = fitfile.parse_garmin_metrics(data)
+            except Exception:  # missing file or a decoder error: no values
+                values = {}
+        conn.execute(
+            "UPDATE activities SET fit_metrics = ?, metrics_version = ? WHERE id = ?",
+            (json.dumps(values) if values else None, METRICS_VERSION, r["id"]),
         )
         if progress:
             progress(i, len(rows))

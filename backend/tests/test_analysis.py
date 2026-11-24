@@ -151,6 +151,17 @@ def test_training_api(tdb):
         assert f["series"][0]["date"] == "2026-01-05" and f["methods"]["hr"] == 3
         assert f["thresholds"]["hr_max"] == 170 and f["thresholds"]["sources"]["hr_max"] == "auto"
         assert client.get("/api/fitness?person=nobody").status_code == 400
+        assert f["series"][0]["vo2_run"] is None  # no VO2 max from the files yet
+    # VO2 max from the FIT files: each day shows the latest estimate of its sport
+    c.execute("""UPDATE activities SET fit_metrics = '{"vo2max": 55.4}'
+                 WHERE start_time_utc LIKE '2026-01-05%'""")
+    c.execute("""UPDATE activities SET fit_metrics = '{"vo2max": 58.0}' WHERE category = 'ride'""")
+    c.commit()
+    with TestClient(api.create_app(path)) as client:
+        days = {d["date"]: d for d in client.get("/api/fitness?person=anna").json()["series"]}
+        assert days["2026-01-04" if "2026-01-04" in days else "2026-01-05"]["vo2_ride"] is None
+        assert days["2026-01-20"]["vo2_run"] == 55.4 and days["2026-01-20"]["vo2_ride"] is None
+        assert days["2026-02-01"]["vo2_ride"] == 58.0
 
         cal = client.get("/api/calendar?from=2026-01-01&to=2026-01-31&person=anna").json()
         assert [a["day"] for a in cal["activities"]] == ["2026-01-05", "2026-01-06"]

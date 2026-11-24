@@ -43,6 +43,8 @@ LONG_S = planner.LONG_S  # a long session: at least this long
 # Sports a session can be suggested in (the split counts every activity with heart rate).
 ENDURANCE = frozenset({"run", "ride", "swim", "walk", "hike", "winter", "water"})
 PLAN_OFF = 0.10  # the plan pulls an intensity this far past the model: say so
+GAP_MIN = 0.03  # an intensity this far short of the model asks for a session of it
+LONG_FACTOR = 1.5  # a long session: this × the usual one (and at least LONG_S)
 LT1_SHARE = 0.89  # aerobic threshold as a share of the lactate threshold HR (not in Garmin's data)
 
 
@@ -187,12 +189,12 @@ def suggest(
     elif not long_done and not long_planned and (form is None or form >= TIRED_FORM):
         kind = "long"
         reasons.append("No long session in the last 7 days or in the plan.")
-    elif gap[2] >= max(gap[1], 0.03) and (form is None or form >= TIRED_FORM):
+    elif gap[2] >= max(gap[1], GAP_MIN) and (form is None or form >= TIRED_FORM):
         kind = "intervals"
         reasons.append(
             f"Hard time {share[2]:.0%} of the week, the {name.lower()} model asks {target[2]:.0%}."
         )
-    elif gap[1] >= 0.03 and (form is None or form >= TIRED_FORM):
+    elif gap[1] >= GAP_MIN and (form is None or form >= TIRED_FORM):
         kind = "tempo"
         reasons.append(
             f"Moderate time {share[1]:.0%} of the week, "
@@ -216,7 +218,7 @@ def suggest(
     minutes = None
     if kind != "rest":
         base = (usual_s or 3600) / 60
-        minutes = 5 * round((max(LONG_S / 60, base * 1.5) if kind == "long" else base) / 5)
+        minutes = 5 * round((max(LONG_S / 60, base * LONG_FACTOR) if kind == "long" else base) / 5)
 
     # the plan pulls the week away from the model: which planned workout to change
     notes = []

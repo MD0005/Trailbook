@@ -394,6 +394,8 @@ body.fullmap .page-head::after { display: none; } /* the map shows through, noth
                background: var(--surface); border: 1px solid var(--line);
                box-shadow: 0 16px 40px rgba(0,0,0,.18); }
 .badge-panel.wide { width: min(880px, calc(100vw - 32px)); }
+/* Map › Options: as tall as the window allows, so the Heatmap and Explorer tiles sections show under Map */
+.badge-panel:has([data-settings]) { max-height: calc(100dvh - 140px); }
 .badge-panel[hidden] { display: none; }
 .badge-panel select, .badge-panel input[type=text], .badge-panel input:not([type]) { width: 100%; }
 .panel-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 4px 16px; min-width: 420px; }
@@ -669,13 +671,13 @@ tr.filters-row .tpick { min-width: 150px; }
   .cal-wk b { font-size: 13px; color: var(--fg); }
   .cal-wk.off { opacity: 0; }
 }
-.cal-sticky { position: sticky; z-index: 4; background: var(--bg); padding: 8px 11px 2px; margin: -8px -1px 0; }
+.cal-sticky { position: sticky; z-index: 4; background: var(--bg); padding: 14px 11px 2px; margin: -14px -1px 0; }
 /* Summary and the Workouts tray: the plain summary strip of Activities, as wide as the header;
    the summary and the weekday names stay under the header (not on phones), the rest scrolls away */
 .cal-top, .cal-summary { padding: 0 11px; margin: 0 -1px; }
 /* the summary stays under the page header, the weekday names under it (not on phones) */
 @media (min-width: 761px) {
-  .cal-summary { position: sticky; z-index: 4; background: var(--bg); padding-top: 8px; margin-top: -8px; }
+  .cal-summary { position: sticky; z-index: 5; background: var(--bg); padding-top: 14px; margin-top: -14px; }
 }
 .cal-summary .stat-strip, .cal-top .wo-panel { margin: 0 -10px 8px; border-radius: 8px;
   background: var(--surface); border: 1px solid var(--line); box-shadow: none; }
@@ -2089,6 +2091,9 @@ svg.tile-chart { width: 100%; height: 100%; display: block; }
 .yb-xaxis { display: flex; gap: 6px; padding: 4px 7px 0; font-size: 11px; color: var(--muted); }
 .yb-xaxis span { flex: 1 1 0; min-width: 0; text-align: center; transition: opacity .15s; }
 .yb-xtitle { text-align: center; font-size: 11px; color: var(--muted); margin-top: 2px; }
+.yb-card.yb-tight .yb-val { visibility: hidden; }
+.yb-card.yb-tight .yb-col:hover .yb-val, .yb-card.yb-tight .yb-col.pinned .yb-val { visibility: visible; z-index: 2; }
+.yb-xaxis span.yb-skip { visibility: hidden; }
 @media (max-width: 900px) { .year-bars { grid-template-columns: 1fr; } }
 
 /* Statistics › Timeline: half-width cards, two per row */
@@ -2137,3 +2142,64 @@ svg.tile-chart { width: 100%; height: 100%; display: block; }
 
 /* a stat pill among the series pills, at its value (Statistics › Compare years: Max) */
 .chart-tags .chart-tag-stat { cursor: default; }
+
+/* ---- Home Assistant (hacards.js) ---------------------------------------------------- */
+.ha-yaml { background: var(--surface-2); border-radius: 8px; padding: 10px 12px; overflow-x: auto; margin: 0 0 10px;
+           font: 12px/1.45 ui-monospace, "Cascadia Mono", Consolas, monospace; white-space: pre; }
+.ha-msg { white-space: pre-line; font-size: 13px; }
+.ha-bar + .ha-bar { margin-top: 10px; }
+.ha-checks { max-height: 340px; overflow-y: auto; min-width: 200px; }
+.ha-name { width: 100%; }
+.ha-frame { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; max-width: 560px; }
+.ha-frame-map, .ha-frame-calendar { max-width: none; }
+.ha-frame iframe { display: block; width: 100%; height: 300px; border: 0; }
+
+/* the card's page in a Home Assistant card: no header, the card's own surface */
+body.embed { background: var(--surface); }
+body.embed > header { display: none; }
+body.embed main { padding: 12px; max-width: none; }
+body.embed.fullmap main { padding: 0; }
+.embed-map { height: 100vh; }
+body.embed-static .maplibregl-ctrl-bottom-right .maplibregl-ctrl-group { display: none; }
+.embed-msg { padding: 8px 4px; }
+.embed-act { display: flex; flex-direction: column; gap: 10px; }
+.embed-act-map svg { display: block; width: 100%; height: auto; border-radius: 8px; }
+.embed-act-chart svg { display: block; width: 100%; height: 90px; }
+.embed-act .stat-strip { border: 0; padding: 0; background: none; }
+.embed-rec .rec-tile { box-shadow: none; padding: 0; margin: 0; background: none; }
+.embed-cal .cal-card { padding: 0; box-shadow: none; background: none; margin: 0; }
+.embed-cal .wo-tools { display: none; }
+.embed-cal.no-week .cal-heads, .embed-cal.no-week .cal-row { grid-template-columns: repeat(7, minmax(0, 1fr)); }
+.embed-cal.no-week .cal-week, .embed-cal.no-week .cal-heads .cal-head:last-child { display: none; }
+body.embed .maplibregl-ctrl-fullscreen { display: none; }
+@media (max-width: 760px) { .embed-cal .cal-heads { display: none; } } /* a narrow card: one day a row */
+.ha-row { margin-top: 12px; }
+.ha-list { grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); }
+.ha-item.editing { box-shadow: 0 0 0 2px var(--accent), var(--shadow); }
+.ha-mini { height: 170px; overflow: hidden; border: 1px solid var(--line); border-radius: 10px; margin-bottom: 10px; }
+.ha-mini iframe { width: 200%; height: 340px; border: 0; transform: scale(.5); transform-origin: 0 0; pointer-events: none; display: block; }
+.garmin-auto { margin-top: 24px; } /* Garmin Connect › Automatic download, under the people */
+.ha-frame { margin-top: 12px; }
+.ha-frame-detail { max-width: 420px; }
+/* Activity detailed: the activity page without its controls, the route a square on top */
+body.embed-detail .back, body.embed-detail .page-head .badges, body.embed-detail .page-head .switch,
+body.embed-detail .card-head .badges, body.embed .head-filters, body.embed-detail [data-new-tiles], body.embed-detail main > .card:last-child { display: none; }
+body.embed-detail .page-head { position: static; }
+body.embed-detail #route-map { height: auto; aspect-ratio: 1; }
+/* Activity detailed, dense: the map edge to edge on top, small gaps and paddings */
+body.embed-detail main { padding: 0 8px 8px; }
+body.embed-detail .route-wrap { margin: 0 -8px; }
+body.embed-detail #route-map { border-radius: 0; }
+body.embed-detail .page-head { display: none; }
+.ed-head { padding: 8px 2px 8px; }
+.ed-head h2 { display: flex; align-items: center; gap: 6px; margin: 0; font-size: 16px; line-height: 1.25; }
+.ed-date { margin-top: 2px; font-size: 12px; color: var(--muted); }
+body.embed-detail .card { padding: 8px 10px; margin-bottom: 6px; border-radius: 10px; }
+body.embed-detail .act-top, body.embed-detail .charts, body.embed-detail .act-top > div { gap: 6px; }
+body.embed-detail .act-top { margin-bottom: 6px; }
+body.embed-detail .charts .card, body.embed-detail .act-top .card { margin-bottom: 0; }
+body.embed-detail h3, body.embed-detail .tile-title { font-size: 13px; margin-bottom: 4px; }
+body.embed-detail .act-top .card { padding: 6px 10px; }
+body.embed-detail .stat-card b { font-size: 14px; }
+body.embed-detail #route-map { margin-top: 0; }
+.embed-rec { display: grid; grid-template-columns: repeat(var(--rec-n, 1), minmax(0, 1fr)); gap: 14px 18px; align-items: start; }

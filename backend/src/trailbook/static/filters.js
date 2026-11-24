@@ -362,7 +362,7 @@ function bindFilterBadges(root, route, params, { drop = [], allTime = null } = {
     go(v);
   });
   root.querySelectorAll("[data-fclear]").forEach((b) => b.onclick = () => {
-    go({ time: { from: "", to: "", last: "", years: "" }, type: { types: "" }, workout: { workouts: "" } }[b.dataset.fclear]);
+    go({ time: { from: "", to: "", last: allTime || "", years: "" }, type: { types: "" }, workout: { workouts: "" } }[b.dataset.fclear]);
   });
 }
 

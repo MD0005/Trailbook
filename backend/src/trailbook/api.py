@@ -42,6 +42,7 @@ from . import (
     explorer,
     fitfile,
     garmin,
+    hacards,
     homeassistant,
     icu,
     icufiles,
@@ -484,6 +485,23 @@ def create_app(db_path: str | Path) -> Starlette:
                 },
                 # the small charts of Activities › Charts (Manual › Activity charts)
                 "tile_chart_rules": tilechart.RULES,
+                # Calendar › Next workout (Manual › Next workout)
+                "next_rules": {
+                    "models": {k: list(v[1]) for k, v in suggest.MODELS.items()},
+                    "window_days": suggest.WINDOW_DAYS,
+                    "plan_days": suggest.PLAN_DAYS,
+                    "sport_days": suggest.SPORT_DAYS,
+                    "hard_min_s": suggest.HARD_MIN_S,
+                    "rest_form": suggest.REST_FORM,
+                    "tired_form": suggest.TIRED_FORM,
+                    "fresh_form": suggest.FRESH_FORM,
+                    "long_s": suggest.LONG_S,
+                    "plan_off": suggest.PLAN_OFF,
+                    "gap_min": suggest.GAP_MIN,
+                    "long_factor": suggest.LONG_FACTOR,
+                    "lt1_share": suggest.LT1_SHARE,
+                    "endurance": sorted(suggest.ENDURANCE),
+                },
             }
         )
 
@@ -852,6 +870,8 @@ def create_app(db_path: str | Path) -> Starlette:
                 (aid, aid),
             ).fetchone()
             a["connect"] = json.loads(g["summary"]) if g else None
+            # Garmin's values from the FIT file (training effect, load, recovery): the fallback
+            a["fit_metrics"] = json.loads(a["fit_metrics"]) if a.get("fit_metrics") else None
             # Previous / next activity in time, within the activities page filters (from, to,
             # types, workouts; person in the All view): same person, everyone with
             # ?neighbours=all.
@@ -1441,6 +1461,20 @@ def create_app(db_path: str | Path) -> Starlette:
             warnings = analysis.threshold_warnings(
                 c, pid, since or "", until or "", _accepted(c, pid)
             )
+            # VO2 max the watch estimated after each run and ride (FIT file, fit_metrics):
+            # running and cycling have their own; the last one of a day counts
+            day = analysis.LOCAL_DAY_SQL
+            vo2 = {"run": {}, "ride": {}}
+            for r in c.execute(
+                f"""SELECT category, {day} AS day,
+                           json_extract(fit_metrics, '$.vo2max') AS v
+                    FROM activities
+                    WHERE person_id = ? AND category IN ('run', 'ride')
+                      AND json_extract(fit_metrics, '$.vo2max') IS NOT NULL
+                    ORDER BY start_time_utc""",
+                (pid,),
+            ):
+                vo2[r["category"]][r["day"]] = r["v"]
         # Ramp rate: fitness change over the last 7 days (from the whole series, so the
         # first days of a shown range have it too).
         for i, d in enumerate(series):
@@ -1450,6 +1484,16 @@ def create_app(db_path: str | Path) -> Starlette:
             for d in series
             if (not since or d["date"] >= since) and (not until or d["date"] <= until)
         ]
+        # VO2 max on every shown day: the latest estimate up to that day (it stands until the
+        # next activity), None before the first one
+        for g, by_day in vo2.items():
+            known = sorted(by_day.items())
+            k, cur = 0, None
+            for d in series:
+                while k < len(known) and known[k][0] <= d["date"]:
+                    cur = known[k][1]
+                    k += 1
+                d[f"vo2_{g}"] = round(cur, 1) if cur is not None else None
         return JSONResponse(
             {
                 "series": shown,
@@ -1732,6 +1776,55 @@ def create_app(db_path: str | Path) -> Starlette:
     async def ha_records(request: Request):
         with closing(conn()) as c:
             return JSONResponse(records.payload(records.latest(c)))
+
+    # Dashboard cards (hacards.py): made here, shown by the Lovelace card `trailbook-card`.
+    async def ha_setup(request: Request):
+        return JSONResponse(
+            {
+                "addon": homeassistant.available(),
+                "install": hacards.STATUS,
+                "url": hacards.card_url(),
+            }
+        )
+
+    async def ha_cards_list(request: Request):
+        with closing(conn()) as c:
+            return JSONResponse(hacards.list_cards(c))
+
+    async def ha_cards_create(request: Request):
+        body = await request.json()
+        try:
+            with closing(conn()) as c:
+                card = hacards.create_card(
+                    c, body.get("name") or "", body.get("kind") or "", body.get("config", {})
+                )
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return JSONResponse(card, status_code=201)
+
+    async def ha_card_get(request: Request):
+        with closing(conn()) as c:
+            card = hacards.get_card(c, request.path_params["card"])
+        if not card:
+            raise HTTPException(404, "card not found")
+        return JSONResponse(card)
+
+    async def ha_card_put(request: Request):
+        body = await request.json()
+        try:
+            with closing(conn()) as c:
+                card = hacards.update_card(c, request.path_params["card"], body)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        if not card:
+            raise HTTPException(404, "card not found")
+        return JSONResponse(card)
+
+    async def ha_card_delete(request: Request):
+        with closing(conn()) as c:
+            if not hacards.delete_card(c, request.path_params["card"]):
+                raise HTTPException(404, "card not found")
+        return Response(status_code=204)
 
     # ---- segments ----------------------------------------------------------------------
 
@@ -2612,6 +2705,12 @@ def create_app(db_path: str | Path) -> Starlette:
         Route("/api/suggest", suggest_next),
         Route("/api/stats/records", stats_records),
         Route("/api/ha/records", ha_records),
+        Route("/api/ha/setup", ha_setup),
+        Route("/api/ha/cards", ha_cards_list),
+        Route("/api/ha/cards", ha_cards_create, methods=["POST"]),
+        Route("/api/ha/cards/{card}", ha_card_get),
+        Route("/api/ha/cards/{card}", ha_card_put, methods=["PUT"]),
+        Route("/api/ha/cards/{card}", ha_card_delete, methods=["DELETE"]),
         Route("/api/workouts", workouts_list),
         Route("/api/workouts", workout_create, methods=["POST"]),
         Route("/api/workouts/order", workouts_order, methods=["PUT"]),
@@ -2831,6 +2930,8 @@ def create_app(db_path: str | Path) -> Starlette:
             if homeassistant.available()
             else None
         )
+        if homeassistant.available():  # the dashboard card: file and resource up to date
+            asyncio.create_task(run_in_threadpool(hacards.install), name="trailbook-ha-card")
         yield
         surface_task.cancel()
         weather_task.cancel()

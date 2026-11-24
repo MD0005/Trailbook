@@ -528,6 +528,45 @@ def parse_watch_thresholds(data: bytes) -> dict[str, float | None]:
     return watch_thresholds(messages)
 
 
+# ---- Garmin's own values of an activity --------------------------------------------------
+
+# Garmin's training effect and training load are in the session (the same values Garmin Connect
+# shows); the recovery time is in Garmin's undocumented message 140, field 9, in minutes - what
+# the watch showed after the activity, earlier training included.
+GARMIN_METRICS_MESG = "140"
+RECOVERY_FIELD = 9
+RECOVERY_MAX_MIN = 7 * 24 * 60  # anything longer is not a recovery time
+# VO2 max after the activity, same message, field 7: ml/kg/min = value * 3,5 / 65536 (0 when
+# the watch did not estimate it, e.g. team sports)
+VO2MAX_FIELD = 7
+VO2MAX_RANGE = (10, 95)
+
+
+def garmin_metrics(messages: dict) -> dict[str, float]:
+    """{te_aerobic, te_anaerobic, load, recovery_min, vo2max} of a decoded activity file (only
+    those it has)."""
+    s = (messages.get("session_mesgs") or [{}])[0]
+    m = (messages.get(GARMIN_METRICS_MESG) or messages.get(140) or [{}])[0]
+    out = {"te_aerobic": s.get("total_training_effect"),
+           "te_anaerobic": s.get("total_anaerobic_training_effect"),
+           "load": s.get("training_load_peak")}  # fmt: skip
+    rec = m.get(RECOVERY_FIELD)
+    if isinstance(rec, int | float) and 0 <= rec <= RECOVERY_MAX_MIN:
+        out["recovery_min"] = rec
+    raw = m.get(VO2MAX_FIELD)
+    if isinstance(raw, int | float) and VO2MAX_RANGE[0] <= raw * 3.5 / 65536 <= VO2MAX_RANGE[1]:
+        out["vo2max"] = raw * 3.5 / 65536
+    return {k: round(float(v), 1) for k, v in out.items() if isinstance(v, int | float)}
+
+
+def parse_garmin_metrics(data: bytes) -> dict[str, float]:
+    messages, _errors = Decoder(Stream.from_byte_array(bytearray(data))).read(
+        apply_scale_and_offset=True, convert_types_to_strings=True, expand_components=False,
+        merge_heart_rates=False,
+    )  # fmt: skip
+    return garmin_metrics(messages)
+
+
 # ---- daily monitoring (steps, floors, stress) ---------------------------------------------
 
 # Undocumented fields of the `monitoring` message (Forerunner 965 and similar): the ascent and

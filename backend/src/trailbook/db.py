@@ -635,6 +635,25 @@ MIGRATIONS: list[str] = [
     """
     UPDATE activities SET analysis_version = 0 WHERE category IN ('walk', 'hike');
     """,
+    # v42 — Home Assistant dashboard cards made in Home Assistant › Cards (hacards.py): the
+    # dashboard names a card by its id, the look and the data come from `config` (JSON).
+    """
+    CREATE TABLE ha_cards (
+        id          TEXT PRIMARY KEY,
+        name        TEXT NOT NULL,
+        kind        TEXT NOT NULL,
+        config      TEXT NOT NULL,
+        position    INTEGER NOT NULL DEFAULT 0,
+        created_at  TEXT NOT NULL,
+        updated_at  TEXT NOT NULL
+    );
+    """,
+    # v43 — Garmin's own values of an activity read from its FIT file (training effect, training
+    # load, recovery time; importer.backfill_metrics): shown when Garmin Connect has none.
+    """
+    ALTER TABLE activities ADD COLUMN fit_metrics TEXT;
+    ALTER TABLE activities ADD COLUMN metrics_version INTEGER NOT NULL DEFAULT 0;
+    """,
 ]
 
 SCHEMA_VERSION = len(MIGRATIONS)

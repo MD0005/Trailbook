@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.1.22
+
+### Added
+- Home Assistant dashboard cards made in Trailbook (Home Assistant › Cards); a change shows on
+  the dashboard without editing YAML.
+- Fitness: a VO2 max chart under Form, running and cycling.
+- Activity page: VO2 max and recovery time from the watch.
+- Manual: how Next workout decides.
+
+### Changed
+- Activity page: training effect and Garmin's load also for activities imported from files
+  (read from the FIT file when Garmin Connect has none).
+- Calendar: the Workouts button is called Plan workouts.
+- Map › Options: taller, so all three sections show.
+
+### Fixed
+- Calendar: nothing flickers any more between the pinned summary and the page header.
+- Clearing the Time filter goes back to the page's usual period.
+
 ## 0.1.21
 
 ### Fixed

@@ -145,15 +145,17 @@ function stepTarget(key, kind, dir, typed = null) {
   return T;
 }
 
-async function renderCalendar(params) {
-  const mode = params.view === "year" ? "year" : "month";
+// `embed` (a Home Assistant card, hacards.js): only `weeks` weeks up to this one (and the next
+// with `ahead`), without the page's header, panels and loading more.
+async function renderCalendar(params, embed = null) {
+  const mode = params.view === "year" && !embed ? "year" : "month";
   if (mode === "year") return renderCalendarYear(params);
   const today = todayIso();
   // always one whole week ahead, and one after the last planned workout
-  let newest = addDays(mondayOf(today), 7);
+  let newest = addDays(mondayOf(today), embed && !embed.ahead ? 0 : 7);
   const first = TIME_RANGE.first && TIME_RANGE.first < today ? TIME_RANGE.first : today;
-  const oldest = mondayOf(first);
-  const target = /^\d{4}-\d{2}-\d{2}$/.test(params.date || "") ? params.date : null;
+  const oldest = embed ? addDays(mondayOf(today), -7 * (embed.weeks - 1)) : mondayOf(first);
+  const target = /^\d{4}-\d{2}-\d{2}$/.test(params.date || "") && !embed ? params.date : null;
   const anchor = target ? mondayOf(target < first ? first : target > today ? today : target) : null;
   let top = anchor ? [addDays(anchor, 14), newest].sort()[0] : newest;
   let bottom = [anchor ? addDays(anchor, -21) : addDays(newest, -7 * (CAL_BATCH - 1)), oldest].sort().reverse()[0];
@@ -162,7 +164,7 @@ async function renderCalendar(params) {
 
   const fetchWeeks = (a, b) => api("calendar?" + new URLSearchParams({ from: a, to: addDays(b, 6), chart: "1", planned: "1", ...personParam() }));
   const [data, fc] = await Promise.all([fetchWeeks(bottom, top), calForecast()]);
-  if (data.last_planned && addDays(mondayOf(data.last_planned), 7) > newest) {
+  if (!embed && data.last_planned && addDays(mondayOf(data.last_planned), 7) > newest) {
     const later = addDays(mondayOf(data.last_planned), 7);
     if (!anchor) {
       const more = await fetchWeeks(addDays(top, 7), later);
@@ -335,12 +337,17 @@ async function renderCalendar(params) {
     return out.join("");
   };
 
+  if (embed) {
+    view.innerHTML = `<div class="embed-cal${embed.summary ? "" : " no-week"}"><div class="cal-heads">${WEEKDAYS.map((w) => `<div class="cal-head">${w}</div>`).join("")}<div class="cal-head"></div></div>
+      <div class="cal-card"><div class="cal-weeks" data-weeks>${rowsHtml(bottom, top, data)}</div></div></div>`;
+    return;
+  }
   const showSummary = TAB.kpis ?? false;
   const single = !isAll && CURRENT;
   const showTray = single && (TAB.workouts ?? false);
   const showNext = single && (TAB.next ?? false);
   const sw = switchHtml("calview", [["month", `${ICON_CAL_MONTH}<span>Weeks</span>`], ["year", `${ICON_CAL_YEAR}<span>Year</span>`]], mode);
-  view.innerHTML = `${pageHead("Calendar", `${gotoBadge(target)}${single ? `${badgeHtml("ctargets", "Targets", "", { panel: `<div class="opt-panel targets-panel" data-targets></div>` })}<button class="badge ${showTray ? "on" : ""}" data-cworkouts>Workouts</button><button class="badge ${showNext ? "on" : ""}" data-cnext-toggle>Next workout</button>` : ""}<button class="badge ${showSummary ? "on" : ""}" data-ckpis>Summary</button>`, sw)}
+  view.innerHTML = `${pageHead("Calendar", `${gotoBadge(target)}${single ? `${badgeHtml("ctargets", "Targets", "", { panel: `<div class="opt-panel targets-panel" data-targets></div>` })}<button class="badge ${showTray ? "on" : ""}" data-cworkouts>Plan workouts</button><button class="badge ${showNext ? "on" : ""}" data-cnext-toggle>Next workout</button>` : ""}<button class="badge ${showSummary ? "on" : ""}" data-ckpis>Summary</button>`, sw)}
     <div class="cal-summary" data-csummary ${showSummary ? "" : "hidden"}></div>
     <div class="cal-top">
       <div data-cnext ${showNext ? "" : "hidden"}></div>
@@ -370,10 +377,13 @@ async function renderCalendar(params) {
   const sticky = view.querySelector("[data-csticky]"), weeks = view.querySelector("[data-weeks]");
   const head = view.querySelector(".page-head"), sumBox = view.querySelector("[data-csummary]");
   const placeSticky = () => {
-    const top = parseFloat(getComputedStyle(head).top) + head.offsetHeight + 6;
+    // right under the page header: their own background (padding) fills the space, so nothing
+    // scrolling shows between them
+    const top = parseFloat(getComputedStyle(head).top) + head.getBoundingClientRect().height;
     sumBox.style.top = `${top}px`;
     const stuck = !sumBox.hidden && getComputedStyle(sumBox).position === "sticky";
-    sticky.style.top = `${top + (stuck ? sumBox.offsetHeight : 0)}px`;
+    sticky.style.top = `${top + (stuck ? sumBox.getBoundingClientRect().height - 1 : 0)}px`; // 1 px overlap: no hairline
+    sticky.style.paddingTop = stuck ? "9px" : ""; // under the summary: the usual 8 px gap (1 px overlapped)
   };
   placeSticky();
   let month = null;
@@ -681,7 +691,10 @@ async function renderCalendarYear(params) {
 // Sections of the Fitness page, each shown or hidden by its toggle in the header.
 const ICON_FITNESS = svg(`<path d="M3 20h18"/><path d="M4 16l5-5 4 3 7-7"/><path d="M15 7h5v5"/>`);
 const ICON_FORM = svg(`<path d="M4 18a8 8 0 1 1 16 0"/><path d="M12 18l4-5"/><circle cx="12" cy="18" r="1"/>`);
-const FITNESS_SECTIONS = [["fitness", "Fitness", ICON_FITNESS], ["form", "Form", ICON_FORM]];
+const ICON_VO2 = svg(`<path d="M12 4v7"/><path d="M12 11c-1.5 0-2.5 1-4 1.5S4 14 4 17.5 6 21 8 21s4-1.5 4-5"/><path d="M12 11c1.5 0 2.5 1 4 1.5s4 1.5 4 5-2 3.5-4 3.5-4-1.5-4-5"/>`);
+const FITNESS_SECTIONS = [["fitness", "Fitness", ICON_FITNESS], ["form", "Form", ICON_FORM], ["vo2max", "VO2 max", ICON_VO2]];
+// VO2 max lines (pastel, docs/CHARTS.md): running and cycling, each the watch's own estimate
+const VO2_COLORS = { run: "#e0a36f", ride: "#6fb3a4" };
 // Pastel zone colours (docs/CHARTS.md): the form line, its bands and the summary use them.
 const FORM_ZONES = [
   [25, Infinity, "Detraining", "#9aa3b5"],
@@ -703,10 +716,13 @@ const COLORS = { ctl: "#6f8fbf", atl: "#e08aa3", neutral: "#7c8494" }; // muted 
 const zonesOf = (zones) => zones.map(([lo, hi, label, color]) => ({ lo, hi, label, color }));
 let FITNESS_CHARTS = null; // chart group of the page (destroyed on the next render)
 
+// Sections shown (kept in this browser); a section added later is shown until switched off.
 function fitnessShown() {
   const raw = store.get("fitness-sections");
   const keys = FITNESS_SECTIONS.map(([k]) => k);
-  return new Set(raw == null ? keys : raw.split(",").filter((k) => keys.includes(k)));
+  if (raw == null) return new Set(keys);
+  const known = (store.get("fitness-sections-known") || "fitness,form").split(",");
+  return new Set([...raw.split(",").filter((k) => keys.includes(k)), ...keys.filter((k) => !known.includes(k))]);
 }
 
 // Fitness › Options, saved per person on the server (like the Map options).
@@ -825,7 +841,28 @@ function fitnessSeries(s, { marks = [], opt = FITNESS_OPTIONS } = {}) {
       values: tsb, zones: zonesOf(FORM_ZONES), bands: opt.zones !== "off", yMin: -40, yMax: 30, ySplits: [-40, -30, -10, 5, 25],
       tip: "Yesterday's fitness minus fatigue: higher = fresher, lower = more tired. Training builds fitness in the optimal zone below the grey zone.",
       tags: [tag("Form", tsb, last, zc(FORM_ZONES, tsb[last])), tag("Freshest", tsb, fresh, zc(FORM_ZONES, tsb[fresh])), tag("Most tired", tsb, tired, zc(FORM_ZONES, tsb[tired]))] },
+    ...vo2Series(s, tag),
   ];
+}
+
+// VO2 max: the watch's estimate after each run and ride (running and cycling apart), standing
+// until the next one; the same height as Form. Only the sports that have one.
+function vo2Series(s, tag) {
+  const last = s.length - 1;
+  const sports = [["run", "Running"], ["ride", "Cycling"]]
+    .map(([g, label]) => ({ g, label, values: s.map((d) => d[`vo2_${g}`] ?? null), color: VO2_COLORS[g] }))
+    .filter((x) => x.values.some((v) => v != null));
+  if (!sports.length) return [];
+  const [main, ...rest] = sports;
+  const top = (v) => v.reduce((b, x, i) => (x != null && (b < 0 || x > v[b]) ? i : b), -1);
+  return [{ key: "vo2max", label: main.label, title: "VO2 max", yTitle: "VO2 max (ml/kg/min)", unit: "", dec: 0, height: 259,
+    color: main.color, iconHtml: ICON_VO2, values: main.values, fill: false,
+    lines: rest.map((x) => ({ label: x.label, color: x.color, values: x.values })),
+    tip: "VO2 max the watch estimated after each run and ride (running and cycling have their own), until the next estimate.",
+    tags: sports.flatMap((x) => [
+      ...(x.values[last] != null ? [tag(x.label, x.values, last, x.color, 0, false)] : []),
+      ...(top(x.values) >= 0 && top(x.values) !== last ? [tag(`Max ${x.label.toLowerCase()}`, x.values, top(x.values), x.color, 0, false, `Highest in this period: ${s[top(x.values)].date}`)] : []),
+    ]) }];
 }
 
 // Activity icons under the fitness chart. Tooltip: the days, then one line per sport (count and
@@ -906,6 +943,7 @@ function bindFitnessHead(params, onToggle = () => {}) {
     b.setAttribute("aria-pressed", on);
     const keys = [...head.querySelectorAll("[data-fsec].on")].map((x) => x.dataset.fsec);
     store.set("fitness-sections", keys.join(","));
+    store.set("fitness-sections-known", FITNESS_SECTIONS.map(([k]) => k).join(","));
     onToggle(b.dataset.fsec, on);
   });
 }
@@ -934,13 +972,22 @@ const parsePace = (txt) => {
 // ---- Statistics -------------------------------------------------------------------------
 // Three views (docs/SPEC.md › Statistics): Compare years (each year one series over its weeks or
 // months; every metric as a chart and its running total, one under the other), Timeline (the whole
-// period on one axis) and Records. Header: Time, Type and X-axis. Each view opens on its own
-// period, fixed (`STAT_TIME`; All time is `last=all`): all time in every view. X-axis: Compare years Mixed (each period chart by month,
-// each running total by week) | Weeks | Months; Timeline Weeks | Months | Years. Kept while on the tab.
+// period on one axis) and Records. Header: Time, Type and X-axis. Compare years and Timeline open
+// on the last STAT_YEARS years (all time with fewer years of data; All time is `last=all`) and
+// share Time, Type and X-axis while on the tab (`TAB.statFilter`, `TAB.statsX`). Records opens on
+// all time. X-axis: Compare years Mixed (each period chart by month, each running total by week) |
+// Weeks | Months; Timeline Weeks | Months | Years (a choice the other view lacks: its first one).
 
 const STAT_X = [["week", "Weeks"], ["month", "Months"], ["year", "Years"]];
 const STAT_X_YEARS = [["mixed", "Mixed"], ["week", "Weeks"], ["month", "Months"]];
-const STAT_TIME = { years: null, timeline: null, records: null };
+const STAT_YEARS = 7;
+const TIME_KEYS = ["from", "to", "last", "years"];
+// The default period of Compare years and Timeline: the last STAT_YEARS calendar years.
+function statDefaultTime() {
+  if ((TIME_RANGE.years || []).length <= STAT_YEARS) return {};
+  const now = +todayDay().slice(0, 4);
+  return { years: [...Array(STAT_YEARS)].map((_, k) => String(now - STAT_YEARS + 1 + k)).join(",") };
+}
 const RECORD_LABELS = {
   pace: { 400: "400 m", 1000: "1 km", 1609.344: "1 mile", 5000: "5 km", 10000: "10 km", 21097.5: "Half marathon", 42195: "Marathon" },
   power: { 5: "5 s", 15: "15 s", 30: "30 s", 60: "1 min", 300: "5 min", 600: "10 min", 1200: "20 min", 3600: "60 min" },
@@ -961,29 +1008,34 @@ let STAT_CHARTS = []; // chart groups of the page (destroyed on the next draw)
 
 async function renderStats(params) {
   const tab = ["timeline", "records"].includes(params.tab) ? params.tab : "years";
-  if (STAT_TIME[tab] && !timeActive(params)) params = { ...params, last: STAT_TIME[tab] };
+  if (tab !== "records") {
+    // entering without a period: the one last used on Compare years / Timeline, else the default
+    if (!timeActive(params)) params = { ...params, ...(TAB.statFilter || { ...statDefaultTime(), types: params.types || "" }) };
+    const pick = (keys) => Object.fromEntries(keys.filter((k) => params[k]).map((k) => [k, params[k]]));
+    TAB.statFilter = { ...pick(TIME_KEYS), types: params.types || "" };
+  }
   const sw = switchHtml("stab", [["years", `${ICON_YEARS}<span>Compare years</span>`], ["timeline", `${ICON_TIMELINE}<span>Timeline</span>`],
     ["records", `${ICON_RECORDS}<span>Records</span>`]], tab);
   if (tab === "records") await renderRecords(params, sw);
   else if (tab === "timeline") await renderTimeline(params, sw);
   else await renderStatCharts(params, sw, tab);
-  // another view opens on its own period; the Type filter stays
+  // Compare years and Timeline share their filters (TAB.statFilter); Records opens on all time
   view.querySelectorAll("[data-switch=stab]").forEach((b) => b.onclick = () => {
-    const { types } = filterQuery(params);
-    location.hash = "#/stats?" + new URLSearchParams({ ...(types ? { types } : {}), tab: b.dataset.value });
+    const keep = b.dataset.value === "records" ? {} : Object.fromEntries(Object.entries(TAB.statFilter || {}).filter(([, v]) => v));
+    location.hash = "#/stats?" + new URLSearchParams({ ...keep, tab: b.dataset.value });
   });
 }
 
 async function renderStatCharts(params, sw, tab) {
   const choices = tab === "years" ? STAT_X_YEARS : STAT_X;
-  const keep = `statsX-${tab}`;
+  const keep = "statsX"; // shared with Timeline
   let x = choices.some(([k]) => k === TAB[keep]) ? TAB[keep] : choices[0][0]; // kept while on the tab
   const xBadge = badgeHtml("stat-x", "X-axis", choices.find(([k]) => k === x)[1], { panel: `<div class="opt-panel">${pickList("stat-x", choices, x)}</div>` });
   view.innerHTML = `${pageHead("Statistics", timeBadge(params) + typeBadge(params) + xBadge, sw)}
     <div class="charts" data-scharts><div class="page-loader">${loaderHtml()}</div></div>`;
   const head = view.querySelector(".page-head");
   bindBadges(head);
-  bindFilterBadges(head, "#/stats", { ...params, tab }, { allTime: STAT_TIME[tab] ? "all" : null });
+  bindFilterBadges(head, "#/stats", { ...params, tab }, { allTime: "all" });
   const box = view.querySelector("[data-scharts]");
   const draw = async () => {
     // Mixed: the period charts by month, the running totals by week - each chart its own group
@@ -1059,7 +1111,7 @@ function yearBars(el, { years, parts }) {
         const v = val(y, p);
         return v ? `<i style="height:${pct(v)};background:color-mix(in srgb, ${color(y)} ${shade}%, var(--surface))" data-tip="${esc(`${y} · ${label}: ${fmt(v)} (${num((v / tot) * 100, 0)} %)`)}"></i>` : "";
       }).join("");
-      return `<div class="yb-col" data-year="${y}"><div class="yb-bar">${segs}<span class="yb-val" style="bottom:${pct(tot)}">${fmt(tot)}</span></div></div>`;
+      return `<div class="yb-col" data-year="${y}"><div class="yb-bar">${segs}<span class="yb-val" style="bottom:${pct(tot)}">${num(tot, 0)}</span></div></div>`;
     }).join("");
     const years = chrono.map((y) => `<span data-year="${y}">${y}</span>`).join("");
     return `<div class="card yb-card"><h3 class="chart-title">${metricIcon(icon, 18)}<span>${title} per year</span></h3>
@@ -1081,6 +1133,23 @@ function yearBars(el, { years, parts }) {
   });
   if (!years.includes(YEAR_PINNED)) YEAR_PINNED = null;
   mark(null);
+  fitYearBars(el);
+  const ro = new ResizeObserver(() => (el.isConnected ? fitYearBars(el) : ro.disconnect()));
+  ro.observe(el);
+}
+// Narrow columns: the totals show only on the hovered or clicked year, and the x axis labels
+// every k-th year (counted from the newest, so the latest year always has its label).
+function fitYearBars(el) {
+  el.querySelectorAll(".yb-card").forEach((card) => {
+    const cols = card.querySelectorAll(".yb-col"), labels = card.querySelectorAll(".yb-xaxis span");
+    if (!cols.length) return;
+    const pitch = card.querySelector(".yb-plot").clientWidth / cols.length;
+    card.classList.remove("yb-tight");
+    const widest = Math.max(...[...card.querySelectorAll(".yb-val")].map((v) => v.offsetWidth));
+    card.classList.toggle("yb-tight", widest > pitch - 4);
+    const step = Math.max(1, Math.ceil(34 / pitch)); // a year label needs about 34 px
+    labels.forEach((s, i) => s.classList.toggle("yb-skip", (labels.length - 1 - i) % step !== 0));
+  });
 }
 
 // The days the filter covers: [first, last] (the first activity … today without one).
@@ -1170,17 +1239,10 @@ const distShort = (m) => (m === 1609.344 ? "1mi" : m === 21097.5 ? "HM" : m === 
 const distFull = (m) => REC_DIST[m] || km(m);
 const REC_MAIN = "#86aef5", REC_POWER = "#b9a2f2";
 
-async function renderRecords(params, sw) {
-  view.innerHTML = `${pageHead("Statistics", timeBadge(params), sw)}<div class="page-loader">${loaderHtml()}</div>`;
-  const head = view.querySelector(".page-head");
-  bindBadges(head);
-  bindFilterBadges(head, "#/stats", { ...params, tab: "records" }, { allTime: "all" });
-  const tq = Object.fromEntries(Object.entries(filterQuery(params)).filter(([k]) => ["from", "to", "last", "years"].includes(k)));
-  const data = await api("stats/records?" + new URLSearchParams({ person: CURRENT, ...tq }));
+// The records tables of one person (GET stats/records): a tile per sport, as Statistics › Records
+// and the Home Assistant records card show them.
+function recordTiles(data, rangeLabel) {
   const filtered = data.filtered;
-  const rangeLabel = timeLabel(params);
-  RECORD_CHARTS.forEach((c) => c?.destroy());
-  RECORD_CHARTS = [];
   const find = (list, kind, v = 0) => list.filter((e) => e.kind === kind && e.v === v).sort((p, q) => p.key - q.key);
   const run = data.run || [], ride = data.ride || [], walk = data.walk || [];
   // one result: the value and its pace or speed (the time of the longest); the activity and the
@@ -1220,24 +1282,41 @@ async function renderRecords(params, sw) {
   // a table tile's title: the sport, then the laurel and BEST EFFORTS
   const be = (what) => `${what}</span>${LAUREL_SVG}<span class="rec-be">Best efforts`;
   const tile = (icon, title, body, cls = "", tip = "") => `<div class="card act-tile rec-tile ${cls}"><h3 class="tile-title"${tip ? ` data-tip="${tip}"` : ""}>${icon}<span>${title}</span></h3>${body}</div>`;
-  const curveTile = (key, title, icon) => tile(metricIcon(icon, 18), title, `<div class="curve-box" data-rec-curve="${key}"></div>`, "rec-curve-tile");
   const runRows = [...find(run, "pace"), ...find(run, "longest"), ...find(run, "within"), ...find(run, "ascent"), ...find(run, "climb"), ...find(run, "grade")];
   const outRows = [...find(ride, "ride"), ...find(ride, "longest"), ...find(ride, "within"), ...find(ride, "speed"), ...find(ride, "ascent"), ...find(ride, "climb"), ...find(ride, "grade")];
   const inRows = [...find(ride, "ride", 1), ...find(ride, "longest", 1), ...find(ride, "within", 1), ...find(ride, "speed", 1), ...find(ride, "ascent", 1), ...find(ride, "climb", 1), ...find(ride, "grade", 1)];
   const walkRows = [...find(walk, "longest"), ...find(walk, "steps"), ...find(walk, "ascent"), ...find(walk, "climb"), ...find(walk, "grade")];
   const powAll = find(ride, "power"), powRows = powAll.filter((e) => REC_POWER_ROWS.includes(e.key));
   const segRows = data.segments || [];
+  return { filtered, find, tile, run, ride, powAll, parts: {
+    run: runRows.length ? tile(typeIcon("run"), be("Running"), table(runRows)) : "",
+    power: powRows.length ? tile(metricIcon("power", 18), be("Cycling power"), table(powRows), "", "Power of every ride, outdoor and indoor") : "",
+    ride: outRows.length ? tile(typeIcon("ride"), be("Cycling"), table(outRows), "", "Outdoor rides") : "",
+    virtual: inRows.length ? tile(typeIcon("virtual_ride"), be("Cycling virtual"), table(inRows), "", "Virtual and indoor rides: a trainer's distance and speed are records of their own") : "",
+    walk: walkRows.length ? tile(typeIcon("walk"), be("Walking & hiking"), table(walkRows), "rec-side-tile", "Walks and hikes together: distance, steps and climbing, no speeds") : "",
+    segments: segRows.length ? tile(metricIcon("route", 18), be("Segment"), table(segRows), "rec-seg-tile", "Every segment you have an effort on: the fastest times") : "",
+  } };
+}
+
+async function renderRecords(params, sw) {
+  view.innerHTML = `${pageHead("Statistics", timeBadge(params), sw)}<div class="page-loader">${loaderHtml()}</div>`;
+  const head = view.querySelector(".page-head");
+  bindBadges(head);
+  bindFilterBadges(head, "#/stats", { ...params, tab: "records" }, { allTime: "all" });
+  const tq = Object.fromEntries(Object.entries(filterQuery(params)).filter(([k]) => ["from", "to", "last", "years"].includes(k)));
+  const data = await api("stats/records?" + new URLSearchParams({ person: CURRENT, ...tq }));
+  const rangeLabel = timeLabel(params);
+  RECORD_CHARTS.forEach((c) => c?.destroy());
+  RECORD_CHARTS = [];
+  const { filtered, find, tile, run, ride, powAll, parts: P } = recordTiles(data, rangeLabel);
+  const curveTile = (key, title, icon) => tile(metricIcon(icon, 18), title, `<div class="curve-box" data-rec-curve="${key}"></div>`, "rec-curve-tile");
   const pair = (left, right) => `${left}${right || "<div></div>"}`;
   const tiles = [
-    runRows.length && pair(tile(typeIcon("run"), be("Running"), table(runRows)),
-      find(run, "pace").length > 1 && curveTile("run", "Running speed curve", "speed")),
-    powRows.length && pair(tile(metricIcon("power", 18), be("Cycling power"), table(powRows), "", "Power of every ride, outdoor and indoor"),
-      powAll.length > 1 && curveTile("power", "Power curve", "power")),
-    outRows.length && pair(tile(typeIcon("ride"), be("Cycling"), table(outRows), "", "Outdoor rides"),
-      find(ride, "ride").length > 1 && curveTile("ride", "Cycling speed curve", "speed")),
-    (inRows.length || walkRows.length) && pair(inRows.length ? tile(typeIcon("virtual_ride"), be("Cycling virtual"), table(inRows), "", "Virtual and indoor rides: a trainer's distance and speed are records of their own") : "<div></div>",
-      walkRows.length && tile(typeIcon("walk"), be("Walking & hiking"), table(walkRows), "rec-side-tile", "Walks and hikes together: distance, steps and climbing, no speeds")),
-    segRows.length && pair(tile(metricIcon("route", 18), be("Segment"), table(segRows), "rec-seg-tile", "Every segment you have an effort on: the fastest times")),
+    P.run && pair(P.run, find(run, "pace").length > 1 && curveTile("run", "Running speed curve", "speed")),
+    P.power && pair(P.power, powAll.length > 1 && curveTile("power", "Power curve", "power")),
+    P.ride && pair(P.ride, find(ride, "ride").length > 1 && curveTile("ride", "Cycling speed curve", "speed")),
+    (P.virtual || P.walk) && pair(P.virtual || "<div></div>", P.walk),
+    P.segments && pair(P.segments),
   ].filter(Boolean);
   view.querySelector(".page-loader")?.remove();
   view.insertAdjacentHTML("beforeend", tiles.length ? `<div class="rec-page">${tiles.join("")}</div>` : `<div class="card">${hint("No runs or rides with records yet.")}</div>`);
@@ -1432,12 +1511,12 @@ const EARTH_KM = 40075, MOON_KM = 384400;
 
 async function renderTimeline(params, sw) {
   const choices = STAT_X;
-  let x = choices.some(([k]) => k === TAB["statsX-timeline"]) ? TAB["statsX-timeline"] : choices[0][0];
+  let x = choices.some(([k]) => k === TAB.statsX) ? TAB.statsX : choices[0][0];
   const xBadge = badgeHtml("stat-x", "X-axis", choices.find(([k]) => k === x)[1], { panel: `<div class="opt-panel">${pickList("stat-x", choices, x)}</div>` });
   view.innerHTML = `${pageHead("Statistics", timeBadge(params) + typeBadge(params) + xBadge, sw)}<div data-tl><div class="page-loader">${loaderHtml()}</div></div>`;
   const head = view.querySelector(".page-head");
   bindBadges(head);
-  bindFilterBadges(head, "#/stats", { ...params, tab: "timeline" }, {});
+  bindFilterBadges(head, "#/stats", { ...params, tab: "timeline" }, { allTime: "all" });
   const box = view.querySelector("[data-tl]");
   const [lo, hi] = statWindow(params);
   const data = await api("stats/activities?" + new URLSearchParams({ person: CURRENT, steps_from: lo, steps_to: hi, ...filterQuery(params) }));
@@ -1477,7 +1556,7 @@ async function renderTimeline(params, sw) {
   const drawTiles = () => tlTiles(tiles, params, x);
   head.querySelectorAll('[data-pick="stat-x"]').forEach((b) => b.onclick = () => {
     head.querySelectorAll('[data-pick="stat-x"]').forEach((o) => { o.classList.toggle("on", o === b); o.setAttribute("aria-checked", o === b); });
-    x = TAB["statsX-timeline"] = b.dataset.value;
+    x = TAB.statsX = b.dataset.value;
     head.querySelector('[data-badge-value="stat-x"]').textContent = choices.find(([k]) => k === x)[1];
     document.onclick?.();
     drawTiles();

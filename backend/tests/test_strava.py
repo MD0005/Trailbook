@@ -311,3 +311,34 @@ def test_eu_summer():
     assert importer.eu_summer(datetime(2024, 3, 31, 0, 59, tzinfo=UTC)) == 0
     assert importer.eu_summer(datetime(2024, 3, 31, 1, 0, tzinfo=UTC)) == 1
     assert importer.eu_summer(datetime(2024, 10, 27, 1, 0, tzinfo=UTC)) == 0
+
+
+def test_garmin_metrics_from_fit_messages():
+    from trailbook import fitfile
+
+    msgs = {
+        "session_mesgs": [{"total_training_effect": 3.4, "total_anaerobic_training_effect": 0.1,
+                           "training_load_peak": 131.69}],
+        "140": [{9: 1454, 7: 1070818}],
+    }  # fmt: skip
+    assert fitfile.garmin_metrics(msgs) == {
+        "te_aerobic": 3.4, "te_anaerobic": 0.1, "load": 131.7, "recovery_min": 1454.0,
+        "vo2max": 57.2,
+    }  # fmt: skip
+    msgs["140"] = [{9: 99999, 7: 0}]  # not a recovery time, no VO2 max
+    assert "recovery_min" not in fitfile.garmin_metrics(msgs)
+    assert fitfile.garmin_metrics({}) == {}
+
+
+def test_backfill_metrics_once_per_activity(conn, tmp_path):
+    add_person(conn)
+    path = strava_zip(tmp_path / "uploads" / "alice" / "export.zip")
+    importer.register_upload(conn, tmp_path / "uploads", "alice", path)
+    importer.run_queue(conn, None, uploads_dir=tmp_path / "uploads")
+    # GPX, TCX and a manual activity: no FIT file, so no values, but each is done once
+    assert importer.backfill_metrics(conn, None, tmp_path / "uploads") == 3
+    assert (
+        conn.execute("SELECT COUNT(*) FROM activities WHERE fit_metrics IS NOT NULL").fetchone()[0]
+        == 0
+    )
+    assert importer.backfill_metrics(conn, None, tmp_path / "uploads") == 0

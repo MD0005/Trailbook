@@ -160,6 +160,7 @@ def cmd_scan(conn, args) -> int:
                 )  # fmt: skip
 
             importer.backfill_watch(conn, root, uploads_dir, progress=watch_progress)
+            importer.backfill_metrics(conn, root, uploads_dir, progress=watch_progress)
             analysed = analysis.backfill(conn, progress=analysis_progress)
 
             def segment_progress(i, total):

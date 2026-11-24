@@ -55,6 +55,7 @@ const ICON = {
   sun: svg(`<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>`),
   moon: svg(`<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/>`),
   help: svg(`<circle cx="12" cy="12" r="9.5"/><path d="M9.3 9.2a2.8 2.8 0 0 1 5.4 1c0 1.9-2.7 2.4-2.7 4.1"/><circle cx="12" cy="17.6" r=".4" fill="currentColor"/>`),
+  ha: svg(`<path d="M2 11 12 2.5 22 11"/><path d="M4.5 9v12.5h15V9"/><path d="M12 21.5v-10.6M12 17.4l-3.4-3.1M12 17.4l3.4-3.1"/><circle cx="12" cy="9.4" r="1.5"/><circle cx="7.6" cy="13.3" r="1.5"/><circle cx="16.4" cy="13.3" r="1.5"/>`),
   gear: svg(`<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>`),
   list: svg(`<path d="M8 6h13M8 12h13M8 18h13"/><circle cx="3.5" cy="6" r="1"/><circle cx="3.5" cy="12" r="1"/><circle cx="3.5" cy="18" r="1"/>`),
   tilesSmall: svg(`<rect x="3" y="3" width="18" height="18" rx="3.5"/><path d="M7.5 17v-3.5M10.5 17v-7M13.5 17v-5M16.5 17v-9" stroke-width="2.2"/>`),
@@ -276,6 +277,7 @@ function renderHeader(section) {
     </div>
     <button id="theme" class="icon" aria-label="Switch theme"></button>
     <a href="#/manual" class="icon-link ${section === "manual" ? "active" : ""}" title="Manual" aria-label="Manual">${ICON.help}</a>
+    <a href="#/ha" class="icon-link ${section === "ha" ? "active" : ""}" title="Home Assistant" aria-label="Home Assistant">${ICON.ha}</a>
     <a href="#/settings" class="icon-link ${section === "settings" ? "active" : ""}" title="Settings" aria-label="Settings">${ICON.gear}</a>`;
   const menu = document.getElementById("person-menu");
   document.getElementById("person-btn").onclick = (e) => { e.stopPropagation(); menu.hidden = !menu.hidden; };
@@ -1151,7 +1153,9 @@ async function renderActivity(id) {
   // calories (only the ones with data; the others in the column grow to fill it).
   const tilesHtml = () => {
     const on = new Set(chartX ? available.map((x) => x.key) : []);
-    const c = a.connect || {}, te = c.aerobicTrainingEffect, an = c.anaerobicTrainingEffect, bb = c.differenceBodyBattery;
+    // Garmin Connect first; without it Garmin's values written in the FIT file (no label, no Body Battery)
+    const c = a.connect || {}, fm = a.fit_metrics || {}, bb = c.differenceBodyBattery;
+    const te = c.aerobicTrainingEffect ?? fm.te_aerobic, an = c.anaerobicTrainingEffect ?? fm.te_anaerobic;
     const known = TE_LABELS.find(([k]) => k === c.trainingEffectLabel);
     const label = known ? known[1] : c.trainingEffectLabel ? String(c.trainingEffectLabel).replace(/_/g, " ").toLowerCase() : "";
     // Garmin's wording of the 0–5 scale, the same for aerobic and anaerobic.
@@ -1175,17 +1179,20 @@ async function renderActivity(id) {
     // Effect: Garmin's primary benefit (from Garmin Connect), then both scores, always visible
     const effect = te != null || an != null ? stat("Effect", "x", `<span class="effect-lines" data-tip-html="${esc(effectTip)}">
         <b>${label ? esc(label[0].toUpperCase() + label.slice(1)) : teWord(Math.max(te ?? 0, an ?? 0))}</b>
-        <span class="kv-lines">${kv("aerobic", te != null ? num(te, 1) : "–")}${kv("anaerobic", an != null ? num(an, 1) : "–")}</span></span>`, "aerobic_effect") : "";
+        <span class="kv-lines">${kv("aerobic", te != null ? num(te, 1) : "–")}${kv("anaerobic", an != null ? num(an, 1) : "–")}${kv("VO2 max", fm.vo2max ? num(fm.vo2max) : null, "VO2 max the watch estimated after the activity, ml/kg/min (Garmin)")}</span></span>`, "aerobic_effect") : "";
     // Load: this app's load of the activity (the one the calendar sums and fitness is built
     // from), Garmin's training load (its own scale) and the Body Battery change
     const sign = (v) => `${v > 0 ? "+" : ""}${num(v)}`;
-    const gl = c.activityTrainingLoad;
+    const gl = c.activityTrainingLoad ?? fm.load;
+    // recovery time the watch showed after the activity (FIT file; earlier training included)
+    const rec = fm.recovery_min;
     const method = METHOD_LABELS[a.load_method];
     const loadLines = [
       kv("Load", a.load != null ? num(a.load) : null,
         `Training load${method ? ` from ${method.toLowerCase()}` : ""}: one hour at your threshold = 100`),
       kv("Garmin", gl != null ? num(gl) : null, "Training load of the activity (Garmin, its own scale)"),
       kv("Body Battery", bb != null ? sign(bb) : null, "Change of Body Battery during the activity (Garmin)"),
+      kv("Recovery", rec ? `${num(rec / 60)} h` : null, "Recovery time the watch showed after the activity, earlier training included (Garmin)"),
     ].join("");
     const colB = [
       kind ? stat("Training type", kind, `<span data-tip="${a.workout_override ? "Chosen in Edit" : "Detected from the activity; Edit changes it"} (Help › Training types)">${esc(workoutLabel(kind))}</span>`, "interval_time") : "",
@@ -2748,16 +2755,23 @@ async function renderHeatmap(params) {
   });
 }
 
+// The tone the options panel shows: of the page's theme, or of the theme a card creator previews.
+function heatTone(M) {
+  if (!heat.theme) return mapTone(M);
+  const k = M[heat.theme === "dark" ? "toneDark" : "toneLight"];
+  return validTone(k) ? k : MAP_TONE[heat.theme];
+}
+
 function renderSettingsPanel() {
   const s = heat.settings, M = s.map, H = s.heatmap, T = s.tiles;
   const lat = heat.map ? heat.map.getCenter().lat : 52;
   const srcLabel = baseSource(M.source)?.label.split(" (")[0] || "None";
-  const toneLabel = BASE_TONES.find(([k]) => k === mapTone(M))[1];
+  const panelTone = heatTone(M), toneLabel = BASE_TONES.find(([k]) => k === panelTone)[1];
   const sizeLabel = (TILE_SIZES.find(([z]) => z === T.zoom) || TILE_SIZES[1])[1];
   const styleLabel = { density: "Density", coverage: "Coverage", glow: "Heat glow" }[H.style];
   const glow = H.style === "glow", byVisits = T.style === "heat";
   const mapBody = row("Base map", pickList("map.source", [...(BASEMAPS || []).map((b) => [b.key, b.label]), ["none", "None"]], M.source === "none" ? "none" : baseSource(M.source)?.key))
-    + row(`Colours<small class="opt-hint">For the ${themeKey()} theme.</small>`, pickList("map.tone", BASE_TONES.map(([k, l]) => [k, l]), mapTone(M)))
+    + row(`Colours<small class="opt-hint">For the ${heat.theme || themeKey()} theme.</small>`, pickList("map.tone", BASE_TONES.map(([k, l]) => [k, l]), panelTone))
     + row("Relief", pickList("map.relief", [["off", "Off"], ["on", "On — hills shaded"]], M.relief))
     + row("Trails", pickList("map.trails", TRAILS, M.trails || "none"));
   const heatBody = row("Style", pickList("heatmap.style", [["density", "Density — overlaps get stronger"], ["coverage", "Coverage — solid lines"], ["glow", "Heat glow — colour gradient"]], H.style))
@@ -2774,9 +2788,9 @@ function renderSettingsPanel() {
     + row("Highlights", `<div class="checks">${checkCtl("tiles.square", T.square, "Max square", "Largest square made only of visited tiles")}
         ${checkCtl("tiles.cluster", T.cluster, "Cluster", "Largest connected group of tiles with visited tiles on all four sides")}
         ${checkCtl("tiles.routes", T.routes, "Routes")}</div>`)
-    + regionPickerHtml(T.regions);
+    + (heat.card ? "" : regionPickerHtml(T.regions));
   heat.openAcc ??= "map";
-  const el = view.querySelector("[data-settings]");
+  const el = heat.panelEl || view.querySelector("[data-settings]");
   el.innerHTML = accordion([
     ["map", "Map", `${srcLabel} · ${toneLabel}${M.relief === "on" ? " · Relief" : ""}${M.trails && M.trails !== "none" ? " · Trails" : ""}`, mapBody],
     ["heatmap", "Heatmap", styleLabel, heatBody],
@@ -2785,7 +2799,7 @@ function renderSettingsPanel() {
   bindAccordion(el, (key) => { heat.openAcc = key; });
   bindSettingsPanel(el);
   bindRegionPicker(el, () => heat.settings.tiles.regions || [], (ids) => {
-    heat.settings.tiles.regions = ids; saveMapSettings(heat.settings); renderHeatKpis();
+    heat.settings.tiles.regions = ids; (heat.save || saveMapSettings)(heat.settings); renderHeatKpis();
   });
 }
 
@@ -2795,9 +2809,9 @@ function bindSettingsPanel(el) {
   const s = heat.settings;
   const set = (path, value) => {
     const [a, b] = path.split(".");
-    if (path === "map.tone") s.map[toneKey()] = value; // saved for the current theme only
+    if (path === "map.tone") s.map[heat.theme ? (heat.theme === "dark" ? "toneDark" : "toneLight") : toneKey()] = value; // for one theme
     else if (b === undefined) s[a] = value; else s[a][b] = value;
-    saveMapSettings(s);
+    (heat.save || saveMapSettings)(s);
   };
   const shown = (path) => path.startsWith("map.") || path.startsWith(s.layer + ".");
   const refresh = (path, kind) => {
@@ -3327,8 +3341,7 @@ async function settingsGeneral(el, tab = "general") {
         <li>Click <b>Connect</b>${est.typical?.seconds ? ` — it may take up to ${upTo(est.typical.seconds)} to download` : ""}.</li>
       </ol>
       <div class="garmin-people">${people.map(garminRow).join("") || hint("Add people first (Settings › People).")}</div>
-    </div>
-    ${connected ? `<div class="card">
+    ${connected ? `<div class="garmin-auto">
       <h3>Automatic download</h3>
       <select class="field-input" name="scan_interval_min" style="max-width:200px">${s.scan_interval_choices.map((m) =>
         `<option value="${m}" ${m === s.scan_interval_min ? "selected" : ""}>${interval(m)}</option>`).join("")}</select>
@@ -3337,7 +3350,8 @@ async function settingsGeneral(el, tab = "general") {
         <button data-gsync>Download now</button>
         <span data-msg></span>
       </div>
-    </div>` : ""}`;
+    </div>` : ""}
+    </div>`;
 
   el.innerHTML = tab === "data" ? `
     <div class="card">
@@ -3943,7 +3957,7 @@ window.addEventListener("resize", setHeaderHeight, { passive: true });
 // The full-screen map look (body.fullmap) goes with the map page itself: switched in the same
 // moment the page content is replaced, so neither the page that is left nor the map's
 // floating header jumps while the next page loads.
-new MutationObserver(() => document.body.classList.toggle("fullmap", Boolean(view.querySelector(":scope > .heat-wrap"))))
+new MutationObserver(() => document.body.classList.toggle("fullmap", Boolean(view.querySelector(":scope > .heat-wrap, :scope > .embed-map"))))
   .observe(view, { childList: true });
 
 let pageLoader = null;
@@ -3963,6 +3977,7 @@ async function route() {
     TYPES ??= await api("types");
     PERSONS = await api("persons");
     if (CURRENT === null || (CURRENT !== "all" && !person(CURRENT))) CURRENT = pickDefaultPerson();
+    if (parts[0] === "embed") { await renderEmbed(parts[1], params); return; } // a Home Assistant card (hacards.js)
     let section = parts[0] === "activity" ? "activities" : parts[0] === "segment" ? "segments" : parts[0] || "activities";
     if (section !== LAST_SECTION) { for (const k of Object.keys(TAB)) delete TAB[k]; LAST_SECTION = section; }
     if (UI.person !== CURRENT) {
@@ -3983,6 +3998,7 @@ async function route() {
     else if (section === "segments" && parts[1] === "new") await (parts[2] === "map" ? renderSegmentFromMap(params) : renderSegmentFromActivity(params));
     else if (section === "segments") await renderSegments(params);
     else if (section === "settings") await renderSettings(parts[1], params);
+    else if (section === "ha") await renderHa(parts[1], params);
     else if (section === "manual") await renderManual(parts[1]);
     else if (section === "compare") await renderCompare(params);
     else if (section === "heatmap") await renderHeatmap(params);
