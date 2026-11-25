@@ -1588,9 +1588,12 @@ def create_app(db_path: str | Path) -> Starlette:
             pid = _single_person(c, request)
             years = years_of(qp)
             first = c.execute(
-                """SELECT MIN(substr(b.ts, 1, 10)) FROM body_parts b
-                   JOIN files f ON f.id = b.file_id WHERE f.person_id = ?""",
-                (pid,),
+                """SELECT MIN(d) FROM (
+                       SELECT MIN(substr(b.ts, 1, 10)) d FROM body_parts b
+                       JOIN files f ON f.id = b.file_id WHERE f.person_id = ?
+                       UNION ALL SELECT MIN(substr(ts, 1, 10)) FROM garmin_weights
+                       WHERE person_id = ?)""",
+                (pid, pid),
             ).fetchone()[0]
             since = max(filter(None, [qp.get("from"), last_since(qp.get("last"))]), default=None)
             start, end = wellbeing.span(first, since, qp.get("to"), years)

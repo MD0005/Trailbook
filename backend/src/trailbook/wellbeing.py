@@ -1,7 +1,7 @@
-"""Wellbeing › Movement: the daily values of one person (steps, floors, intensity minutes,
-calories). Steps and floors come from analysis.daily_values (monitoring files, the Garmin
-Connect daily summary wins); intensity minutes, calories and the intensity goal only from the
-Garmin Connect daily summary. The step goal is one for everyone (10 000, set in the page).
+"""Wellbeing: Movement - the daily values of one person (steps, floors, intensity minutes,
+calories) - and Body (weigh-ins from scale files and Garmin Connect). Steps and floors come
+from analysis.daily_values (monitoring files, the Garmin Connect daily summary wins);
+intensity minutes, calories and the intensity goal only from the Garmin Connect daily summary.
 """
 
 from __future__ import annotations
@@ -65,15 +65,28 @@ def movement_days(conn: sqlite3.Connection, person_id: str, start: str, end: str
 def body_rows(conn: sqlite3.Connection, person_id: str, start: str, end: str) -> list[dict]:
     """Weigh-ins of the days start … end (UTC days), oldest first: ts, day, weight, fat_pct,
     water_pct, muscle_kg, bone_kg, bmi; the same moment from two files once."""
-    rows = conn.execute(
-        """SELECT b.ts, substr(b.ts, 1, 10) AS day, b.weight, b.fat_pct, b.water_pct,
-                  b.muscle_kg, b.bone_kg, b.bmi
+    keys = ("weight", "fat_pct", "water_pct", "muscle_kg", "bone_kg", "bmi")
+    files = conn.execute(
+        """SELECT b.ts, b.weight, b.fat_pct, b.water_pct, b.muscle_kg, b.bone_kg, b.bmi
            FROM body_parts b JOIN files f ON f.id = b.file_id
-           WHERE f.person_id = ? AND substr(b.ts, 1, 10) BETWEEN ? AND ?
-           GROUP BY b.ts ORDER BY b.ts""",
+           WHERE f.person_id = ? AND substr(b.ts, 1, 10) BETWEEN ? AND ?""",
         (person_id, start, end),
     ).fetchall()
-    return [dict(r) for r in rows]
+    api = conn.execute(
+        """SELECT ts, weight, fat_pct, water_pct, muscle_kg, bone_kg, bmi FROM garmin_weights
+           WHERE person_id = ? AND substr(ts, 1, 10) BETWEEN ? AND ?""",
+        (person_id, start, end),
+    ).fetchall()
+    # one weigh-in from a scale file and from Garmin Connect (the same minute) counts once:
+    # the file's values, Garmin's where the file has none
+    out: dict[str, dict] = {}
+    for r in [*files, *api]:
+        key = r["ts"][:16]
+        row = out.setdefault(key, {"ts": r["ts"], "day": r["ts"][:10], **dict.fromkeys(keys)})
+        for k in keys:
+            if row[k] is None and r[k] is not None:
+                row[k] = r[k]
+    return [out[k] for k in sorted(out)]
 
 
 def span(first: str | None, since: str | None, until: str | None, years: list[str]) -> tuple:

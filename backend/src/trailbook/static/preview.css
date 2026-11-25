@@ -2315,3 +2315,7 @@ body.embed-detail #route-map { margin-top: 0; }
 .wb-lpills { position: relative; display: block; align-self: start; }
 .wb-lpills .wb-layer, .wb-lpills .wb-lext { position: absolute; left: 0; transition: top .2s; }
 .wb-layer.off .chart-ribbon { background: var(--line) !important; color: var(--muted); box-shadow: none !important; } /* no glow of the hidden colour */
+
+/* Buy Me a Coffee: their own button (yellow, cup, Cookie lettering) — not the app's badge style. */
+.bmc-link { display: inline-block; margin-top: 10px; line-height: 0; border-radius: 10px; }
+.bmc-link img { height: 48px; width: auto; }

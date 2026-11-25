@@ -683,6 +683,26 @@ MIGRATIONS: list[str] = [
     """
     ALTER TABLE persons ADD COLUMN sex TEXT;
     """,
+    # v47 — weigh-ins from Garmin Connect (garmin.fetch_weights), one row per weigh-in, the
+    # composition NULL when not measured; `weights_from` / `weights_to`: the days asked for so
+    # far (the history is filled backwards like the daily summaries).
+    """
+    CREATE TABLE garmin_weights (
+        person_id   TEXT NOT NULL REFERENCES persons(id) ON DELETE CASCADE,
+        ts          TEXT NOT NULL,           -- UTC, ISO
+        weight      REAL NOT NULL,           -- kg
+        fat_pct     REAL,
+        water_pct   REAL,
+        muscle_kg   REAL,
+        bone_kg     REAL,
+        bmi         REAL,
+        source      TEXT,                    -- Garmin's sourceType (INDEX_SCALE, MANUAL, …)
+        fetched_at  TEXT NOT NULL,
+        PRIMARY KEY (person_id, ts)
+    );
+    ALTER TABLE garmin_accounts ADD COLUMN weights_from TEXT;
+    ALTER TABLE garmin_accounts ADD COLUMN weights_to TEXT;
+    """,
 ]
 
 SCHEMA_VERSION = len(MIGRATIONS)

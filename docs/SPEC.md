@@ -33,7 +33,8 @@ small ARM boards such as the Home Assistant Yellow (Raspberry Pi CM4).
   only for the Calendar's steps, floors and stress (`daily_parts`, see docs/MANUAL.md); the
   Garmin API daily summary wins over them. Scale files (FIT type weight, e.g. Garmin Index) are
   read for Wellbeing › Body (`body_parts`: weight, fat %, water %, muscle and bone kg, BMI per
-  weigh-in; files skipped before are read by `importer.backfill_body` on the next import run).
+  weigh-in; files skipped before are read by `importer.backfill_body` on the next import run);
+  Garmin Connect's weigh-ins come in too (§3a).
 - Editing activities beyond category, name and deletion.
 
 ---
@@ -158,7 +159,13 @@ with the Wellbeing stage, the full set of lifestyle data (steps, sleep, stress, 
      off), then fills the history backwards, 31 days a request and 4 requests a run, down to
      *Download from* or the first activity, else a year (`days_from`; an earlier date later
      continues it, `days_done`). A key without access to the service skips it quietly. Used by the Calendar today; the Wellbeing tab will read it too.
-   - Later: sleep, HRV, weight for the Wellbeing tab. Stored with
+   - Weigh-ins (`/weight-service/weight/range/{start}/{end}?includeAll=true`): every run the
+     last 7 days and any days since the previous run (`weights_to`), then the history backwards
+     180 days a request, two a run (`weights_from`), down to the same start as the daily
+     summaries; stored in `garmin_weights` (kg, the composition NULL when not measured). Body
+     merges them with the scale files' weigh-ins: the same minute counts once, the file's values
+     first.
+   - Later: sleep, HRV for the Wellbeing tab. Stored with
      the key person + day (+ metric), written as upserts, so a day fetched again (or the same
      day from another source, e.g. sleep FIT files from a folder) replaces the row instead of
      adding one. Priority when two sources disagree: Garmin API values (Garmin's own

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.25
+
+### Added
+- Wellbeing › Body: weigh-ins from Garmin Connect (scale and manual entries), merged with scale files.
+- Settings › General: a Buy Me a Coffee button to support Trailbook.
+
 ## 0.1.24
 
 ### Added

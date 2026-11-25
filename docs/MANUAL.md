@@ -513,7 +513,8 @@ the days that have them; stress as the average of the days' averages.
 
 ## Wellbeing › Body
 
-- **Weigh-ins** come from a scale's FIT files; a value the scale did not measure (0) is left out.
+- **Weigh-ins** come from a scale's FIT files and from Garmin Connect (scale and manual entries);
+  a value not measured (0) is left out. One weigh-in from both (the same minute) counts once.
   A full body composition has the fat %; muscle and bone are the scale's kg.
 - **Layers** (share of the weight): fat = fat %; muscle = muscle kg ÷ weight; bone = bone kg ÷
   weight. The rest of the weight (organs, skin, water outside the muscles) is not drawn.

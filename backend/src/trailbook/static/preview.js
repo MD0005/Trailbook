@@ -3436,6 +3436,11 @@ async function settingsGeneral(el, tab = "general") {
       ${choice("surface_mode", "open", s.surface_mode, "When an activity is opened", "The first visit can take a few minutes.")}
       ${choice("surface_mode", "background", s.surface_mode, "All activities, slowly in the background", "Newest first, one at a time with a pause; opened activities are then ready.")}
       <div>${state(`${num(s.surface_progress.done)} of ${num(s.surface_progress.total)} activities with a route done`)} <span data-msg></span></div>
+    </div>
+    <div class="card">
+      <h3>Support Trailbook</h3>
+      <div class="hint">Trailbook is free. If it helps you, you can support its development.</div>
+      <a class="bmc-link" href="https://buymeacoffee.com/md0005" target="_blank" rel="noopener"><img src="bmc-button.svg" alt="Buy me a coffee" height="48"></a>
     </div>`;
 
   const reload = () => {

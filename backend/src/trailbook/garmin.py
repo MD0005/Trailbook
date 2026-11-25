@@ -51,6 +51,10 @@ DAYS_RECENT = 3  # today and the 2 days before are asked for again on every run
 DAYS_CHUNK = 31  # days per request when filling the history
 DAYS_CHUNKS_PER_RUN = 4  # history requests per run (~4 months)
 DAYS_DEFAULT_BACK = 365  # history start without activities or a Download from date
+WEIGHTS_PATH = "/weight-service/weight/range/{start}/{end}"
+WEIGHTS_RECENT = 7  # the last week is asked for again on every run
+WEIGHTS_CHUNK = 180  # days per request
+WEIGHTS_CHUNKS_PER_RUN = 2  # history requests per run
 USER_AGENT = f"Trailbook/{__version__} (self-hosted training log)"
 
 PAGE_SIZE = 50
@@ -610,6 +614,7 @@ def sync_person(
     try:
         done += _fetch_details(conn, client, pid, budget - done)
         fetch_days(conn, client, pid)
+        fetch_weights(conn, client, pid)
     except GarminError as exc:
         _save_token(conn, pid, client)
         _set_status(conn, pid, "error", str(exc))
@@ -794,6 +799,98 @@ def fetch_days(
     conn.execute(
         "UPDATE garmin_accounts SET days_done = ? WHERE person_id = ?", (int(end < stop), pid)
     )
+
+
+# ---- weigh-ins (Wellbeing › Body) ----------------------------------------------------------
+
+
+def _store_weights(conn: sqlite3.Connection, pid: str, body: bytes) -> int:
+    """Store the weigh-ins of a weight range answer (grams → kg; 0 = not measured)."""
+    data = json.loads(body or b"{}")
+    now = importer.now_iso()
+    n = 0
+    for day in data.get("dailyWeightSummaries") or [] if isinstance(data, dict) else []:
+        for m in (day or {}).get("allWeightMetrics") or []:
+            ts, w = m.get("timestampGMT") or m.get("date"), m.get("weight")
+            if not isinstance(ts, (int, float)) or not isinstance(w, (int, float)) or w <= 0:
+                continue
+
+            def val(key, scale=1.0, m=m):
+                v = m.get(key)
+                return round(v * scale, 3) if isinstance(v, (int, float)) and v > 0 else None
+
+            conn.execute(
+                """INSERT INTO garmin_weights (person_id, ts, weight, fat_pct, water_pct,
+                                               muscle_kg, bone_kg, bmi, source, fetched_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(person_id, ts) DO UPDATE SET
+                       weight = excluded.weight, fat_pct = excluded.fat_pct,
+                       water_pct = excluded.water_pct, muscle_kg = excluded.muscle_kg,
+                       bone_kg = excluded.bone_kg, bmi = excluded.bmi,
+                       source = excluded.source, fetched_at = excluded.fetched_at""",
+                (pid, _iso(datetime.fromtimestamp(ts / 1000, UTC)), round(w / 1000, 3),
+                 val("bodyFat"), val("bodyWater"), val("muscleMass", 0.001),
+                 val("boneMass", 0.001), val("bmi"), m.get("sourceType"), now),
+            )  # fmt: skip
+            n += 1
+    return n
+
+
+def fetch_weights(
+    conn: sqlite3.Connection, client: Client, pid: str, today: date | None = None
+) -> None:
+    """Garmin's weigh-ins (scale and manual entries, with the body composition): every run asks
+    for the last WEIGHTS_RECENT days and any days since the previous run (`weights_to`), then
+    fills the history backwards (`weights_from`) WEIGHTS_CHUNK days a request, down to the same
+    start as the daily summaries. A key not allowed to get them is skipped quietly."""
+    today = today or date.today()
+    row = conn.execute(
+        "SELECT history_from, weights_from, weights_to FROM garmin_accounts WHERE person_id = ?",
+        (pid,),
+    ).fetchone()
+    first = conn.execute(
+        f"SELECT MIN({analysis.LOCAL_DAY_SQL}) FROM activities WHERE person_id = ?", (pid,)
+    ).fetchone()[0]
+    floor = row["history_from"] or first or (today - timedelta(days=DAYS_DEFAULT_BACK)).isoformat()
+
+    def ask(start: date, end: date) -> bool:
+        try:
+            body = client.get(WEIGHTS_PATH.format(start=start.isoformat(), end=end.isoformat()),
+                              {"includeAll": "true"})  # fmt: skip
+        except AuthError:
+            raise
+        except GarminError as exc:
+            if exc.stop_run:
+                raise
+            log.warning("Garmin weigh-ins of %s not available: %s", pid, exc)
+            return False
+        _store_weights(conn, pid, body)
+        return True
+
+    start = today - timedelta(days=WEIGHTS_RECENT - 1)
+    if row["weights_to"]:
+        start = min(start, date.fromisoformat(row["weights_to"]) - timedelta(days=1))
+    first_start = start
+    while start <= today:
+        end = min(today, start + timedelta(days=WEIGHTS_CHUNK - 1))
+        if not ask(start, end):
+            return
+        conn.execute("UPDATE garmin_accounts SET weights_to = ? WHERE person_id = ?",
+                     (end.isoformat(), pid))  # fmt: skip
+        start = end + timedelta(days=1)
+    stop = date.fromisoformat(floor)
+    end = (
+        date.fromisoformat(row["weights_from"]) if row["weights_from"] else first_start
+    ) - timedelta(days=1)
+    for _ in range(WEIGHTS_CHUNKS_PER_RUN):
+        if end < stop:
+            break
+        start = max(stop, end - timedelta(days=WEIGHTS_CHUNK - 1))
+        if not ask(start, end):
+            return
+        conn.execute("UPDATE garmin_accounts SET weights_from = ? WHERE person_id = ?",
+                     (start.isoformat(), pid))  # fmt: skip
+        end = start - timedelta(days=1)
 
 
 def sync_all(

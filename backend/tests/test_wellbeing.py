@@ -1,7 +1,7 @@
 """Wellbeing › Movement: daily values with Garmin's goals (/api/wellbeing/movement)."""
 
 import json
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 from starlette.testclient import TestClient
@@ -96,3 +96,64 @@ def test_parse_weight_reads_a_scale_file():
     assert [r["weight"] for r in rows] == pytest.approx([78.3, 78.1])
     assert rows[0]["fat_pct"] == pytest.approx(16.6) and rows[0]["muscle_kg"] == pytest.approx(33.8)
     assert rows[1]["fat_pct"] is None  # 0: not measured
+
+
+class FakeWeights:
+    """Garmin's weight range answers: one weigh-in a day at 07:00 UTC."""
+
+    def __init__(self):
+        self.asked = []
+
+    def __call__(self, method, url, headers, timeout):
+        import urllib.parse
+
+        from trailbook import garmin
+
+        path = urllib.parse.urlparse(url).path
+        if path == garmin.TOKEN_PATH:
+            return 200, {}, b'{"access_token": "tok", "expires_in": 86400}'
+        a, b = path.rstrip("/").split("/")[-2:]
+        self.asked.append((a, b))
+        days, d = [], date.fromisoformat(a)
+        while d <= date.fromisoformat(b):
+            ms = int(datetime(d.year, d.month, d.day, 7, tzinfo=UTC).timestamp() * 1000)
+            days.append({"summaryDate": d.isoformat(), "allWeightMetrics": [{
+                "timestampGMT": ms, "weight": 70500.0, "bmi": 21.0,
+                "bodyFat": 18.0 if d.day == 1 else 0.0, "bodyWater": 0.0,
+                "muscleMass": 33000 if d.day == 1 else 0, "boneMass": 0,
+                "sourceType": "INDEX_SCALE"}]})  # fmt: skip
+            d += timedelta(days=1)
+        return 200, {}, json.dumps({"dailyWeightSummaries": days}).encode()
+
+
+def test_garmin_weights_fetched_and_merged_with_files(tdb):
+    from trailbook import garmin
+
+    c, path = tdb
+    garmin.set_account(c, "anna", "k" * 32, "2026-01-01")
+    fake = FakeWeights()
+    client = garmin.Client("k" * 32, transport=fake, gap_s=0)
+    garmin.fetch_weights(c, client, "anna", today=date(2026, 7, 10))
+    # the last week, then the history backwards in 180-day requests (two a run)
+    assert fake.asked[0] == ("2026-07-04", "2026-07-10")
+    assert fake.asked[1] == ("2026-01-05", "2026-07-03")
+    assert fake.asked[2] == ("2026-01-01", "2026-01-04")
+    row = c.execute("SELECT * FROM garmin_weights WHERE ts = '2026-07-01T07:00:00Z'").fetchone()
+    assert (row["weight"], row["fat_pct"], row["muscle_kg"], row["water_pct"]) == (
+        70.5,
+        18.0,
+        33.0,
+        None,
+    )
+    # the same weigh-in from a scale file: once, the file's values first
+    c.execute(
+        "INSERT INTO files (id, person_id, rel_path, size, mtime, status, first_seen, last_seen)"
+        " VALUES (1, 'anna', 'w.fit', 1, 0, 'skipped', '', '')"
+    )
+    c.execute(
+        "INSERT INTO body_parts (file_id, ts, weight, bone_kg)"
+        " VALUES (1, '2026-07-01T07:00:20Z', 70.4, 3.1)"
+    )
+    rows = wellbeing.body_rows(c, "anna", "2026-07-01", "2026-07-01")
+    assert len(rows) == 1
+    assert (rows[0]["weight"], rows[0]["bone_kg"], rows[0]["fat_pct"]) == (70.4, 3.1, 18.0)

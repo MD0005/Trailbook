@@ -31,6 +31,7 @@ export, FIT/GPX/TCX files) are there to bring in older history or a second devic
 - [Privacy](#privacy)
 - [In development](#in-development)
 - [Development](#development)
+- [Support](#support)
 - [Trademarks](#trademarks)
 - [License](#license)
 
@@ -251,6 +252,12 @@ python -m venv .venv
 
 Tests: `cd backend && ../.venv/Scripts/python -m pytest`. How it is built:
 [specification](docs/SPEC.md); how the numbers are calculated: [manual](docs/MANUAL.md).
+
+## Support
+
+Trailbook is free and open source. If it helps you, you can support its development:
+
+<a href="https://buymeacoffee.com/md0005"><img src="backend/src/trailbook/static/bmc-button.svg" alt="Buy me a coffee" height="48"></a>
 
 ## Trademarks
 
