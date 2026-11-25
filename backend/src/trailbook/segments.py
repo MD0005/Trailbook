@@ -495,7 +495,7 @@ def match_segment(conn: sqlite3.Connection, segment_id: int) -> int:
             conn.execute("UPDATE segments SET net_climb_m = ? WHERE id = ?", (net, segment_id))
             s = conn.execute("SELECT * FROM segments WHERE id = ?", (segment_id,)).fetchone()
     preps = prepared(s)
-    where, params = _CANDIDATE_SQL, _candidate_params(s)
+    where, params = _CANDIDATE_SQL + " AND NOT a.excluded", _candidate_params(s)
     if s["category"]:
         where += " AND a.category = ?"
         params.append(s["category"])
@@ -530,7 +530,8 @@ def match_activity(conn: sqlite3.Connection, activity_id: int, segs: list | None
     if segs is None:
         segs = _all_segments(conn)
     rows: list[tuple] = []
-    todo = [(s, p) for s, p in segs if _covers(a, s)] if a["has_gps"] else []
+    # an activity the person excluded (activity › Edit) has no efforts
+    todo = [(s, p) for s, p in segs if _covers(a, s)] if a["has_gps"] and not a["excluded"] else []
     if todo:
         pos = _channels(conn, activity_id, ("time", "lat", "lon"))
         for _, preps in todo:

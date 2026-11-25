@@ -12,6 +12,21 @@ const HA_WHICH = [[0, "Latest"], [1, "2nd latest"], [2, "3rd latest"]];
 const HA_HEIGHTS = [250, 300, 400, 500, 600, 800].map((h) => [h, `${h} px`]);
 const HA_ON = [[true, "On"], [false, "Off"]];
 const HA_COLUMNS = [[1, "1"], [2, "2"], [3, "3"]];
+// What a map card shows: the heatmap, explorer tiles, squares (the bigger tiles) or only the
+// cluster with the biggest square.
+const HA_LAYERS = [["heatmap", "Heatmap"], ["tiles", "Explorer tiles"], ["squares", "Squares"], ["cluster", "Cluster"]];
+const haLayerOf = (s) => (s.layer !== "tiles" ? "heatmap" : s.tiles.clusterOnly ? "cluster" : s.tiles.zoom === 13 ? "squares" : "tiles");
+function haSetLayer(s, v) {
+  s.layer = v === "heatmap" ? "heatmap" : "tiles";
+  if (v === "heatmap") return;
+  s.tiles = { ...s.tiles, zoom: v === "squares" ? 13 : 14, clusterOnly: v === "cluster" };
+  if (v === "cluster") s.tiles.cluster = s.tiles.square = true;
+}
+const HA_MAP_VIEWS = [["all", "All routes"], ["main", "Home area"], ["last", "Last activity"], ["fixed", "Fixed place"]];
+// Zoom: fitted to the view's routes, or a zoom level (a fixed place set from the preview may
+// have one between the steps).
+const haZooms = (z) => [["auto", "Fit"], ...[6, 8, 10, 11, 12, 13, 14, 15, 16].map((n) => [n, String(n)]),
+  ...(Number.isFinite(z) && ![6, 8, 10, 11, 12, 13, 14, 15, 16].includes(z) ? [[z, num(z, 1)]] : [])];
 // The record tables of a card, in the order picked (cards made before: one `group`).
 const haRecordGroups = (c) => (Array.isArray(c.groups) ? c.groups : [c.group || "run"]).filter((g) => HA_RECORDS.some(([k]) => k === g));
 const HA_RECORDS = [["run", "Running"], ["power", "Cycling power"], ["ride", "Cycling"], ["virtual", "Cycling virtual"],
@@ -69,7 +84,8 @@ function haKindDefaults(kind, prev) {
 
 async function renderHa(tab, params) {
   tab = HA_TABS.some(([k]) => k === tab) ? tab : "cards";
-  view.innerHTML = `${pageHead("Home Assistant", "", switchHtml("hatab", HA_TABS.map(([k, l, icon]) => [k, `${icon}<span>${l}</span>`]), tab))}<div id="tab" class="settings-body"></div>`;
+  const newBtn = tab === "cards" ? `<div class="badge-wrap"><button class="badge" data-ha-new>New card</button></div>` : "";
+  view.innerHTML = `${pageHead("Home Assistant", newBtn, switchHtml("hatab", HA_TABS.map(([k, l, icon]) => [k, `${icon}<span>${l}</span>`]), tab))}<div id="tab" class="settings-body"></div>`;
   view.querySelectorAll("[data-switch=hatab]").forEach((b) => b.onclick = () => { location.hash = "#/ha/" + b.dataset.value; });
   const el = document.getElementById("tab");
   if (tab === "automation") await haAutomationTab(el);
@@ -125,29 +141,50 @@ async function haAutomationTab(el) {
 
 // ---- Cards: the creator ------------------------------------------------------------------
 
-var HA = null; // { el, cards, card, draft, setup, timer, rev }; var: the preview frame reads window.parent.HA
+var HA = null; // { el, dlg, cards, card, draft, setup, rev }; var: the preview frame reads window.parent.HA
 
+// Cards: New card in the page header; under it the cards made. New card and Edit open the
+// creator in a window over the page (as the workout creator).
 async function haCardsTab(el, params) {
   const [cards, setup] = await Promise.all([api("ha/cards"), api("ha/setup")]);
   BASEMAPS ??= await api("basemaps"); // Options › Base map
-  HA = { el, cards, setup, card: null, draft: true, timer: null, rev: 0 };
+  HA = { el, dlg: null, cards, setup, card: null, draft: true, rev: 0 };
+  haDrawList();
+  view.querySelector("[data-ha-new]").onclick = () => haOpen(null);
   const open = cards.find((c) => c.id === params.card);
-  if (open) haEdit(open, false); else haNewDraft(false);
-  haDraw();
+  if (open) haOpen(open);
 }
 
 const haCopy = (card) => JSON.parse(JSON.stringify(card));
-function haNewDraft(draw = true) {
-  HA.card = { name: "Map", kind: "map", config: haDefaults("map") };
-  HA.draft = true;
-  history.replaceState(null, "", "#/ha/cards");
-  if (draw) haDraw();
+
+// The page: what is left to do in Home Assistant, then a frame for each card made.
+function haDrawList() {
+  const { el, cards } = HA;
+  el.innerHTML = `${haSetupHtml()}
+    ${cards.length ? `<div class="cards ha-list">${cards.map(haCardFrame).join("")}</div>`
+      : `<div class="card">${hint("No cards yet. New card (top) makes one for a Home Assistant dashboard.")}</div>`}`;
+  bindCopy(el);
+  bindEditButtons(el);
 }
-function haEdit(card, draw = true) {
-  HA.card = haCopy(card);
-  HA.draft = false;
-  history.replaceState(null, "", "#/ha/cards?" + new URLSearchParams({ card: card.id }));
-  if (draw) { haDraw(); window.scrollTo({ top: 0, behavior: "smooth" }); }
+
+// The creator window: a new card (`card` null) or a copy of the one edited; nothing is saved
+// until Create card / Save.
+function haOpen(card) {
+  HA.dlg?.close();
+  HA.card = card ? haCopy(card) : { name: "Map", kind: "map", config: haDefaults("map") };
+  HA.draft = !card;
+  history.replaceState(null, "", "#/ha/cards" + (card ? "?" + new URLSearchParams({ card: card.id }) : ""));
+  const dlg = document.createElement("dialog");
+  dlg.className = "wo-dialog ha-dialog";
+  document.body.append(dlg);
+  HA.dlg = dlg;
+  dlg.addEventListener("close", () => {
+    dlg.remove();
+    if (HA.dlg === dlg) HA.dlg = null;
+    history.replaceState(null, "", "#/ha/cards");
+  });
+  haDraw();
+  dlg.showModal();
 }
 
 // What is left to do in Home Assistant (add-on only): a card of steps, shown only when needed.
@@ -166,36 +203,39 @@ function haSetupHtml() {
     <ol class="plain steps">${steps.map((l) => `<li>${l}</li>`).join("")}</ol></div>` : "";
 }
 
-// One frame: the creator (a new card, or the one being edited) with its preview; under it a
-// frame for each card made, with a small preview, Edit and its text for the dashboard.
+// The creator window's content: title, the settings, the preview, the buttons.
 function haDraw() {
-  const { el, card, cards, draft } = HA;
-  el.innerHTML = `${haSetupHtml()}
-    <div class="card">
-      <div class="card-head"><h3>${draft ? "New card" : `Edit card <span class="title-note">(${esc(card.id)})</span>`}</h3></div>
-      <div class="badges ha-bar" data-ha-opts></div>
-      <div class="ha-frame ha-frame-${card.kind}"${card.kind === "records" ? ` style="max-width:${560 * (card.config.columns || 1)}px"` : ""}><iframe title="Card preview" data-ha-frame src="${haFrameSrc()}"></iframe></div>
-      <div class="card-row ha-row">${draft ? `<button class="badge" data-ha-create>Create card</button>`
-        : `<button class="badge" data-ha-new>New card</button><button class="badge danger" data-ha-del>Delete card</button>`}</div>
-    </div>
-    ${cards.length ? `<div class="cards ha-list">${cards.map(haCardFrame).join("")}</div>` : ""}`;
-  bindBadges(el);
-  bindCopy(el);
-  el.querySelector("[data-ha-create]")?.addEventListener("click", async () => {
-    const created = await api("ha/cards", { method: "POST", body: JSON.stringify({ name: card.name, kind: card.kind, config: card.config }) });
-    HA.cards.push(created);
-    haEdit(created);
-  });
-  el.querySelector("[data-ha-new]")?.addEventListener("click", () => haNewDraft());
-  el.querySelector("[data-ha-del]")?.addEventListener("click", async () => {
+  const { dlg, card, draft } = HA;
+  dlg.innerHTML = `
+    <div class="wo-head"><h3>${draft ? "New card" : `Edit card: ${esc(card.name)} <span class="title-note">(${esc(card.id)})</span>`}</h3></div>
+    <div class="badges ha-bar" data-ha-opts></div>
+    <div class="ha-frame ha-frame-${card.kind}"${card.kind === "records" ? ` style="max-width:${560 * (card.config.columns || 1)}px"` : ""}><iframe title="Card preview" data-ha-frame src="${haFrameSrc()}"></iframe></div>
+    <div class="wo-foot">${draft ? "" : `<button type="button" class="badge danger" data-ha-del>Delete card</button>`}
+      <span class="spacer"></span>
+      <button type="button" class="badge" data-ha-cancel>Cancel</button>
+      <button type="button" class="badge on" data-ha-save>${draft ? "Create card" : "Save"}</button></div>`;
+  bindBadges(dlg);
+  dlg.querySelector("[data-ha-cancel]").onclick = () => dlg.close();
+  dlg.querySelector("[data-ha-save]").onclick = async () => {
+    const body = JSON.stringify({ name: card.name, kind: card.kind, config: card.config });
+    if (draft) HA.cards.push(await api("ha/cards", { method: "POST", body }));
+    else {
+      const saved = await api(`ha/cards/${encodeURIComponent(card.id)}`, { method: "PUT", body });
+      HA.cards = HA.cards.map((c) => (c.id === saved.id ? saved : c));
+    }
+    HA.rev++;
+    dlg.close();
+    haDrawList();
+  };
+  dlg.querySelector("[data-ha-del]")?.addEventListener("click", async () => {
     if (!confirm(`Delete the card "${card.name}"? A dashboard that shows it gets an empty card.`)) return;
     await api(`ha/cards/${encodeURIComponent(card.id)}`, { method: "DELETE" });
     HA.cards = HA.cards.filter((c) => c.id !== card.id);
-    haNewDraft();
+    dlg.close();
+    haDrawList();
   });
-  bindEditButtons(el);
-  // the creator's preview takes the height its page asks for (the map: its height)
-  const frame = el.querySelector("[data-ha-frame]");
+  // the preview takes the height its page asks for (the map: its height)
+  const frame = dlg.querySelector("[data-ha-frame]");
   window.onmessage = (e) => {
     if (e.source === frame.contentWindow && e.data?.trailbook === "size") frame.style.height = `${e.data.height}px`;
   };
@@ -203,14 +243,14 @@ function haDraw() {
 }
 
 function bindEditButtons(root) {
-  root.querySelectorAll("[data-ha-edit]").forEach((b) => b.onclick = () => haEdit(HA.cards.find((c) => c.id === b.dataset.haEdit)));
+  root.querySelectorAll("[data-ha-edit]").forEach((b) => b.onclick = () => haOpen(HA.cards.find((c) => c.id === b.dataset.haEdit)));
 }
 
 // A card made: its name and type, a small preview (half size, nothing to click), Edit, and the
 // text for the dashboard.
 function haCardFrame(c) {
   const yaml = haYaml(c);
-  return `<div class="card ha-item${!HA.draft && HA.card.id === c.id ? " editing" : ""}" data-ha-item="${esc(c.id)}">
+  return `<div class="card ha-item" data-ha-item="${esc(c.id)}">
     <div class="card-head"><h3>${esc(c.name)} <span class="title-note">(${esc(haLabel(HA_KINDS, c.kind))})</span></h3></div>
     <div class="ha-mini"><iframe title="${esc(c.name)}" tabindex="-1" loading="lazy" src="${haMiniSrc(c)}"></iframe></div>
     <pre class="ha-yaml">${esc(yaml)}</pre>
@@ -219,7 +259,7 @@ function haCardFrame(c) {
 }
 
 // The creator's preview reads the card from this page (`_creator`), so it shows each change at
-// once, saved or not; the small previews read the saved card.
+// once, before it is saved; the small previews read the saved card.
 const haFrameSrc = () => `index.html#/embed/_creator?${new URLSearchParams({ r: HA.rev })}`;
 const haMiniSrc = (c) => `index.html#/embed/${encodeURIComponent(c.id)}?${new URLSearchParams({ r: HA.rev })}`;
 const haYaml = (card) => `type: custom:trailbook-card\ncard: ${card.id}`;
@@ -227,7 +267,7 @@ const haYaml = (card) => `type: custom:trailbook-card\ncard: ${card.id}`;
 // The card's settings: a badge each ("Label: value" with a pick list), as the map's filters.
 function haDrawOptions() {
   const card = HA.card, c = card.config, k = card.kind;
-  const bar = HA.el.querySelector("[data-ha-opts]");
+  const bar = HA.dlg.querySelector("[data-ha-opts]");
   const one = (key, label, options, value, extra = {}) => badgeHtml(`ha-${key}`, label, esc(haLabel(options, value)), { panel: pickList(`ha.${key}`, options, value), ...extra });
   const checks = (key, label, options, chosen, value) => badgeHtml(`ha-${key}`, label, esc(value), {
     panel: `<div class="pick-list ha-checks">${options.map(([v, l]) => optCheck(`hax.${key}.${v}`, chosen.includes(v), esc(l))).join("")}</div>` });
@@ -237,9 +277,12 @@ function haDrawOptions() {
   if (k === "map") {
     parts.push(checks("people", "People", haPersonOptions(false), c.people || [], peopleValue(c.people || [])),
       one("period", "Period", HA_PERIODS(), c.period || ""), one("sport", "Sport", haSports(), c.sport || ""),
-      one("layer", "Layer", [["heatmap", "Heatmap"], ["tiles", "Explorer tiles"]], c.layer || "heatmap"),
-      one("view", "View", [["all", "All routes"], ["main", "Home area"]], c.view || "all"),
+      one("layer", "Layer", HA_LAYERS, c.layer || "heatmap"),
+      one("view", "View", HA_MAP_VIEWS, c.view || "all"),
+      ...(c.view === "fixed" ? [`<div class="badge-wrap"><button class="badge" data-ha-here>${c.center ? "Set to the preview's view" : "Set the place: the preview's view"}</button></div>`] : []),
+      one("zoom", "Zoom", haZooms(c.zoom), Number.isFinite(c.zoom) ? c.zoom : "auto"),
       one("interactive", "Move and zoom", HA_ON, c.interactive !== false),
+      one("menu", "Map buttons", HA_ON, c.menu !== false),
       one("height", "Height", HA_HEIGHTS, c.height || 400),
       badgeHtml("ha-options", "Options", "", { panel: "<div data-settings></div>" }));
   } else if (k === "activity") {
@@ -247,10 +290,15 @@ function haDrawOptions() {
     parts.push(one("person", "Person", haPersonOptions(), c.people?.[0] || ""), one("which", "Activity", HA_WHICH, c.which || 0),
       one("sport", "Sport", haSports(), c.sport || ""),
       checks("values", "Values", HA_VALUES.map(([key, l]) => [key, l]), values, values.length ? `${values.length} shown` : "none"),
-      one("map", "Map", HA_ON, c.map !== false), one("chart", "Chart", HA_ON, !!c.chart));
+      one("map", "Map", HA_ON, c.map !== false),
+      ...(c.map !== false ? [one("base", "Base map", haBases(), c.base || loadMapSettings().map.source),
+        one("relief", "Shading", HA_RELIEF, c.relief || loadMapSettings().map.relief || "on")] : []),
+      one("chart", "Chart", HA_ON, !!c.chart));
   } else if (k === "detail") {
     parts.push(one("person", "Person", haPersonOptions(), c.people?.[0] || ""), one("which", "Activity", HA_WHICH, c.which || 0),
-      one("sport", "Sport", haSports(), c.sport || ""));
+      one("sport", "Sport", haSports(), c.sport || ""),
+      one("base", "Base map", haBases(), c.base || loadMapSettings().map.source),
+      one("relief", "Shading", HA_RELIEF, c.relief || loadMapSettings().map.relief || "on"));
   } else if (k === "records") {
     parts.push(one("person", "Person", haPersonOptions(false), c.people?.[0] || realPeople()[0]?.id),
       checks("groups", "Records", HA_RECORDS, haRecordGroups(c), groupsValue(haRecordGroups(c))),
@@ -266,7 +314,7 @@ function haDrawOptions() {
   // one choice: saved, the badges drawn again (the panel closes)
   bar.querySelectorAll("[data-pick^='ha.']").forEach((b) => b.onclick = () => {
     const key = b.dataset.pick.slice(3);
-    const opts = { kind: HA_KINDS, which: HA_WHICH, height: HA_HEIGHTS, columns: HA_COLUMNS, interactive: HA_ON, map: HA_ON, chart: HA_ON, ahead: HA_ON, summary: HA_ON,
+    const opts = { kind: HA_KINDS, which: HA_WHICH, height: HA_HEIGHTS, columns: HA_COLUMNS, menu: HA_ON, zoom: haZooms(c.zoom), interactive: HA_ON, map: HA_ON, chart: HA_ON, ahead: HA_ON, summary: HA_ON,
                    weeks: [1, 2, 3, 4, 6].map((n) => [n]) }[key];
     const value = opts ? opts.find(([v]) => String(v) === b.dataset.value)[0] : b.dataset.value;
     if (key === "kind") {
@@ -278,6 +326,7 @@ function haDrawOptions() {
       return;
     }
     if (key === "person") c.people = value ? [value] : [];
+    else if (key === "zoom") c.zoom = value === "auto" ? null : value;
     else c[key] = value;
     if (key === "columns" || key === "theme") { haSave(true); return; } // the preview's width / the colours panel follow
     haSave();
@@ -294,6 +343,16 @@ function haDrawOptions() {
     if (shown) shown.textContent = key === "people" ? peopleValue(list) : key === "groups" ? groupsValue(list) : list.length ? `${list.length} shown` : "none";
     haSave();
   });
+  // Fixed place: where the preview's map is now (move it there first), with its zoom
+  const here = bar.querySelector("[data-ha-here]");
+  if (here) here.onclick = () => {
+    const m = HA.dlg.querySelector("[data-ha-frame]")?.contentWindow?.eval("heat && heat.map ? [heat.map.getCenter().toArray(), heat.map.getZoom()] : null");
+    if (!m) return;
+    c.center = m[0].map((v) => Math.round(v * 1e5) / 1e5);
+    c.zoom = Math.round(m[1] * 10) / 10;
+    haSave();
+    haDrawOptions();
+  };
   const name = bar.querySelector(".ha-name");
   name.onchange = () => {
     const v = name.value.trim();
@@ -318,38 +377,20 @@ function haMapOptions(bar) {
   });
 }
 
-// A change in the creator: the preview shows it at once; an existing card is saved a moment
-// after the last change (then its frame below follows). `full`: the creator is drawn again (a
-// new name or type).
+// A change in the creator: the preview shows it at once (saved with Create card / Save).
+// `full`: the window is drawn again (a new name or type).
 function haSave(full = false) {
-  const card = HA.card;
   HA.rev++;
-  if (full) haDraw();
-  else {
-    const frame = HA.el.querySelector("[data-ha-frame]");
-    if (frame?.contentWindow) frame.contentWindow.location.hash = haFrameSrc().split("#")[1];
-  }
-  if (HA.draft) return;
-  clearTimeout(HA.timer);
-  HA.timer = setTimeout(async () => {
-    const saved = await api(`ha/cards/${encodeURIComponent(card.id)}`, { method: "PUT", body: JSON.stringify({ name: card.name, kind: card.kind, config: card.config }) });
-    const i = HA.cards.findIndex((c) => c.id === saved.id);
-    if (i >= 0) HA.cards[i] = saved;
-    const item = HA.el.querySelector(`[data-ha-item="${CSS.escape(saved.id)}"]`);
-    if (item) {
-      item.outerHTML = haCardFrame(saved);
-      const fresh = HA.el.querySelector(`[data-ha-item="${CSS.escape(saved.id)}"]`);
-      bindCopy(fresh);
-      bindEditButtons(fresh);
-    }
-  }, 600);
+  if (full) { haDraw(); return; }
+  const frame = HA.dlg?.querySelector("[data-ha-frame]");
+  if (frame?.contentWindow) frame.contentWindow.location.hash = haFrameSrc().split("#")[1];
 }
 
 // ---- the card's page (#/embed/<id>) ------------------------------------------------------
 
 async function renderEmbed(id, params) {
   document.body.classList.add("embed");
-  document.body.classList.remove("fullmap", "embed-static", "embed-detail");
+  document.body.classList.remove("fullmap", "embed-static", "embed-detail", "embed-ready");
   if (!renderEmbed.bound) { // in a card nothing opens: the links stay text
     renderEmbed.bound = true;
     document.addEventListener("click", (e) => { if (e.target.closest?.("a[href]")) e.preventDefault(); }, true);
@@ -377,6 +418,7 @@ async function renderEmbed(id, params) {
   else if (card.kind === "detail") await embedDetail(c, ids);
   else if (card.kind === "records") await embedRecords(c, ids);
   else await embedCalendar(c, ids);
+  document.body.classList.add("embed-ready"); // the card's background from now on
   embedSize();
 }
 
@@ -389,30 +431,121 @@ function embedSize() {
     height: fill || Math.ceil(view.getBoundingClientRect().height) }, "*");
 }
 
+// The map card. Start view: all routes, the home area, the last activity or a fixed place,
+// fitted or at a set zoom. With `menu` (default on) the card has buttons on the right
+// (haMapMenu) that change only what it shows now; the card's settings stay.
 async function embedMap(c, ids) {
   document.body.classList.add("fullmap");
   document.body.classList.toggle("embed-static", c.interactive === false);
-  const q = { ...(ids.length ? { person: ids.join(",") } : {}), ...(c.period ? { last: c.period } : {}), ...(c.sport ? { types: `g:${c.sport}` } : {}) };
-  const [data] = await Promise.all([api("heatmap/tracks?" + new URLSearchParams(q)), (async () => { BASEMAPS ??= await api("basemaps"); })()]);
-  const tracks = data.items.map((t) => ({ ...t, coords: lonLat(t.polyline) }));
+  BASEMAPS ??= await api("basemaps");
   const d = defaultMapSettings();
-  heat = { settings: { ...d, layer: c.layer || "heatmap", kpis: false, map: { ...d.map, ...c.map }, heatmap: { ...d.heatmap, ...c.heatmap }, tiles: { ...d.tiles, ...c.tiles } },
-           tracks, years: data.years, tileCache: new Map(), params: {}, isAll: ids.length !== 1, map: null, card: true, save: () => {} };
-  view.innerHTML = `<div id="map" class="embed-map"></div>`;
-  // Home area: the routes that start in the half-degree square with the most starts
+  heat = { settings: { ...d, layer: "heatmap", kpis: false, map: { ...d.map, ...c.map }, heatmap: { ...d.heatmap, ...c.heatmap }, tiles: { ...d.tiles, ...c.tiles } },
+           tracks: [], years: [], tileCache: new Map(), params: {}, isAll: ids.length !== 1, map: null, card: true, save: () => {} };
+  haSetLayer(heat.settings, c.layer || "heatmap");
+  const load = async (who) => {
+    const q = { ...(who.length ? { person: who.join(",") } : {}), ...(c.period ? { last: c.period } : {}), ...(c.sport ? { types: `g:${c.sport}` } : {}) };
+    const data = await api("heatmap/tracks?" + new URLSearchParams(q));
+    heat.tracks = data.items.map((t) => ({ ...t, coords: lonLat(t.polyline) }));
+    heat.tileCache = new Map();
+    heat.glowPoints = null;
+    heat.isAll = who.length !== 1;
+  };
+  await load(ids);
+  const menu = c.menu !== false && c.interactive !== false;
+  view.innerHTML = `<div id="map" class="embed-map"></div>${menu ? `<div class="embed-map-menu" data-map-menu></div>` : ""}`;
+  const map = await createMap("map", heat.settings.map, { keepTone: true, interactive: c.interactive !== false, ...haMapStart(c, heat.tracks) });
+  heat.map = map;
+  drawHeatLayers();
+  if (menu) haMapMenu();
+}
+
+// The start view of a map card (createMap options).
+function haMapStart(c, tracks) {
+  const zoom = Number.isFinite(c.zoom) ? c.zoom : null;
+  if (c.view === "fixed" && Array.isArray(c.center)) return { center: c.center, zoom: zoom ?? 12 };
   let shown = tracks;
-  if (c.view === "main") {
+  if (c.view === "last") shown = tracks.slice(-1); // tracks come oldest first
+  else if (c.view === "main") { // the routes that start in the half-degree square with the most starts
     const cell = (p) => `${Math.floor(p[0] * 2)},${Math.floor(p[1] * 2)}`;
     const n = new Map();
     for (const t of tracks) if (t.coords[0]) n.set(cell(t.coords[0]), (n.get(cell(t.coords[0])) || 0) + 1);
-    const best = [...n.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
+    const best = [...n.entries()].sort((x, y) => y[1] - x[1])[0]?.[0];
     if (best) shown = tracks.filter((t) => t.coords[0] && cell(t.coords[0]) === best);
   }
   const bounds = boundsOf(shown.map((t) => t.coords));
-  const map = await createMap("map", heat.settings.map, { keepTone: true, interactive: c.interactive !== false,
-    ...(bounds ? { bounds, fitBoundsOptions: { padding: 24, maxZoom: 15 } } : {}) });
-  heat.map = map;
-  drawHeatLayers();
+  if (!bounds) return {};
+  if (zoom != null) return { center: [(bounds[0][0] + bounds[1][0]) / 2, (bounds[0][1] + bounds[1][1]) / 2], zoom };
+  return { bounds, fitBoundsOptions: { padding: 24, maxZoom: 15 } };
+}
+
+// The buttons on a map card (right, in the middle, one under another): what the map shows
+// (heatmap, explorer tiles, squares, cluster), the base map and the shading. They change only
+// what the card shows now; opened again, it is back to the card's settings.
+const HA_MAP_ICONS = {
+  layer: svg(`<path d="m12 3 9 5-9 5-9-5z"/><path d="m3 13 9 5 9-5"/>`),
+  base: svg(`<path d="M9 4 3 6v14l6-2 6 2 6-2V4l-6 2z"/><path d="M9 4v14M15 6v14"/>`),
+  relief: svg(`<path d="m2 20 7-11 4 6 3-4 6 9z"/><path d="m7.5 11.5 1.5 1.5 1.5-1.5"/>`),
+};
+function haMapMenu() {
+  const s = heat.settings;
+  haMapButtons(view.querySelector("[data-map-menu]"), () => ({
+    layer: ["Map", HA_LAYERS, haLayerOf(s)],
+    ...haBaseButtons(s.map),
+  }), (k, v) => {
+    if (k === "layer") { haSetLayer(s, v); drawHeatLayers(); }
+    else if (k === "base") { s.map.source = v; applyBase(true); }
+    else { s.map.relief = v; applyBase(true); }
+  });
+}
+
+// Base map and shading: the buttons' lists (current values from the map's settings `m`).
+const haBaseButtons = (m) => ({
+  base: ["Base map", haBases(), m.source === "none" ? "none" : baseSource(m.source)?.key],
+  relief: ["Shading", HA_RELIEF, m.relief === "on" ? "on" : "off"],
+});
+
+// A stack of icon buttons on a map (right, in the middle); each opens its list to the left.
+// `panels()`: {key: [title, options, value]}; `pick(key, value)` applies a choice.
+function haMapButtons(box, panels, pick) {
+  if (!box) return;
+  let open = null;
+  const draw = () => {
+    const p = panels();
+    box.innerHTML = Object.entries(p).map(([k, [title]]) => `<div class="map-menu-item">
+        <button type="button" class="map-menu-btn ${open === k ? "on" : ""}" data-menu="${k}" title="${title}" aria-label="${title}" aria-expanded="${open === k}">${HA_MAP_ICONS[k]}</button>
+      </div>`).join("") + (open ? `<div class="map-menu-panel">${section(p[open][0], pickList(`m-${open}`, p[open][1], p[open][2]))}</div>` : "");
+    box.querySelectorAll("[data-menu]").forEach((b) => b.onclick = (e) => {
+      e.stopPropagation();
+      open = open === b.dataset.menu ? null : b.dataset.menu;
+      draw();
+    });
+    box.querySelectorAll("[data-pick]").forEach((b) => b.onclick = (e) => {
+      e.stopPropagation();
+      pick(b.dataset.pick.slice(2), b.dataset.value);
+      open = null;
+      draw();
+    });
+  };
+  box.onclick = (e) => e.stopPropagation();
+  document.addEventListener("click", () => { if (open) { open = null; draw(); } });
+  draw();
+}
+
+// A route map's base map and shading changed: the base layers swapped, the route kept.
+function haSwapBase(map, ms) {
+  const own = new Set(["background", "base", "relief", "trails"]), ownSrc = new Set(["base", "dem", "trails"]);
+  map.setStyle(baseStyle({ ...ms, tone: routeTone() }), { transformStyle: (prev, next) => ({ ...next,
+    sources: { ...Object.fromEntries(Object.entries(prev.sources).filter(([k]) => !ownSrc.has(k))), ...next.sources },
+    layers: [...next.layers, ...prev.layers.filter((l) => !own.has(l.id))] }) });
+}
+
+// The buttons on an activity card's route map (for now only; the card's settings stay).
+function haRouteButtons(holder, map, ms) {
+  holder.insertAdjacentHTML("beforeend", `<div class="embed-map-menu" data-route-menu></div>`);
+  haMapButtons(holder.querySelector("[data-route-menu]"), () => haBaseButtons(ms), (k, v) => {
+    if (k === "base") ms.source = v; else ms.relief = v;
+    haSwapBase(map, ms);
+  });
 }
 
 async function embedActivity(c, ids) {
@@ -429,21 +562,56 @@ async function embedActivity(c, ids) {
         <span class="tile-title"><b>${esc(a.name || typeLabel(a.activity_type))}</b>
         <span class="hint">${a.name ? `${esc(typeLabel(a.activity_type))} · ` : ""}${localTime(a)}${kind ? ` · ${esc(kind)}` : ""}${ids.length ? "" : ` · ${esc(personLabel(a.person_id))}`}</span></span>
       </div>
-      ${c.map !== false && a.polyline ? `<div class="embed-act-map">${staticMap(a.polyline, { W: 560, H: 220, cls: "tile-track", tiles: "faded-tiles" })}</div>` : ""}
+      ${c.map !== false && a.polyline ? `<div class="embed-act-map"><div id="act-map" class="map"></div></div>` : ""}
       ${c.chart && a.tile_chart ? `<div class="embed-act-chart">${tileChart(a.tile_chart)}</div>` : ""}
       ${values.length ? statStrip(values.map(([l, v]) => [l, esc(v), ""])) : ""}
     </div>`;
-  fillRelief();
+  if (c.map !== false && a.polyline) await haRouteMap("act-map", a.polyline, c);
+}
+
+// The route of an Activity card: a map that does not move (the card's base map and shading,
+// the route colours of the theme), the line and its ends as on the activity page.
+async function haRouteMap(el, polyline, c) {
+  BASEMAPS ??= await api("basemaps");
+  const coords = lonLat(polyline);
+  const ms = { ...loadMapSettings().map, ...(c.base ? { source: c.base } : {}), ...(c.relief ? { relief: c.relief } : {}) };
+  const map = await createMap(el, ms, { bounds: boundsOf([coords]), fitBoundsOptions: { padding: 22, maxZoom: 15 }, interactive: false });
+  const accent = getComputedStyle(document.documentElement).getPropertyValue("--accent").trim();
+  map.addSource("route", { type: "geojson", data: { type: "Feature", properties: {}, geometry: { type: "LineString", coordinates: coords } } });
+  map.addLayer({ id: "route-halo", type: "line", source: "route", layout: { "line-join": "round", "line-cap": "round" },
+                 paint: { "line-color": mapHalo(), "line-width": 6.5, "line-opacity": 0.8 } });
+  map.addLayer({ id: "route", type: "line", source: "route", layout: { "line-join": "round", "line-cap": "round" },
+                 paint: { "line-color": accent, "line-width": 3.5 } });
+  map.addSource("ends", { type: "geojson", data: { type: "FeatureCollection", features: [
+    { type: "Feature", properties: { c: "#3ecf8e" }, geometry: { type: "Point", coordinates: coords[0] } },
+    { type: "Feature", properties: { c: "#ff6b6b" }, geometry: { type: "Point", coordinates: coords[coords.length - 1] } }] } });
+  map.addLayer({ id: "ends", type: "circle", source: "ends", paint: { "circle-radius": 5, "circle-color": ["get", "c"], "circle-stroke-width": 2, "circle-stroke-color": mapHalo() } });
+  haRouteButtons(document.getElementById(el).parentElement, map, ms);
 }
 
 // Activity detailed: the activity's page as a phone shows it (the card is drawn phone-wide),
 // with the route map on top as a square; nothing to edit or open.
+var EMBED_ROUTE_MAP = null; // a card's base map and shading for the route map (showRouteMap)
+const HA_RELIEF = [["on", "Hills shaded"], ["off", "Off"]];
+const haBases = () => [...(BASEMAPS || []).map((b) => [b.key, b.label.split(" (")[0]]), ["none", "None"]];
+
 async function embedDetail(c, ids) {
   document.body.classList.add("embed-detail");
+  BASEMAPS ??= await api("basemaps");
+  EMBED_ROUTE_MAP = { ...(c.base ? { source: c.base } : {}), ...(c.relief ? { relief: c.relief } : {}) };
+  // the small cards in rows: the n-th card of each column side by side, starting level
+  const align = () => view.querySelectorAll(".act-col-stats.two").forEach((box) =>
+    box.querySelectorAll(":scope > .stat-col").forEach((col, ci) => [...col.children].forEach((card, ri) => {
+      card.style.gridColumn = String(ci + 1);
+      card.style.gridRow = String(ri + 1);
+    })));
   const q = { limit: 1, offset: c.which || 0, ...(ids.length ? { person: ids[0] } : {}), ...(c.sport ? { types: `g:${c.sport}` } : {}) };
   const first = (await api("activities?" + new URLSearchParams(q))).items[0];
   if (!first) { view.innerHTML = `<div class="embed-msg">${hint("No activity yet.")}</div>`; return; }
   await renderActivity(first.id);
+  align();
+  const tiles = view.querySelector("[data-top]");
+  if (tiles) new MutationObserver(align).observe(tiles, { childList: true });
   // the map on top without its card, then the name and the date, then the tiles
   const head = `<div class="ed-head"><h2>${typeIcon(first.activity_type, 20)}<span>${esc(first.name || typeLabel(first.activity_type))}</span></h2>
     <div class="ed-date">${localTime(first)}${first.name ? ` · ${esc(typeLabel(first.activity_type))}` : ""}${ids.length ? "" : ` · ${esc(personLabel(first.person_id))}`}</div></div>`;
@@ -458,6 +626,7 @@ async function embedDetail(c, ids) {
   const refit = () => {
     if (!track?.polyline || !tries--) return;
     if (!activeMap?.getSource("route")) { setTimeout(refit, 150); return; }
+    if (!wrap.querySelector("[data-route-menu]")) haRouteButtons(wrap, activeMap, { ...loadMapSettings().map, ...EMBED_ROUTE_MAP });
     activeMap.resize();
     activeMap.fitBounds(boundsOf([lonLat(track.polyline)]), { padding: 28, maxZoom: 15, duration: 0 });
   };

@@ -654,6 +654,12 @@ MIGRATIONS: list[str] = [
     ALTER TABLE activities ADD COLUMN fit_metrics TEXT;
     ALTER TABLE activities ADD COLUMN metrics_version INTEGER NOT NULL DEFAULT 0;
     """,
+    # v44 — corrections the person made (fixes.py; JSON list: "altitude", "speed"), applied
+    # again on reimport; `excluded`: left out of the statistics, records and segment efforts.
+    """
+    ALTER TABLE activities ADD COLUMN fixes TEXT;
+    ALTER TABLE activities ADD COLUMN excluded INTEGER NOT NULL DEFAULT 0;
+    """,
 ]
 
 SCHEMA_VERSION = len(MIGRATIONS)

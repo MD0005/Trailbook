@@ -631,7 +631,8 @@ All JSON, prefix `/api`. Read endpoints accept `person`, `from`, `to`, `category
 | GET | `/activities` | Paged list with summary fields. |
 | GET | `/activities/{id}` | Summary + laps + best efforts. |
 | GET | `/activities/{id}/streams?channels=…` | Streams for charts (optionally downsampled). |
-| PATCH | `/activities/{id}` | Name, category override. |
+| PATCH | `/activities/{id}` | Name, type, training type, FTP, section lines; `fix` (`altitude` / `speed`: fixes.py, the streams are rewritten); `excluded` (true / false). |
+| GET | `/activities/{id}/export?format=fit\|gpx` | Activity › Export: FIT = the whole activity (the own FIT file; one written from the stored data when the activity was corrected or came as GPX/TCX/Strava); GPX = the route only (positions and altitude, no times or heart rate). |
 | DELETE | `/activities/{id}` | Delete activity (used for missing files). |
 | GET | `/tracks` | All simplified tracks for a filter, as compact binary/GeoJSON, cacheable (ETag). |
 | GET | `/fitness?person&from&to` | Daily load, CTL, ATL, TSB, ramp rate (CTL change in 7 days); methods; thresholds in use; threshold warnings of the period. |
@@ -1265,38 +1266,51 @@ workouts* on. Code: `planner.py` (workouts, estimates, text), `icu.py` (key, syn
   card: <id>
   ```
   so a change made in Trailbook shows on the dashboard without editing it.
-- **Cards tab:** one frame with the creator (a new card, or the one being edited): a "Label:
-  value" badge each, the preview under them (it shows every change at once, saved or not:
-  `#/embed/_creator` reads the creator's card), then *Create
-  card* (new) or *New card* / *Delete card* (editing: saved 0,6 s after the last change). Under
-  it a frame for each card made: name (type), a small preview at half size, the dashboard text,
-  Edit and Copy; the card being edited is outlined.
+- **Cards tab:** *New card* in the page header (a badge, like Create segment on an activity);
+  the page lists a frame for each card made: name (type), a small preview at half size, the
+  dashboard text, Edit and Copy (no cards: a short hint). New card and Edit open the
+  **creator in a window** over the page (as the workout creator): title (New card / Edit
+  card: name), a "Label: value" badge each, the preview under them (it shows every change at
+  once: `#/embed/_creator` reads the creator's card), then the buttons: *Delete card* (editing,
+  left), *Cancel* and *Create card* / *Save*. Nothing is saved before Create card / Save;
+  Cancel or Esc drops the changes. `#/ha/cards?card=<id>` opens that card's window.
 - **Theme** (every kind): Light / Dark, the card's own, whatever theme Trailbook or Home
   Assistant shows (a new card starts with Trailbook's; it stays when the type changes). Map ›
   Options › Colours edits the colours of the card's theme.
 - **Kinds and their settings:**
   - *Map*: People (any, none = everyone), Period (All time or the time filter's last periods),
-    Sport (a group), Layer (Heatmap / Explorer tiles), View (All routes / Home area: the routes
-    starting in the half-degree square with the most starts), Move and zoom (on / off),
+    Sport (a group), Layer (Heatmap / Explorer tiles / Squares / Cluster), View (where the map
+    starts: All routes / Home area: the routes starting in the half-degree square with the most
+    starts / Last activity / Fixed place: the preview's view, set with a button), Zoom (Fit to
+    the view's routes, or a level 6–16), Move and zoom (on / off), Map buttons (on / off),
     Height (250–800 px), Options (as Map › Options: base map, colours per theme, relief,
     trails, heatmap, explorer tiles; no regions). A new card starts from the Map tab's options.
+    **Map buttons**: icon buttons on the right, in the middle, one under another — what the map
+    shows (Heatmap, Explorer tiles, Squares, Cluster), the base map, the shading; each opens a
+    list to its left. They change only what the card shows now; opened again it is back to the
+    card's settings.
   - *Activity*: Person (or everyone), Activity (latest, 2nd, 3rd latest), Sport, Values (any of
     distance, time, elapsed time, pace / speed, max speed, avg / max HR, ascent, avg power,
     normalized power, cadence, calories, load, training type, in the order picked), Map
-    (the static route map, on / off), Chart (the tile chart of the training type, on / off).
-  - *Activity detailed*: Person (or everyone), Activity (latest, 2nd, 3rd latest), Sport. The
-    activity's page as a phone shows it (laid out 420 px wide; the Lovelace card scales it to
-    a wider card, up to 1,6 ×), dense: the route map on top edge to edge as a square (no Route
-    card), then the name, then a small line with the date and time (type; person for
-    everyone), then the tiles with small gaps; no header controls, no source files, links do
-    nothing.
+    (the route on a map that does not move, on / off; Base map and Shading of its own, and
+    the base map and shading buttons on it, for the moment, as on the map card),
+    Chart (the tile chart of the training type, on / off). The values in an even grid.
+  - *Activity detailed*: Person (or everyone), Activity (latest, 2nd, 3rd latest), Sport, Base
+    map, Shading (also as buttons on its map, for the moment). The activity's page as a phone shows it (laid out 420 px wide; the Lovelace
+    card zooms it to a wider card, up to 1,6 ×, with CSS zoom so nothing is cut; a card given a
+    fixed height scrolls inside), dense: the route map on top edge to edge as a square (no Route
+    card, no attribution: it covered the scale), then the name, then a small line with the date
+    and time (type; person for everyone), then the small cards in rows (the n-th card of each
+    column side by side, starting level, small gaps), then the bigger cards and charts clearly
+    apart; no header controls, no source files, links do nothing.
   - *Records*: Person, Records (any tables of Statistics › Records, in the order picked: running,
     cycling power, cycling, cycling virtual, walking & hiking, segments), Columns (1–3), Period (all time: the 3 best; a
     period: its best and the best of all time).
   - *Calendar*: Person (or everyone), Weeks (1–6, up to this one), Next week (on / off), Week
     summary (on / off). The Calendar's weeks without its header and panels.
 - **The card's page** `#/embed/<id>`: in the card's theme, no header, the card's surface, links do
-  nothing. It tells the frame around it its height (`postMessage` `{trailbook: "size", height,
+  nothing. While it loads (from the first paint, `html.embed-page`): no header, a clear
+  background (the dashboard card's own), the loader in the middle of the whole card. It tells the frame around it its height (`postMessage` `{trailbook: "size", height,
   fill}`): the map fills the card (at least its Height), the others are as tall as they are.
 - **The Lovelace card** (`static/ha/trailbook-card.js`, no dependencies) finds the add-on
   (`supervisor/api` `/addons`, slug `trailbook` or `*_trailbook`), opens an Ingress session
@@ -1427,6 +1441,25 @@ altitude chart when Garmin corrected the elevation. The page shows location afte
 Training effect and Body Battery as small cards (two columns when there are more than four).
 Gear (bike, shoes) is not available through the personal API key (gear-service: 404) and is
 not in FIT files.
+
+### Export, corrections and Exclude (activity page)
+
+- **Export** (badge after Create segment, a pick list): *FIT · the whole activity* (the
+  activity's own FIT file; written from the stored records, laps and session when it was
+  corrected or came as GPX/TCX/Strava) and *GPX · the route only* (positions and altitude, no
+  times or heart rate: to send to someone). The file is downloaded, named
+  `<local date>-<name>.<fit|gpx>` (ASCII).
+- **Edit panel**, at the bottom, rows like the others (label with a short hint, a badge):
+  *Altitude › Correct altitude* (spikes smoothed out), *Speed › Correct speed* (GPS jumps
+  taken out of positions, speed and distance), *Statistics › Exclude from statistics /
+  Include again*. Each asks first; the corrections say the values are replaced for good (only
+  a reimport of the file brings them back). How they work: MANUAL › Corrections.
+- Corrections are kept in `activities.fixes` (JSON list) and applied again when the file is
+  imported again; load, best efforts, segments and the training type are computed again.
+- **Excluded** (`activities.excluded`): the activity stays in Activities, Calendar, Map and
+  Fitness, but is left out of Statistics (totals, Timeline), records and best efforts (Records,
+  the activity page's YTD / ATH columns, record notifications) and has no segment efforts. The
+  header shows "Excluded from statistics".
 
 ### Segments on the activity page
 

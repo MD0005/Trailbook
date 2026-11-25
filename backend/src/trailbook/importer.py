@@ -1182,6 +1182,12 @@ def _store_activity(
                 lap.target_high,
             ),
         )
+    if replace_id is not None:  # corrections the person made: applied again to the new data
+        from . import fixes  # noqa: PLC0415 (fixes uses the importer)
+
+        row = conn.execute("SELECT fixes FROM activities WHERE id = ?", (activity_id,)).fetchone()
+        if row and row["fixes"]:
+            fixes.apply(conn, activity_id, fixes.fixes_of(row))
     return activity_id
 
 

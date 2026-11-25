@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.1.23
+
+### Added
+- Activity page: Export as FIT (the whole activity) or GPX (the route only, to send to someone).
+- Activity › Edit: Correct altitude (smooths unrealistic spikes) and Correct speed (takes out
+  GPS jumps), each after a confirmation.
+- Activity › Edit: Exclude from statistics leaves an activity out of statistics, records,
+  best efforts and segments (and Include again).
+- Home Assistant map card: start over the last activity or a fixed place, and a zoom level.
+- Home Assistant map card: buttons on the map to switch the view (heatmap, explorer tiles,
+  squares, cluster), the base map and the shading for the moment.
+- Home Assistant activity cards: base map and shading, also as buttons on the card's map.
+
+### Changed
+- The Home Assistant icon in the header looks like Home Assistant's own.
+- Home Assistant › Cards: New card is a button in the page header; making or editing a card
+  opens a window with Cancel and Create card / Save (nothing is saved before that).
+- Home Assistant Activity card: a clear, readable route map with even margins in both themes.
+- Home Assistant Activity detailed card: the small cards line up in rows, more room between
+  the charts, no map credits over the scale.
+
+### Fixed
+- Home Assistant Activity detailed card: shown in full in a card with a fixed height (it was
+  cut off with a dark area below).
+- Home Assistant cards: while loading, no header bar and the loader sits on an even background.
+
 ## 0.1.22
 
 ### Added

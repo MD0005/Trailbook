@@ -80,8 +80,8 @@ class TrailbookCard extends HTMLElement {
     const root = this.attachShadow({ mode: "open" });
     root.innerHTML = `<style>
         :host { display: block; height: 100%; }
-        ha-card { height: 100%; overflow: hidden; display: flex; flex-direction: column; }
-        iframe { border: 0; width: 100%; flex: 1 1 auto; display: block; background: transparent; }
+        ha-card { height: 100%; overflow: hidden auto; display: flex; flex-direction: column; }
+        iframe { border: 0; width: 100%; flex: 1 0 auto; display: block; background: transparent; }
         .msg { padding: 16px; color: var(--secondary-text-color); font-size: 14px; }
       </style><ha-card><div class="msg">Loading…</div><iframe hidden title="Trailbook"></iframe></ha-card>`;
     this._msg = root.querySelector(".msg");
@@ -99,15 +99,15 @@ class TrailbookCard extends HTMLElement {
     this._load();
   }
 
-  // Activity detailed: its page is laid out phone-wide (PHONE_W) and scaled to a wider card.
+  // Activity detailed: its page is laid out phone-wide (PHONE_W) and zoomed to a wider card
+  // (zoom, not a transform: the frame takes its zoomed size, so nothing is cut off). A card
+  // given a fixed height in the dashboard scrolls inside.
   _fit() {
     const f = this._frame, w = this.clientWidth;
     const scale = this._phone && w > PHONE_W + 40 ? Math.min(w / PHONE_W, MAX_SCALE) : 1;
     f.style.width = scale > 1 ? `${PHONE_W}px` : "";
-    f.style.transform = scale > 1 ? `scale(${scale})` : "";
-    f.style.transformOrigin = "0 0";
-    f.style.marginLeft = scale > 1 ? `${(w - PHONE_W * scale) / 2}px` : "";
-    f.style.marginBottom = scale > 1 ? `${(this._height || 0) * (scale - 1)}px` : "";
+    f.style.zoom = scale > 1 ? String(scale) : "";
+    f.style.marginLeft = scale > 1 ? `${(w - PHONE_W * scale) / 2 / scale}px` : "";
   }
 
   async _load() {

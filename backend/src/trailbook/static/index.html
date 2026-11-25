@@ -23,6 +23,15 @@
     document.documentElement.style.setProperty("--accent", dark ? a[1] : a[0]);
     document.documentElement.style.setProperty("--state", dark ? a[1] : a[0]);
   } catch (e) { /* storage unavailable: keep defaults */ }
+  // A Home Assistant card (#/embed/…): no header and a clear background from the first paint,
+  // so the loader sits on the card's own background; the creator's preview takes the card's theme.
+  if (location.hash.startsWith("#/embed/")) {
+    document.documentElement.classList.add("embed-page");
+    try {
+      const t = window.parent !== window && window.parent.HA?.card?.config?.theme;
+      if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+    } catch (e) { /* another origin */ }
+  }
 </script>
 <link rel="stylesheet" href="icons/trailbook-icons.css">
 <link rel="stylesheet" href="icons/metric-icons.css">

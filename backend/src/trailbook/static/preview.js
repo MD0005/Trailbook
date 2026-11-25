@@ -55,7 +55,8 @@ const ICON = {
   sun: svg(`<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>`),
   moon: svg(`<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/>`),
   help: svg(`<circle cx="12" cy="12" r="9.5"/><path d="M9.3 9.2a2.8 2.8 0 0 1 5.4 1c0 1.9-2.7 2.4-2.7 4.1"/><circle cx="12" cy="17.6" r=".4" fill="currentColor"/>`),
-  ha: svg(`<path d="M2 11 12 2.5 22 11"/><path d="M4.5 9v12.5h15V9"/><path d="M12 21.5v-10.6M12 17.4l-3.4-3.1M12 17.4l3.4-3.1"/><circle cx="12" cy="9.4" r="1.5"/><circle cx="7.6" cy="13.3" r="1.5"/><circle cx="16.4" cy="13.3" r="1.5"/>`),
+  // Home Assistant's mark: the house (no eaves) with the tree of three nodes inside
+  ha: svg(`<path d="M12 2.6 21.2 10.6V21.2H2.8V10.6Z"/><path d="M12 21.2V10.6M12 16.2l-3.1-3M12 18.4l3.1-3"/><circle cx="12" cy="9.1" r="1.5" fill="currentColor" stroke="none"/><circle cx="8" cy="12.3" r="1.5" fill="currentColor" stroke="none"/><circle cx="16" cy="14.5" r="1.5" fill="currentColor" stroke="none"/>`),
   gear: svg(`<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>`),
   list: svg(`<path d="M8 6h13M8 12h13M8 18h13"/><circle cx="3.5" cy="6" r="1"/><circle cx="3.5" cy="12" r="1"/><circle cx="3.5" cy="18" r="1"/>`),
   tilesSmall: svg(`<rect x="3" y="3" width="18" height="18" rx="3.5"/><path d="M7.5 17v-3.5M10.5 17v-7M13.5 17v-5M16.5 17v-9" stroke-width="2.2"/>`),
@@ -1214,6 +1215,9 @@ async function renderActivity(id) {
     ?? TYPES?.workout_families?.find((f) => f.types.includes(a.activity_type))?.kinds
     ?? (["team", "racket"].includes(a.category) ? ["match", "training", "recreation"]
       : a.workout ? ["easy", "long", "tempo", "intervals", "hills", "race", "commute"] : []);
+  let fixed = [];
+  try { fixed = a.fixes ? JSON.parse(a.fixes) : []; } catch { fixed = []; }
+  const optLabel = (label, hint) => `${label}<small class="opt-hint">${hint}</small>`;
   const editPanel = `<div class="opt-panel">
       ${row("Name", `<input name="name" value="${esc(a.name || "")}" placeholder="${esc(typeLabel(a.activity_type))}">`)}
       ${row("Type", typeSelect)}
@@ -1225,6 +1229,12 @@ async function renderActivity(id) {
       ${["intervals", "hills"].includes(workoutOf(a)) ? `<div data-reset-lines ${savedLines ? "" : "hidden"}>${row(`Section lines<small class="opt-hint">Moved by you. Reset brings back the detected ones.</small>`,
         `<button id="reset-lines" class="badge">Reset lines</button>`)}</div>` : ""}
       ${row("", `<button id="del" class="badge danger">Delete activity</button>`)}
+      ${hasVals(st.altitude) ? row(optLabel("Altitude", fixed.includes("altitude") ? "Corrected once." : "Spikes smoothed out."),
+        `<button class="badge" data-fix="altitude">Correct altitude</button>`) : ""}
+      ${hasVals(st.speed) || hasVals(st.distance) ? row(optLabel("Speed", fixed.includes("speed") ? "Corrected once." : "GPS jumps taken out."),
+        `<button class="badge" data-fix="speed">Correct speed</button>`) : ""}
+      ${row(optLabel("Statistics", a.excluded ? "Left out of records." : "Counted in records."),
+        `<button class="badge" data-exclude="${a.excluded ? "0" : "1"}">${a.excluded ? "Include again" : "Exclude from statistics"}</button>`)}
     </div>`;
   const hasData = (arr) => Array.isArray(arr) && arr.some((v) => v != null && v > 0);
   const ROUTE_MODES = [["plain", "Single colour", true], ["speed", "Speed", hasData(st.speed)], ["hr", "Heart rate", hasData(st.hr)],
@@ -1244,7 +1254,6 @@ async function renderActivity(id) {
   const COMPARE = [["all", "All time"], ["365d", "Last 12 months"], ["90d", "Last 3 months"], ["30d", "Last 30 days"]];
   let compare = UI.data["activity-compare"] ?? "all";
   if (!COMPARE.some(([k]) => k === compare)) compare = "all"; // "This year" is always a column now
-  const optLabel = (label, hint) => `${label}<small class="opt-hint">${hint}</small>`;
   let routeOffset = UI.data["activity-route-offset"] ?? true;
   const optionsPanel = `<div class="opt-panel">${track ? row(optLabel("Route lines", "Where the route runs twice (out and back): side by side or on top"),
       pickList("route-offset", [["on", "Side by side"], ["off", "On top"]], routeOffset ? "on" : "off")) : ""}
@@ -1255,10 +1264,11 @@ async function renderActivity(id) {
     `<label class="check"><input type="checkbox" data-chart-key="${x.key}" ${isShown(x.key) ? "checked" : ""}> ${metricIcon(x.icon, 16)} ${esc(x.label)}</label>`).join("")}</div></div>`;
   view.innerHTML = `
     ${backLink(`#/activities`, "Activities")}
-    <div class="page-head"><h2 class="tb-activity-name">${typeIcon(a.activity_type, 24)}<span>${esc(a.name || typeLabel(a.activity_type))}</span><span class="head-date">${localTime(a)}${a.connect?.locationName ? ` · ${esc(a.connect.locationName)}` : ""}${a.country_name ? ` · ${esc(a.country_name)}` : ""}</span></h2>
+    <div class="page-head"><h2 class="tb-activity-name">${typeIcon(a.activity_type, 24)}<span>${esc(a.name || typeLabel(a.activity_type))}</span><span class="head-date">${localTime(a)}${a.connect?.locationName ? ` · ${esc(a.connect.locationName)}` : ""}${a.country_name ? ` · ${esc(a.country_name)}` : ""}${a.excluded ? ` · <span data-tip="Edit › Statistics">Excluded from statistics</span>` : ""}</span></h2>
       <div class="badges">${available.length && chartX ? `${badgeHtml("charts", "Charts", `${visibleSeries().length} of ${available.length}`, { panel: chartsPanel })}
           ${badgeHtml("chart-options", "Options", "", { panel: optionsPanel })}` : ""}
-        ${badgeHtml("edit", "Edit", "", { panel: editPanel })}${track ? `<div class="badge-wrap"><button class="badge" data-go="#/segments/new/activity?id=${id}&from=activity">Create segment</button></div>` : ""}</div><span class="spacer"></span>
+        ${badgeHtml("edit", "Edit", "", { panel: editPanel })}${track ? `<div class="badge-wrap"><button class="badge" data-go="#/segments/new/activity?id=${id}&from=activity">Create segment</button></div>` : ""}
+        ${badgeHtml("export", "Export", "", { panel: `<div class="opt-panel">${pickList("export", [["fit", "FIT · the whole activity"], ...(track ? [["gpx", "GPX · the route only"]] : [])], "")}</div>` })}</div><span class="spacer"></span>
       ${prevNextHtml(a.prev_id && `#/activity/${a.prev_id}`, a.next_id && `#/activity/${a.next_id}`)}</div>
     <div class="act-top" data-top></div>
     ${a.description ? `<div class="card act-description">${esc(a.description)}</div>` : ""}
@@ -1320,6 +1330,34 @@ async function renderActivity(id) {
   const resetLines = panel.querySelector("#reset-lines");
   if (resetLines) resetLines.onclick = async () => {
     await api("activities/" + id, { method: "PATCH", body: JSON.stringify({ section_lines: null }) });
+    renderActivity(id);
+  };
+  // Export: the file is downloaded (FIT: the whole activity, GPX: the route only)
+  view.querySelectorAll('[data-pick="export"]').forEach((b) => b.onclick = () => {
+    document.onclick?.();
+    const link = document.createElement("a");
+    link.href = `api/activities/${id}/export?format=${b.dataset.value}`;
+    link.download = "";
+    document.body.append(link);
+    link.click();
+    link.remove();
+  });
+  // Corrections: the streams are rewritten, so the values taken out are gone
+  panel.querySelectorAll("[data-fix]").forEach((b) => b.onclick = async () => {
+    const what = b.dataset.fix === "altitude"
+      ? "Smooth out the unrealistic altitude spikes?\n\nThe original altitude values are replaced and cannot be brought back (only by importing the file again). Ascent, descent, records and climbs are computed again."
+      : "Take the GPS jumps out of this activity?\n\nPositions, speed and distance at the jumps are replaced and cannot be brought back (only by importing the file again). Distance, best efforts and segments are computed again.";
+    if (!confirm(what + "\n\nContinue?")) return;
+    b.disabled = true;
+    try { await api("activities/" + id, { method: "PATCH", body: JSON.stringify({ fix: b.dataset.fix }) }); }
+    catch (e) { alert(e.message); }
+    renderActivity(id);
+  });
+  const excl = panel.querySelector("[data-exclude]");
+  if (excl) excl.onclick = async () => {
+    const out = excl.dataset.exclude === "1";
+    if (out && !confirm("Exclude this activity from statistics?\n\nIt stays in Activities, but its totals, records, best efforts and segment times are left out until you include it again.\n\nContinue?")) return;
+    await api("activities/" + id, { method: "PATCH", body: JSON.stringify({ excluded: out }) });
     renderActivity(id);
   };
   panel.querySelector("#del").onclick = async () => {
@@ -2975,9 +3013,10 @@ function drawHeatLayers() {
     const max = Math.max(1, ...[...tiles.values()].map((t) => t.visits));
     map.addSource("tiles", { type: "geojson", data: { type: "FeatureCollection",
       features: [...tiles.values()].map((t) => tileFeature(t, z, { v: t.visits, f: Math.log(t.visits) / Math.log(max + 1) })) } });
+    // clusterOnly (a Home Assistant map card's Cluster): the tiles only as a thin grid
     map.addLayer({ id: "tiles-fill", type: "fill", source: "tiles", paint: {
-      "fill-opacity": T.style === "heat" ? 0.55 : 0.32, "fill-antialias": T.display === "grid" } });
-    if (T.display === "grid") map.addLayer({ id: "tiles-line", type: "line", source: "tiles", paint: { "line-opacity": 0.35, "line-width": 0.6 } });
+      "fill-opacity": T.clusterOnly ? 0 : T.style === "heat" ? 0.55 : 0.32, "fill-antialias": T.display === "grid" } });
+    if (T.display === "grid" || T.clusterOnly) map.addLayer({ id: "tiles-line", type: "line", source: "tiles", paint: { "line-opacity": 0.35, "line-width": 0.6 } });
     if (T.cluster && cluster.length) {
       map.addSource("cluster", { type: "geojson", data: { type: "FeatureCollection", features: cluster.map((t) => tileFeature(t, z)) } });
       map.addLayer({ id: "cluster", type: "fill", source: "cluster", paint: { "fill-color": "#a678ff", "fill-opacity": 0.35 } });
@@ -3046,7 +3085,9 @@ async function newTilesCard(view, a, track) {
 // `dashed`: a segment line (dashed from the first frame); `ends`: one colour for both ends.
 async function showRouteMap(container, polyline, { offset = false, dashed = false, ends = null, corridor = 0 } = {}) {
   const coords = lonLat(polyline);
-  const map = await createMap(container, loadMapSettings().map, { bounds: boundsOf([coords]), reset: true });
+  // a Home Assistant card (Activity detailed) may set its own base map and shading
+  const ms = { ...loadMapSettings().map, ...(typeof EMBED_ROUTE_MAP !== "undefined" && document.body.classList.contains("embed-detail") ? EMBED_ROUTE_MAP : {}) };
+  const map = await createMap(container, ms, { bounds: boundsOf([coords]), reset: true });
   const accent = getComputedStyle(document.documentElement).getPropertyValue("--accent").trim();
   map.addSource("route", { type: "geojson", data: { type: "Feature", properties: {}, geometry: { type: "LineString", coordinates: coords } } });
   map.addLayer({ id: "route", type: "line", source: "route", layout: { "line-join": "round", "line-cap": dashed ? "butt" : "round" },

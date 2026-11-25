@@ -34,7 +34,7 @@ YEAR_POWER_S = (1200, 3600)  # power: every duration of all time, these only for
 
 # Best efforts ranked per (kind, key, v), with the activity's distance and elevation gain as more
 # efforts (kinds "longest" and "ascent", key 0, value in m; higher is better) so they rank like
-# the others.
+# the others. Activities the person excluded (activity › Edit) have none.
 # v = 1: an indoor ride's (virtual ride, trainer) distance, time over a distance and top speed -
 # their own records (a trainer's speed is no road speed); their power counts with every ride.
 VIRTUAL_KINDS = ("ride", "longest", "within", "speed", "ascent", "climb", "grade")
@@ -42,15 +42,17 @@ _VK = ", ".join(f"'{k}'" for k in VIRTUAL_KINDS)
 EFFORTS_SQL = f"""(SELECT b.activity_id, b.kind, b.key, b.value, b.start_s, b.end_s,
         CASE WHEN b.kind IN ({_VK}) AND va.category = 'ride' AND va.indoor THEN 1 ELSE 0 END
             AS v
-    FROM best_efforts b JOIN activities va ON va.id = b.activity_id
+    FROM best_efforts b JOIN activities va ON va.id = b.activity_id WHERE NOT va.excluded
     UNION ALL
     SELECT id, 'longest', 0, distance_m, 0, elapsed_s,
         CASE WHEN category = 'ride' AND indoor THEN 1 ELSE 0 END
-    FROM activities WHERE distance_m > 0 AND category IN ('run', 'ride', 'walk', 'hike')
+    FROM activities WHERE distance_m > 0 AND NOT excluded
+        AND category IN ('run', 'ride', 'walk', 'hike')
     UNION ALL
     SELECT id, 'ascent', 0, ascent_m, 0, elapsed_s,
         CASE WHEN category = 'ride' AND indoor THEN 1 ELSE 0 END
-    FROM activities WHERE ascent_m > 0 AND category IN ('run', 'ride', 'walk', 'hike'))"""
+    FROM activities WHERE ascent_m > 0 AND NOT excluded
+        AND category IN ('run', 'ride', 'walk', 'hike'))"""
 
 LOWER_IS_BETTER = ("pace", "ride", "segment")  # times; power and distance: higher
 _ORDER = "CASE WHEN o.kind IN ('pace', 'ride') THEN o.value ELSE -o.value END"
@@ -173,7 +175,8 @@ def _ranked(c: sqlite3.Connection, year: str | None) -> list[sqlite3.Row]:
                        's:' || s.id, se.elapsed_s
                 FROM segment_efforts se JOIN activities a ON a.id = se.activity_id
                 JOIN segments s ON s.id = se.segment_id
-                WHERE a.person_id IN (SELECT id FROM persons WHERE archived = 0) AND {yf}),
+                WHERE NOT a.excluded
+                  AND a.person_id IN (SELECT id FROM persons WHERE archived = 0) AND {yf}),
             r AS (SELECT e.*, {rank} FROM e)
             SELECT * FROM r WHERE rk <= {TOP} OR rk_old <= {TOP}
             ORDER BY person_id, list_key, rk""",

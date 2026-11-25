@@ -13,6 +13,7 @@ import logging
 import os
 import re
 import sqlite3
+import unicodedata
 import zipfile
 from calendar import monthrange
 from contextlib import asynccontextmanager, closing
@@ -40,7 +41,9 @@ from . import (
     countries,
     db,
     explorer,
+    export,
     fitfile,
+    fixes,
     garmin,
     hacards,
     homeassistant,
@@ -1057,6 +1060,25 @@ def create_app(db_path: str | Path) -> Starlette:
                 kind = json.loads(row["section_lines"]).get("kind")
                 if kind != (row["workout_override"] or row["workout"]):
                     c.execute("UPDATE activities SET section_lines = NULL WHERE id = ?", (aid,))
+            if "fix" in body:  # Edit › Correct altitude / Correct speed (fixes.py)
+                if body["fix"] not in fixes.KINDS:
+                    raise HTTPException(400, "fix must be altitude or speed")
+                c.execute("BEGIN")
+                try:
+                    fixes.apply(c, aid, [body["fix"]])
+                    c.execute("COMMIT")
+                except Exception:
+                    c.execute("ROLLBACK")
+                    raise
+                analysis.analyse_one(c, aid)
+                segments.match_activity(c, aid)
+                workout.detect_one(c, aid)
+            if "excluded" in body:  # left out of the statistics, records and segment efforts
+                c.execute(
+                    "UPDATE activities SET excluded = ? WHERE id = ?",
+                    (int(bool(body["excluded"])), aid),
+                )
+                segments.match_activity(c, aid)
             if "name" in body:
                 name = (body["name"] or "").strip()
                 if name:
@@ -1073,6 +1095,36 @@ def create_app(db_path: str | Path) -> Starlette:
                     )
                     importer.apply_connect_title(c, aid)
             return JSONResponse(dict(_activity_or_404(c, aid)))
+
+    # Activity › Export: ?format=fit (the whole activity) or gpx (the route only)
+    async def activity_export(request: Request):
+        aid = request.path_params["id"]
+        kind = request.query_params.get("format", "fit")
+        if kind not in ("fit", "gpx"):
+            raise HTTPException(400, "format must be fit or gpx")
+        with closing(conn()) as c:
+            a = _activity_or_404(c, aid)
+            root = db.get_setting(c, "root")
+            local = datetime.strptime(a["start_time_utc"][:19], "%Y-%m-%dT%H:%M:%S") + timedelta(
+                seconds=a["utc_offset_s"] or 0
+            )
+            t = sports.TYPES.get(a["activity_type"])
+            label = a["name"] or (t.en if t else "Activity")
+            plain = unicodedata.normalize("NFKD", label.replace("ł", "l").replace("Ł", "L"))
+            plain = plain.encode("ascii", "ignore").decode()
+            base = re.sub(r"[^A-Za-z0-9._-]+", "-", f"{local:%Y-%m-%d}-{plain}").strip("-")[:80]
+            if kind == "gpx":
+                text = export.gpx_text(c, a, label)
+                if text is None:
+                    raise HTTPException(404, "the activity has no route")
+                body, media = text.encode(), "application/gpx+xml"
+            else:
+                body = export.fit_bytes(c, a, Path(root) if root else None, uploads_dir)
+                media = "application/vnd.ant.fit"
+        return Response(
+            body, media_type=media,
+            headers={"Content-Disposition": f'attachment; filename="{base}.{kind}"'},
+        )  # fmt: skip
 
     async def activity_delete(request: Request):
         aid = request.path_params["id"]
@@ -1579,7 +1631,8 @@ def create_app(db_path: str | Path) -> Starlette:
         with closing(conn()) as c:
             pid = _single_person(c, request)
             where, params = activity_filters(q, "", person=False)
-            where, params = ["person_id = ?", *where], [pid, *params]
+            # activities the person excluded (activity › Edit) are left out
+            where, params = ["person_id = ?", "NOT excluded", *where], [pid, *params]
             inner = f"SELECT *, {day} AS day FROM activities WHERE {' AND '.join(where)}"
             outer = ""
             rows = c.execute(
@@ -1649,7 +1702,7 @@ def create_app(db_path: str | Path) -> Starlette:
         with closing(conn()) as c:
             pid = _single_person(c, request)
             where, params = activity_filters(q, "", person=False)
-            where, params = ["person_id = ?", *where], [pid, *params]
+            where, params = ["person_id = ?", "NOT excluded", *where], [pid, *params]
             rows = c.execute(
                 f"""SELECT id, start_time_utc, utc_offset_s, elapsed_s, time_s, distance_m,
                            ascent_m, avg_speed, category, activity_type, indoor, has_gps,
@@ -1748,7 +1801,8 @@ def create_app(db_path: str | Path) -> Starlette:
                                        ORDER BY se.elapsed_s, a.start_time_utc) AS rk
                             FROM segment_efforts se JOIN segments s ON s.id = se.segment_id
                             JOIN activities a ON a.id = se.activity_id
-                            WHERE a.person_id = ? {"".join(f" AND {w}" for w in where)})
+                            WHERE a.person_id = ? AND NOT a.excluded
+                              {"".join(f" AND {w}" for w in where)})
                         SELECT * FROM e WHERE rk <= {n} ORDER BY segment_name, segment_id, rk""",
                     [pid, *params],
                 ).fetchall()
@@ -2681,6 +2735,7 @@ def create_app(db_path: str | Path) -> Starlette:
         Route("/api/activities/{id:int}/intervals", activity_intervals),
         Route("/api/activities/{id:int}/weather", activity_weather),
         Route("/api/activities/{id:int}/track", activity_track),
+        Route("/api/activities/{id:int}/export", activity_export),
         Route("/api/activities/{id:int}/earlier-tracks", activity_earlier_tracks),
         Route("/api/heatmap/tracks", heatmap_tracks),
         Route("/api/heatmap/tiles", heatmap_tiles),

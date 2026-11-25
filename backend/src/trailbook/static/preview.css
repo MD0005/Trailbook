@@ -2156,6 +2156,11 @@ svg.tile-chart { width: 100%; height: 100%; display: block; }
 
 /* the card's page in a Home Assistant card: no header, the card's own surface */
 body.embed { background: var(--surface); }
+/* a card while it loads: no header, the card's own background (clear), the loader in the middle */
+html.embed-page, html.embed-page body:not(.embed-ready) { background: transparent; }
+html.embed-page body > header { display: none; }
+html.embed-page .page-loader { min-height: 100vh; align-items: center; padding: 0; box-sizing: border-box; }
+html.embed-page main:has(> .page-loader) { padding: 0; }
 body.embed > header { display: none; }
 body.embed main { padding: 12px; max-width: none; }
 body.embed.fullmap main { padding: 0; }
@@ -2163,9 +2168,15 @@ body.embed.fullmap main { padding: 0; }
 body.embed-static .maplibregl-ctrl-bottom-right .maplibregl-ctrl-group { display: none; }
 .embed-msg { padding: 8px 4px; }
 .embed-act { display: flex; flex-direction: column; gap: 10px; }
-.embed-act-map svg { display: block; width: 100%; height: auto; border-radius: 8px; }
+.embed-act-map { position: relative; }
+.embed-act-map .map { height: 210px; margin: 0; border-radius: 10px; overflow: hidden; }
+/* a card's route map does not move: no buttons, no attribution (the scale stays) */
+.embed-act-map .maplibregl-ctrl-bottom-right, .embed-act-map .maplibregl-ctrl-top-right { display: none; }
 .embed-act-chart svg { display: block; width: 100%; height: 90px; }
-.embed-act .stat-strip { border: 0; padding: 0; background: none; }
+.embed-act .stat-strip { border: 0; padding: 0; background: none; margin: 0; display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); row-gap: 4px; }
+.embed-act .stat-item { min-width: 0; padding: 4px 12px; }
+.embed-act .stat-item::before { display: none; }
 .embed-rec .rec-tile { box-shadow: none; padding: 0; margin: 0; background: none; }
 .embed-cal .cal-card { padding: 0; box-shadow: none; background: none; margin: 0; }
 .embed-cal .wo-tools { display: none; }
@@ -2195,11 +2206,38 @@ body.embed-detail .page-head { display: none; }
 .ed-head h2 { display: flex; align-items: center; gap: 6px; margin: 0; font-size: 16px; line-height: 1.25; }
 .ed-date { margin-top: 2px; font-size: 12px; color: var(--muted); }
 body.embed-detail .card { padding: 8px 10px; margin-bottom: 6px; border-radius: 10px; }
-body.embed-detail .act-top, body.embed-detail .charts, body.embed-detail .act-top > div { gap: 6px; }
-body.embed-detail .act-top { margin-bottom: 6px; }
+/* small cards close together, in rows (hacards.js sets each card's row); the bigger cards and
+   charts under them clearly apart */
+body.embed-detail .act-top, body.embed-detail .charts { gap: 14px; }
+body.embed-detail .act-top > div { gap: 14px; }
+body.embed-detail .act-col-stats.two { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-auto-rows: auto; gap: 6px; align-items: stretch; }
+body.embed-detail .act-col-stats.two > .stat-col { display: contents; }
+body.embed-detail .act-col-stats .stat-col > .stat-card { justify-content: flex-start; }
+body.embed-detail .act-col-stats:not(.two) .stat-col { gap: 6px; }
+body.embed-detail .act-top { margin-bottom: 14px; }
+body.embed-detail main > .card { margin-bottom: 14px; }
+body.embed-detail .charts { margin-bottom: 14px; }
 body.embed-detail .charts .card, body.embed-detail .act-top .card { margin-bottom: 0; }
+/* no attribution on the card's map (it covered the scale); the full page shows it */
+body.embed-detail .maplibregl-ctrl-attrib { display: none; }
 body.embed-detail h3, body.embed-detail .tile-title { font-size: 13px; margin-bottom: 4px; }
 body.embed-detail .act-top .card { padding: 6px 10px; }
 body.embed-detail .stat-card b { font-size: 14px; }
 body.embed-detail #route-map { margin-top: 0; }
 .embed-rec { display: grid; grid-template-columns: repeat(var(--rec-n, 1), minmax(0, 1fr)); gap: 14px 18px; align-items: start; }
+/* a map card's buttons: right, in the middle, one under another (like the zoom buttons); the
+   picked button's list opens to their left */
+.embed-map-menu { position: absolute; top: 50%; right: 10px; transform: translateY(-50%); z-index: 5;
+  display: flex; flex-direction: column; gap: 6px; }
+.map-menu-btn { width: 29px; height: 29px; padding: 5px; display: grid; place-items: center; border: 0; border-radius: 8px;
+  background: #fff; color: #333; box-shadow: 0 0 0 2px rgba(0,0,0,.1); cursor: pointer; }
+:root[data-theme="dark"] .map-menu-btn { background: var(--surface-2); color: var(--fg); box-shadow: 0 0 0 1px var(--line), 0 2px 8px rgba(0,0,0,.4); }
+.map-menu-btn svg { width: 18px; height: 18px; }
+.map-menu-btn:hover, .map-menu-btn.on { color: var(--accent); }
+.map-menu-panel { position: absolute; right: 42px; top: 50%; transform: translateY(-50%); min-width: 170px; max-height: 80vh;
+  overflow-y: auto; padding: 8px 10px; border-radius: 8px; background: var(--surface); border: 1px solid var(--line);
+  box-shadow: 0 6px 20px rgba(0,0,0,.18); }
+/* Home Assistant › Cards: the creator window (as the workout creator); lists stay inside it */
+.ha-dialog .wo-head h3 { margin: 0; }
+.ha-dialog .badge-panel { max-height: 58vh; overflow-y: auto; }
+.ha-dialog .ha-frame { margin-top: 12px; }

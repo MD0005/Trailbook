@@ -609,6 +609,33 @@ off. The time can be corrected only by editing the file today.
   (more in small regions with long borders). Example: Poland has about 139 000 explorer tiles
   (zoom 14).
 
+## Corrections (activity › Edit)
+
+Both rewrite the stored streams: the values taken out are gone (a reimport of the file brings
+them back, and then the corrections are applied again). Load, best efforts, segments and the
+training type are computed again afterwards.
+
+**Correct altitude** (`fixes.smooth_altitude`):
+1. Jumps out: a change faster than 4 m/s between two samples shifts the rest back by that step
+   (as for the climbs, `analysis.clean_altitude`).
+2. Spikes out: a sample further than max(8 m, 4 × the usual spread) from the median of the 31
+   samples around it takes that median (the usual spread: the median distance from the median,
+   × 1,4826).
+3. A light rolling mean over 5 samples.
+4. Total ascent and descent (and per lap) counted again: a change counts once it reaches 2 m.
+
+**Correct speed** (`fixes.fix_positions`, `fix_distance`, `fix_speed`). The fastest the sport
+can go: run 12 m/s, walk and hike 6, ride 30, swim 4, water 15, winter 40, others 6–50 (fixes.MAX_SPEED_MS).
+1. Positions: a point reached faster than that from the last good one (within 60 s; later the
+   signal is taken as it came back elsewhere), and a point that jumps out and straight back
+   (the way there and back more than 3 × the direct way + 50 m), is moved onto the line
+   between its good neighbours. The route, the map box and the explorer tiles follow.
+2. Distance: a step faster than the limit, or more than 3 × the median speed of the 31
+   samples around it and over it by more than 4 m/s, is replaced by the way between the
+   corrected positions (when that is within the limit) or by the speed before it.
+3. Speed samples with the same test: the speed from the corrected distance there.
+4. Distance, average and top speed of the activity and its laps computed again.
+
 ## Record notifications (Home Assistant)
 
 - Only runs and rides. Lists: per person and group, run time over a distance (400 m, 1 km,
