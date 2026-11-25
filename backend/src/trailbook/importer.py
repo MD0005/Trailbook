@@ -739,6 +739,8 @@ def _import_file(
     file_type = fid.type if fid else None
     if file_type in fitfile.FILE_TYPES_MONITORING:
         _store_monitoring(conn, file_id, data)
+    if file_type == fitfile.FILE_TYPE_WEIGHT:
+        _store_body(conn, file_id, data)
     if file_type is not None and file_type != fitfile.FILE_TYPE_ACTIVITY:
         return _set_status(
             conn,
@@ -818,6 +820,50 @@ def _store_monitoring(conn: sqlite3.Connection, file_id: int, data: bytes) -> No
     except Exception:
         conn.execute("ROLLBACK")
         raise
+
+
+BODY_VERSION = 1  # files.body_version: the weigh-ins of a scale file were read
+
+
+def _store_body(conn: sqlite3.Connection, file_id: int, data: bytes) -> None:
+    """Weigh-ins of a scale file (Wellbeing › Body); the file stays `skipped`. A file that
+    cannot be read adds nothing."""
+    try:
+        rows = fitfile.parse_weight(data)
+    except Exception:  # the SDK raises a variety of exception types
+        rows = []
+    conn.execute("BEGIN")
+    try:
+        conn.execute("DELETE FROM body_parts WHERE file_id = ?", (file_id,))
+        conn.executemany(
+            """INSERT OR REPLACE INTO body_parts (file_id, ts, weight, fat_pct, water_pct,
+                                                 muscle_kg, bone_kg, bmi)
+               VALUES (:file_id, :ts, :weight, :fat_pct, :water_pct, :muscle_kg, :bone_kg, :bmi)""",
+            [{**r, "file_id": file_id} for r in rows],
+        )
+        conn.execute("UPDATE files SET body_version = ? WHERE id = ?", (BODY_VERSION, file_id))
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+
+
+def backfill_body(
+    conn: sqlite3.Connection, root: Path | None, uploads_dir: Path | None = None
+) -> int:
+    """Read the weigh-ins of scale files skipped before they were stored."""
+    rows = conn.execute(
+        "SELECT id, rel_path, zip_member FROM files WHERE skip_reason = 'weight'"
+        " AND body_version < ? AND status = 'skipped'",
+        (BODY_VERSION,),
+    ).fetchall()
+    for r in rows:
+        try:
+            data = read_file_bytes(root, r["rel_path"], r["zip_member"] or "", uploads_dir)
+        except Exception:  # a missing file: tried again on the next run
+            continue
+        _store_body(conn, r["id"], data)
+    return len(rows)
 
 
 def _strava_row(row: sqlite3.Row, root: Path | None, uploads_dir: Path | None) -> strava.Row | None:

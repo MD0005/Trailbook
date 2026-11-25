@@ -145,15 +145,20 @@ def suggest(
     series = analysis.fitness_series(loads, until=today) if loads else []
     point = next((d for d in reversed(series) if d["date"] <= today.isoformat()), None)
     form = point["tsb"] if point else None
-    # the form going into the day after the last planned workout, with their estimated loads
-    form_after = None
+    # the form going into the day after the last planned workout, with their estimated loads;
+    # the fatigue on the last planned day
+    form_after = fatigue_after = None
     if plans and loads:
         ahead = dict(loads)
         for p in plans:
             ahead[p["day"]] = ahead.get(p["day"], 0.0) + p["load"]
-        after = date.fromisoformat(max(p["day"] for p in plans)) + timedelta(days=1)
-        projected = analysis.fitness_series(ahead, until=after)
-        form_after = next((d["tsb"] for d in projected if d["date"] == after.isoformat()), None)
+        end = date.fromisoformat(max(p["day"] for p in plans))
+        after = end + timedelta(days=1)
+        projected = {d["date"]: d for d in analysis.fitness_series(ahead, until=after)}
+        form_after = projected.get(after.isoformat(), {}).get("tsb")
+        fatigue_after = projected.get(end.isoformat(), {}).get("atl")
+    # fatigue (ATL) and the usual load (CTL), the fatigue bar's limit is a share of it
+    fatigue = {"now": point["atl"], "usual": point["ctl"]} if point else None
 
     # the day it is for: today, or tomorrow when something is done today
     for_day = today + timedelta(days=1) if sports_today else today
@@ -240,6 +245,7 @@ def suggest(
         "form": round(form, 1) if form is not None else None,
         "form_after": round(form_after, 1) if form_after is not None else None,
         "form_after_day": max(p["day"] for p in plans) if plans else None,
+        "fatigue": {**fatigue, "after": fatigue_after} if fatigue else None,
         "window": [first.isoformat(), last.isoformat()],
         "plans": [{k: p[k] for k in ("id", "day", "name", "sport", "kind")} for p in plans],
         "next": {"day": for_day.isoformat(), "kind": kind,

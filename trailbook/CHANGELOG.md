@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.1.24
+
+### Added
+- Wellbeing › Movement: steps and floors as dots (a row per month or year) or columns, intensity
+  minutes with the activities under them, active calories; all charts linked by day, week or month.
+- Wellbeing › Movement › Options: goals for steps, floors and intensity minutes.
+- Wellbeing › Body: a silhouette filled with the last body composition, the weight with its moving
+  average and goal, the composition over time, BMI and fitness age; weigh-ins from scale FIT files.
+- Wellbeing › Body › Options: weight and body fat goals; the weight chart can show the training load.
+- Settings › People: sex, for the Body silhouette and fitness age.
+- Time filter: Last 2 years.
+- Home Assistant map card: a People button on the map, the base map colours and wider zoom levels.
+- Home Assistant activity cards: the base map colours; Activity detailed: the route colour.
+- Calendar › Next workout: fatigue against your usual load, with the planned workouts.
+
+### Changed
+- Activity page: 3 or 4 small tiles sit in two columns.
+- Home Assistant Activity detailed card: tighter top tiles, more room between the charts.
+- Charts: a clicked stat keeps its marking; the hovered column is highlighted.
+
+### Fixed
+- Home Assistant map card: the routes stay after changing the base map or shading (also on Map).
+- Charts: the last date label on the x axis is no longer cut off.
+
 ## 0.1.23
 
 ### Added

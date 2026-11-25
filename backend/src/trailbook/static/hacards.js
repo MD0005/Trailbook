@@ -25,8 +25,8 @@ function haSetLayer(s, v) {
 const HA_MAP_VIEWS = [["all", "All routes"], ["main", "Home area"], ["last", "Last activity"], ["fixed", "Fixed place"]];
 // Zoom: fitted to the view's routes, or a zoom level (a fixed place set from the preview may
 // have one between the steps).
-const haZooms = (z) => [["auto", "Fit"], ...[6, 8, 10, 11, 12, 13, 14, 15, 16].map((n) => [n, String(n)]),
-  ...(Number.isFinite(z) && ![6, 8, 10, 11, 12, 13, 14, 15, 16].includes(z) ? [[z, num(z, 1)]] : [])];
+const haZooms = (z) => [["auto", "Fit"], ...[3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 15, 16].map((n) => [n, String(n)]),
+  ...(Number.isFinite(z) && ![3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 15, 16].includes(z) ? [[z, num(z, 1)]] : [])];
 // The record tables of a card, in the order picked (cards made before: one `group`).
 const haRecordGroups = (c) => (Array.isArray(c.groups) ? c.groups : [c.group || "run"]).filter((g) => HA_RECORDS.some(([k]) => k === g));
 const HA_RECORDS = [["run", "Running"], ["power", "Cycling power"], ["ride", "Cycling"], ["virtual", "Cycling virtual"],
@@ -281,8 +281,10 @@ function haDrawOptions() {
       one("view", "View", HA_MAP_VIEWS, c.view || "all"),
       ...(c.view === "fixed" ? [`<div class="badge-wrap"><button class="badge" data-ha-here>${c.center ? "Set to the preview's view" : "Set the place: the preview's view"}</button></div>`] : []),
       one("zoom", "Zoom", haZooms(c.zoom), Number.isFinite(c.zoom) ? c.zoom : "auto"),
+      one("tone", "Colours", haTones(), c.map?.[haToneKey(c)] || MAP_TONE[haTheme(c)]),
       one("interactive", "Move and zoom", HA_ON, c.interactive !== false),
       one("menu", "Map buttons", HA_ON, c.menu !== false),
+      ...(c.menu !== false ? [one("who", "People button", HA_ON, !!c.who)] : []),
       one("height", "Height", HA_HEIGHTS, c.height || 400),
       badgeHtml("ha-options", "Options", "", { panel: "<div data-settings></div>" }));
   } else if (k === "activity") {
@@ -292,13 +294,16 @@ function haDrawOptions() {
       checks("values", "Values", HA_VALUES.map(([key, l]) => [key, l]), values, values.length ? `${values.length} shown` : "none"),
       one("map", "Map", HA_ON, c.map !== false),
       ...(c.map !== false ? [one("base", "Base map", haBases(), c.base || loadMapSettings().map.source),
+        one("tone", "Colours", haTones(), validTone(c.tone) ? c.tone : ROUTE_TONE[haTheme(c)]),
         one("relief", "Shading", HA_RELIEF, c.relief || loadMapSettings().map.relief || "on")] : []),
       one("chart", "Chart", HA_ON, !!c.chart));
   } else if (k === "detail") {
     parts.push(one("person", "Person", haPersonOptions(), c.people?.[0] || ""), one("which", "Activity", HA_WHICH, c.which || 0),
       one("sport", "Sport", haSports(), c.sport || ""),
       one("base", "Base map", haBases(), c.base || loadMapSettings().map.source),
-      one("relief", "Shading", HA_RELIEF, c.relief || loadMapSettings().map.relief || "on"));
+      one("tone", "Colours", haTones(), validTone(c.tone) ? c.tone : ROUTE_TONE[haTheme(c)]),
+      one("relief", "Shading", HA_RELIEF, c.relief || loadMapSettings().map.relief || "on"),
+      one("route", "Route colour", HA_ROUTE_COLOURS, c.route || "plain"));
   } else if (k === "records") {
     parts.push(one("person", "Person", haPersonOptions(false), c.people?.[0] || realPeople()[0]?.id),
       checks("groups", "Records", HA_RECORDS, haRecordGroups(c), groupsValue(haRecordGroups(c))),
@@ -314,7 +319,7 @@ function haDrawOptions() {
   // one choice: saved, the badges drawn again (the panel closes)
   bar.querySelectorAll("[data-pick^='ha.']").forEach((b) => b.onclick = () => {
     const key = b.dataset.pick.slice(3);
-    const opts = { kind: HA_KINDS, which: HA_WHICH, height: HA_HEIGHTS, columns: HA_COLUMNS, menu: HA_ON, zoom: haZooms(c.zoom), interactive: HA_ON, map: HA_ON, chart: HA_ON, ahead: HA_ON, summary: HA_ON,
+    const opts = { kind: HA_KINDS, which: HA_WHICH, height: HA_HEIGHTS, columns: HA_COLUMNS, menu: HA_ON, who: HA_ON, zoom: haZooms(c.zoom), interactive: HA_ON, map: HA_ON, chart: HA_ON, ahead: HA_ON, summary: HA_ON,
                    weeks: [1, 2, 3, 4, 6].map((n) => [n]) }[key];
     const value = opts ? opts.find(([v]) => String(v) === b.dataset.value)[0] : b.dataset.value;
     if (key === "kind") {
@@ -327,6 +332,7 @@ function haDrawOptions() {
     }
     if (key === "person") c.people = value ? [value] : [];
     else if (key === "zoom") c.zoom = value === "auto" ? null : value;
+    else if (key === "tone" && k === "map") c.map = { ...c.map, [haToneKey(c)]: value }; // as Options › Colours
     else c[key] = value;
     if (key === "columns" || key === "theme") { haSave(true); return; } // the preview's width / the colours panel follow
     haSave();
@@ -370,7 +376,11 @@ function haMapOptions(bar) {
   const settings = { ...d, layer: c.layer || "heatmap", map: { ...d.map, ...c.map }, heatmap: { ...d.heatmap, ...c.heatmap }, tiles: { ...d.tiles, ...c.tiles } };
   heat = { settings, tracks: [], years: [], tileCache: new Map(), params: {}, isAll: (c.people || []).length !== 1, map: null, card: true,
            theme: haTheme(c), panelEl: bar.querySelector("[data-settings]"),
-           save: (s) => { c.map = s.map; c.heatmap = s.heatmap; c.tiles = s.tiles; haSave(); } };
+           save: (s) => {
+             c.map = s.map; c.heatmap = s.heatmap; c.tiles = s.tiles; haSave();
+             const tone = bar.querySelector('[data-badge-value="ha-tone"]'); // Colours on top follows
+             if (tone) tone.textContent = haLabel(haTones(), c.map[haToneKey(c)] || MAP_TONE[haTheme(c)]);
+           } };
   renderSettingsPanel();
   bar.querySelector("[data-badge=ha-options]")?.addEventListener("click", () => {
     if (!bar.querySelector('[data-panel="ha-options"]').hidden) { heat.openAcc = "map"; renderSettingsPanel(); }
@@ -456,7 +466,7 @@ async function embedMap(c, ids) {
   const map = await createMap("map", heat.settings.map, { keepTone: true, interactive: c.interactive !== false, ...haMapStart(c, heat.tracks) });
   heat.map = map;
   drawHeatLayers();
-  if (menu) haMapMenu();
+  if (menu) haMapMenu(c.who ? { ids, load } : null);
 }
 
 // The start view of a map card (createMap options).
@@ -485,14 +495,22 @@ const HA_MAP_ICONS = {
   layer: svg(`<path d="m12 3 9 5-9 5-9-5z"/><path d="m3 13 9 5 9-5"/>`),
   base: svg(`<path d="M9 4 3 6v14l6-2 6 2 6-2V4l-6 2z"/><path d="M9 4v14M15 6v14"/>`),
   relief: svg(`<path d="m2 20 7-11 4 6 3-4 6 9z"/><path d="m7.5 11.5 1.5 1.5 1.5-1.5"/>`),
+  who: svg(`<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c0-3.6 2.9-6 6.5-6s6.5 2.4 6.5 6"/><path d="M16 4.5a3.5 3.5 0 0 1 0 7M18.5 14.5c1.9.8 3 2.8 3 5.5"/>`),
 };
-function haMapMenu() {
+// `people` (setting People button): { ids: the card's people, load(who) } — one person or all:
+// the card's people when it has several, else everyone (a card of one person starts on them).
+function haMapMenu(people) {
   const s = heat.settings;
+  const many = people?.ids.length > 1;
+  const pool = people ? (many ? people.ids : realPeople().map((p) => p.id)) : [];
+  let who = people?.ids.length === 1 ? people.ids[0] : "all";
   haMapButtons(view.querySelector("[data-map-menu]"), () => ({
+    ...(pool.length > 1 ? { who: ["People", [["all", many ? "All of the card's" : "Everyone"], ...pool.map((id) => [id, personLabel(id)])], who] } : {}),
     layer: ["Map", HA_LAYERS, haLayerOf(s)],
     ...haBaseButtons(s.map),
-  }), (k, v) => {
-    if (k === "layer") { haSetLayer(s, v); drawHeatLayers(); }
+  }), async (k, v) => {
+    if (k === "who") { who = v; await people.load(v !== "all" ? [v] : many ? people.ids : []); drawHeatLayers(); }
+    else if (k === "layer") { haSetLayer(s, v); drawHeatLayers(); }
     else if (k === "base") { s.map.source = v; applyBase(true); }
     else { s.map.relief = v; applyBase(true); }
   });
@@ -533,10 +551,7 @@ function haMapButtons(box, panels, pick) {
 
 // A route map's base map and shading changed: the base layers swapped, the route kept.
 function haSwapBase(map, ms) {
-  const own = new Set(["background", "base", "relief", "trails"]), ownSrc = new Set(["base", "dem", "trails"]);
-  map.setStyle(baseStyle({ ...ms, tone: routeTone() }), { transformStyle: (prev, next) => ({ ...next,
-    sources: { ...Object.fromEntries(Object.entries(prev.sources).filter(([k]) => !ownSrc.has(k))), ...next.sources },
-    layers: [...next.layers, ...prev.layers.filter((l) => !own.has(l.id))] }) });
+  swapBase(map, baseStyle({ ...ms, tone: validTone(ms.tone) ? ms.tone : routeTone() }));
 }
 
 // The buttons on an activity card's route map (for now only; the card's settings stay).
@@ -574,7 +589,7 @@ async function embedActivity(c, ids) {
 async function haRouteMap(el, polyline, c) {
   BASEMAPS ??= await api("basemaps");
   const coords = lonLat(polyline);
-  const ms = { ...loadMapSettings().map, ...(c.base ? { source: c.base } : {}), ...(c.relief ? { relief: c.relief } : {}) };
+  const ms = { ...loadMapSettings().map, ...(c.base ? { source: c.base } : {}), ...(c.relief ? { relief: c.relief } : {}), ...(c.tone ? { tone: c.tone } : {}) };
   const map = await createMap(el, ms, { bounds: boundsOf([coords]), fitBoundsOptions: { padding: 22, maxZoom: 15 }, interactive: false });
   const accent = getComputedStyle(document.documentElement).getPropertyValue("--accent").trim();
   map.addSource("route", { type: "geojson", data: { type: "Feature", properties: {}, geometry: { type: "LineString", coordinates: coords } } });
@@ -593,12 +608,19 @@ async function haRouteMap(el, polyline, c) {
 // with the route map on top as a square; nothing to edit or open.
 var EMBED_ROUTE_MAP = null; // a card's base map and shading for the route map (showRouteMap)
 const HA_RELIEF = [["on", "Hills shaded"], ["off", "Off"]];
+// Colours of the base map (Faded light, Soft dark, …): a card's default; the map card keeps one
+// per theme as the Map tab does.
+const haTones = () => BASE_TONES.map(([k, l]) => [k, l]);
+const haToneKey = (c) => (haTheme(c) === "dark" ? "toneDark" : "toneLight");
+// Activity detailed › Route colour: the activity page's Data choice (single colour without that data)
+const HA_ROUTE_COLOURS = [["plain", "Single colour"], ["speed", "Speed"], ["hr", "Heart rate"], ["power", "Power"],
+  ["cadence", "Cadence"], ["altitude", "Altitude"], ["surface", "Surface"], ["intervals", "Intervals"]];
 const haBases = () => [...(BASEMAPS || []).map((b) => [b.key, b.label.split(" (")[0]]), ["none", "None"]];
 
 async function embedDetail(c, ids) {
   document.body.classList.add("embed-detail");
   BASEMAPS ??= await api("basemaps");
-  EMBED_ROUTE_MAP = { ...(c.base ? { source: c.base } : {}), ...(c.relief ? { relief: c.relief } : {}) };
+  EMBED_ROUTE_MAP = { ...(c.base ? { source: c.base } : {}), ...(c.relief ? { relief: c.relief } : {}), ...(c.tone ? { tone: c.tone } : {}), mode: c.route || "plain" };
   // the small cards in rows: the n-th card of each column side by side, starting level
   const align = () => view.querySelectorAll(".act-col-stats.two").forEach((box) =>
     box.querySelectorAll(":scope > .stat-col").forEach((col, ci) => [...col.children].forEach((card, ri) => {

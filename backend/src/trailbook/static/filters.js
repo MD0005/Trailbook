@@ -22,13 +22,13 @@ function timeBounds() {
 // (1m, 3m, 6m, ytd, 1y); `years` - any years, also with gaps (comma list); `from` / `to` - a
 // range of your own (the slider or typed dates).
 const LAST_PERIODS = [["1m", "1 month", "Last month"], ["3m", "3 months", "Last 3 months"], ["6m", "6 months", "Last 6 months"],
-  ["ytd", "YTD", "Year to date"], ["1y", "1 year", "Last 12 months"]];
+  ["ytd", "YTD", "Year to date"], ["1y", "1 year", "Last 12 months"], ["2y", "2 years", "Last 2 years"]];
 const timeActive = (params) => Boolean(params.from || params.to || params.last || params.years);
 const yearList = (params) => [...new Set((params.years || "").split(",").filter((y) => /^\d{4}$/.test(y)))].sort();
 // First day of a `last` period (as the server counts it): months back from today, ytd from 1 January.
 function lastSince(key, today = todayDay()) {
   if (key === "ytd") return `${today.slice(0, 4)}-01-01`;
-  const n = { "1m": 1, "3m": 3, "6m": 6, "1y": 12 }[key];
+  const n = { "1m": 1, "3m": 3, "6m": 6, "1y": 12, "2y": 24 }[key];
   if (!n) return null;
   const [y, m, d] = today.split("-").map(Number);
   const t = y * 12 + (m - 1) - n, ny = Math.floor(t / 12), nm = (t % 12) + 1;

@@ -28,24 +28,28 @@ const fillAlpha = (a) => (dark() ? a * 0.65 : a);
 //   kind: "distance" | "time" | "percent" | "date" (days; no axis title, as months are obvious)
 //   series: [{ key, label, unit, values, dec, color, icon | iconHtml, tip, stats: [[label, value, mark, tip]],
 //              targets: [{ i0, i1, lo, hi }], title (card title, default label), yTitle,
-//              lines: [{ label, values, color }]  more series in the same chart (legend instead of stats),
+//              lines: [{ label, values, color, dash, fmt, axis: "right", axisTitle, fill }]  more series in
+//              the same chart (legend instead of stats); axis "right": its own scale and y axis on the right,
 //              zones: [{ lo, hi, color, label }]  bands behind the line; the line takes the zone colour,
 //              bands: false (zones colour the line only, no bands behind it),
 //              invert: true (higher values lower), yMin / yMax: values the y range always includes,
 //              ySplits: [v] (y grid and labels exactly there, e.g. at the zone limits), height (px),
 //              fmt: (v) => text (values on the y axis, the flag, pins), points: true (a dot per value),
-//              bars: true (columns instead of a line, half a period of room at both ends),
+//              bars: true (columns instead of a line, half a period of room at both ends; the
+//              hovered column is drawn in full colour with a rim), barSize (share of the gap, 0,72),
 //              headHtml: controls at the right of the card title (bound by the caller),
 //              tags: [{ label, value, color, mark, values, range: [i0, i1] }]  value pills on the right at the height of their
 //              value; hovering marks the point i of `values`, or with `range` draws that stretch of `values` thick;
 //              value (instead of stats / legend), pushed apart so they never overlap }]
+//   xExact: (x) => text  the exact x in the flag and pins instead of the date (e.g. "Week 12 2026")
 //   kind "month" (x = 1…12) or "week" (x = week of the year): periods of a year (Statistics)
 //   multi: true - every series is in `lines` (no main one): a dot per value (points), the
 //              hovered dot (nearest line) gets the value flag and the same line's dot is lit on
 //              every multi chart of the group; tagsInside: the pills carry label and value
 //              inside (smaller); a click on a pill hides / shows that series (by its label)
 //              on every chart of the group, the pill stays grey
-//   marks: [{ x, icon, tip, href }] icons in a strip under the x axis (marksHidden: start hidden)
+//   marks: [{ x, icon, tip, href }] icons in a strip under the x axis (marksHidden: start hidden;
+//              marksPerX: one icon per x value, hovering it marks that column)
 //   hidden: [key] charts built but not shown (api.show(key, on) toggles one without a rebuild)
 //   stats on a chart with tags: pills under the tag column (Statistics: Max); a stat's mark
 //   { i, values, color } is the point i of those values, the pill in that colour
@@ -66,7 +70,7 @@ const fillAlpha = (a) => (dark() ? a * 0.65 : a);
 //               `keys` and a strip above each with the values of every section (label). A line
 //               can be dragged; on the strip a ball with − over a line removes it, a ball with +
 //               elsewhere adds one. Changes apply to all those charts.
-function chartGroup(root, { x, kind, series, hidden = [], sections = null, shared = null, onHover = () => {}, onRanges = () => {}, onState = () => {}, onOrder = () => {}, onToggle = () => {} }) {
+function chartGroup(root, { x, kind, series, hidden = [], sections = null, shared = null, xExact = null, onHover = () => {}, onRanges = () => {}, onState = () => {}, onOrder = () => {}, onToggle = () => {} }) {
   const g = { kind, plots: [], pins: [], range: null, hoverIdx: null, dragged: false, mark: null, hidden: new Set(hidden), secs: [].concat(sections || []) };
   const syncKey = "tb-" + Math.random().toString(36).slice(2);
   const xs = () => x[g.kind];
@@ -90,13 +94,16 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, share
     const out = [], d = new Date(min * 1000);
     if (unit === "w") { // Mondays
       d.setUTCHours(0, 0, 0, 0); d.setUTCDate(d.getUTCDate() + ((8 - d.getUTCDay()) % 7));
-      for (; d.getTime() / 1000 <= max; d.setUTCDate(d.getUTCDate() + 7)) out.push(d.getTime() / 1000);
+      const room = (16 * (max - min)) / Math.max(1, u.bbox.width / (devicePixelRatio || 1)); // "3 Mar" whole
+      for (; d.getTime() / 1000 <= max - room; d.setUTCDate(d.getUTCDate() + 7)) out.push(d.getTime() / 1000);
       return out;
     }
     const step = unit === "y" ? 12 * n : n;
     let m = d.getUTCFullYear() * 12 + d.getUTCMonth();
     m = Math.ceil((m + (d.getUTCDate() > 1 ? 1 : 0)) / step) * step; // first month boundary on the step
-    for (let t; (t = Date.UTC(Math.floor(m / 12), m % 12, 1) / 1000) <= max; m += step) if (t >= min) out.push(t);
+    // a tick closer than ~12 px to the right edge is left out: its label would be cut
+    const room = (12 * (max - min)) / Math.max(1, u.bbox.width / (devicePixelRatio || 1));
+    for (let t; (t = Date.UTC(Math.floor(m / 12), m % 12, 1) / 1000) <= max - room; m += step) if (t >= min) out.push(t);
     return out;
   };
   const dateLabels = (u, vals) => vals.map((v, k) => {
@@ -119,7 +126,7 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, share
   };
   const fmtPeriod = (v, exact) => (g.kind === "month" ? (exact ? MONTHS_FULL[v - 1] : MONTHS_3[v - 1]) : `${exact ? "Week " : "W"}${v}`);
   const MONTHS_FULL = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
-  const fmtX = (v, exact = false, incr = 1) => (v == null ? "" : g.kind === "month" || g.kind === "week" ? fmtPeriod(Math.round(v), exact) : g.kind === "date" ? fmtDate(v) : g.kind === "distance" ? (exact ? `${num(v, 2)} km` : num(v, stepDec(incr)))
+  const fmtX = (v, exact = false, incr = 1) => (v == null ? "" : exact && xExact ? xExact(v) : g.kind === "month" || g.kind === "week" ? fmtPeriod(Math.round(v), exact) : g.kind === "date" ? fmtDate(v) : g.kind === "distance" ? (exact ? `${num(v, 2)} km` : num(v, stepDec(incr)))
     : g.kind === "percent" ? `${num(v, exact ? 1 : 0)}${exact ? " %" : ""}` : fmtTime(v, exact));
   // columns over x values: half the step between the first two values of room at both ends
   const barRange = (mn, mx) => { const v = xs(), h = v.length > 1 ? (v[1] - v[0]) / 2 : 1; return [mn - h, mx + h]; };
@@ -177,6 +184,7 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, share
     };
     const multi = Boolean(s.lines?.length);
     const extra = (s.lines || []).map((l) => ({ label: l.label, stroke: l.color, width: 2, dash: l.dash, show: !l.hidden, spanGaps: !s.multi,
+      ...(l.axis === "right" ? { scale: "y2", fill: l.fill ? withAlpha(l.color, fillAlpha(0.18)) : undefined } : {}),
       points: s.multi && s.points ? { show: true, size: 5, width: 0, fill: l.color } : { show: false } }));
     const period = g.kind === "month" || g.kind === "week";
     const yRange = (u, mn, mx) => {
@@ -193,20 +201,23 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, share
       return ph > strip * 2 ? [lo - ((hi - lo) * strip) / (ph - strip), hi] : [lo, hi];
     };
     const date = g.kind === "date";
+    // a line on its own scale (axis: "right"): a second y axis on the right with its title
+    const right = (s.lines || []).find((l) => l.axis === "right");
     return {
       width, height: s.height || CHART_H, padding: [8, period ? 14 : 2, 0, 0],
       scales: { x: { time: g.kind === "date", range: (u, mn, mx) => (g.range || (period ? [mn - 0.5, mx + 0.5] : s.bars ? barRange(mn, mx) : [mn, mx])) },
                 y: { dir: s.invert ? -1 : 1,
-                     range: (u, mn, mx) => liftForSurface(u, s.yMin != null || s.yMax != null ? yRange(u, mn, mx) : uPlot.rangeNum(mn ?? 0, mx ?? 1, 0.1, true)) } },
+                     range: (u, mn, mx) => liftForSurface(u, s.yMin != null || s.yMax != null ? yRange(u, mn, mx) : uPlot.rangeNum(mn ?? 0, mx ?? 1, 0.1, true)) },
+                ...(right ? { y2: { range: (u, mn, mx) => [0, (mx || 1) * 1.08] } } : {}) },
       legend: { show: false },
       cursor: {
         sync: { key: syncKey, scales: ["x", null] },
         drag: { x: true, y: false, setScale: false },
-        points: { ...(s.multi ? { show: false } : {}), size: 10, width: 2, stroke: cssVar("--surface") || "#fff",
+        points: { ...(s.multi || s.bars ? { show: false } : {}), size: 10, width: 2, stroke: cssVar("--surface") || "#fff",
                   fill: (u, si) => (si === 1 ? colorAt(s, s.values[u.cursor.idx]) : s.lines[si - 2].color) },
       },
       series: [{}, s.bars
-        ? { label: s.label, stroke: s.color, width: 0, fill: withAlpha(s.color, 0.8), paths: uPlot.paths.bars({ size: [0.72, 64], gap: 1 }), points: { show: false } }
+        ? { label: s.label, stroke: s.color, width: 0, fill: withAlpha(s.color, 0.8), paths: uPlot.paths.bars({ size: [s.barSize || 0.72, 64], gap: 1 }), points: { show: false } }
         : { label: s.label, stroke: s.multi ? "transparent" : s.zones ? zoneStroke : s.color, width: s.zones ? 2.4 : 2, fill: (s.fill ?? !(multi || s.zones)) ? grad : undefined, points: s.points ? { show: true, size: 6, width: 0, fill: s.color } : { show: false }, spanGaps: true }, ...extra],
       axes: [
         { font: CHART_FONT, stroke: muted, space: 46, size: date ? 32 : 18, gap: 2, border: { show: true, stroke: axis, width: 1 },
@@ -222,12 +233,16 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, share
           },
           grid: { stroke: line, width: 0.6, dash: [2, 3] }, ticks: { stroke: axis, size: 3, width: 1 },
           values: (u, vals, ax, space, incr) => vals.map((v) => (s.fmt ? s.fmt(v) : num(v, s.ySplits ? 0 : stepDec(incr)))) },
+        ...(right ? [{ scale: "y2", side: 1, font: CHART_FONT, stroke: right.color, space: 22, gap: 2, size: 44,
+          label: right.axisTitle || right.label, labelSize: 14, labelFont: `500 ${CHART_FONT}`, labelGap: 0,
+          grid: { show: false }, ticks: { stroke: axis, size: 3, width: 1 },
+          values: (u, vals) => vals.map((v) => num(v)) }] : []),
       ],
       hooks: {
         // soft shadow under the series line
         drawClear: [(u) => drawZones(u, s)],
         drawAxes: [(u) => { u.ctx.save(); u.ctx.shadowColor = s.zones ? "rgba(0,0,0,.18)" : withAlpha(s.color, 0.55); u.ctx.shadowBlur = 6; u.ctx.shadowOffsetY = 2; }],
-        draw: [(u) => { u.ctx.restore(); drawExtend(u, s); drawSurface(u, s); drawTargets(u, s); drawClimbs(u, s); drawExt(u, s); drawSections(u, s); drawMark(u, s); drawFocus(u, s); drawFrame(u, axis); placeSections(u, s); placeClimbs(u, s); drawPins(u); placeTags(u, s); placeMarks(u, s); }],
+        draw: [(u) => { u.ctx.restore(); drawExtend(u, s); drawSurface(u, s); drawTargets(u, s); drawClimbs(u, s); drawExt(u, s); drawBarHover(u, s); drawSections(u, s); drawMark(u, s); drawFocus(u, s); drawFrame(u, axis); placeSections(u, s); placeClimbs(u, s); drawPins(u); placeTags(u, s); placeMarks(u, s); }],
         setCursor: [(u) => cursorMoved(u, s)],
         setSelect: [(u) => {
           if (u.select.width < 4) return;
@@ -286,7 +301,8 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, share
       const px = u.valToPos(m.x, "x");
       if (px < -2 || px > w + 2) continue;
       const g0 = groups[groups.length - 1];
-      if (g0 && px - g0.px < 35) g0.items.push(m); else groups.push({ px, items: [m] });
+      // marksPerX: one icon per x (a column's period), else icons closer than ~35 px share one
+      if (g0 && (s.marksPerX ? g0.x === m.x : px - g0.px < 35)) g0.items.push(m); else groups.push({ px, x: m.x, items: [m] });
     }
     u._tb.markGroups = groups;
     const html = groups.map(({ px, items }, k) => {
@@ -304,13 +320,14 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, share
     box.addEventListener("mouseover", (e) => {
       const [, grp] = groupOf(e);
       if (!grp) return;
-      const xs = grp.items.map((m) => m.x);
-      g.mark = { band: [Math.min(...xs), Math.max(...xs) + (s.markSpan || 0)], u };
+      const xv = grp.items.map((m) => m.x), i = s.marksPerX && s.bars ? xs().indexOf(xv[0]) : -1;
+      g.mark = i >= 0 ? { ranges: [[i, i]], u, fromMarks: true } // the icon's column marked
+        : { band: [Math.min(...xv), Math.max(...xv) + (s.markSpan || 0)], u };
       u.redraw(false);
     });
     box.addEventListener("mouseout", (e) => {
       if (!e.target.closest?.("[data-mark-group]") || e.relatedTarget?.closest?.("[data-mark-group]")) return;
-      if (g.mark?.band) { g.mark = null; u.redraw(false); }
+      if (g.mark?.band || g.mark?.fromMarks) { g.mark = null; u.redraw(false); }
     });
     box.addEventListener("click", (e) => {
       const [el, grp] = groupOf(e);
@@ -597,6 +614,32 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, share
     ctx.restore();
   }
   const surfaceAt = (s, i) => (g.surface && s.key === g.surface.key ? g.surface.ranges.find(([a, b]) => i >= a && i <= b)?.[2] : null);
+  // Columns: the hovered one drawn again in full colour with a rim (instead of a dot on top).
+  function drawBarHover(u, s) {
+    const i = u.cursor.idx;
+    if (!s.bars || i == null || u.cursor.left == null || u.cursor.left < 0) return;
+    strongBars(u, s, [i]);
+  }
+  // Columns i drawn again in full colour with a rim: the hovered one, the ones a stat marks.
+  function strongBars(u, s, list) {
+    const v0 = xs(), dpr = devicePixelRatio || 1;
+    let gap = Infinity;
+    for (let k = 1; k < v0.length; k++) gap = Math.min(gap, Math.abs(u.valToPos(v0[k], "x", true) - u.valToPos(v0[k - 1], "x", true)));
+    if (!Number.isFinite(gap)) gap = u.bbox.width / 2;
+    const w = Math.min(64 * dpr, gap * (s.barSize || 0.72)), y0 = u.valToPos(Math.max(0, u.scales.y.min), "y", true);
+    const ctx = u.ctx;
+    ctx.save();
+    ctx.beginPath(); ctx.rect(u.bbox.left, u.bbox.top, u.bbox.width, u.bbox.height); ctx.clip();
+    for (const i of list) {
+      const v = s.values[i];
+      if (v == null) continue;
+      const x = u.valToPos(v0[i], "x", true) - w / 2, y1 = u.valToPos(v, "y", true);
+      ctx.globalAlpha = 1; ctx.fillStyle = s.color; ctx.fillRect(x, Math.min(y0, y1), w, Math.abs(y0 - y1));
+      ctx.strokeStyle = cssVar("--fg") || "#1b1e25"; ctx.globalAlpha = 0.55; ctx.lineWidth = 1.5 * dpr;
+      ctx.strokeRect(x, Math.min(y0, y1), w, Math.abs(y0 - y1));
+    }
+    ctx.restore();
+  }
   // Stretches highlighted from outside the charts (a best effort, a surface kind): band + bold line.
   function drawExt(u, s) {
     if (!g.ext?.length) return;
@@ -608,6 +651,7 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, share
     for (const [a, b] of g.ext) {
       ctx.fillStyle = c; ctx.globalAlpha = 0.13;
       ctx.fillRect(X(a), top, Math.max(2 * dpr, X(b) - X(a)), height);
+      if (s.bars) continue; // columns: the band alone
       ctx.globalAlpha = 1; ctx.strokeStyle = s.color; ctx.lineWidth = 3.5 * dpr;
       ctx.beginPath();
       for (let i = a; i <= b; i++) if (s.values[i] != null) ctx.lineTo(X(i), Y(s.values[i]));
@@ -747,6 +791,13 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, share
       ctx.fillRect(x0, top, dpr, height);
       ctx.fillRect(x1 - dpr, top, dpr, height);
     }
+    else if (m.ranges && s.bars) { // columns: the marked ones in full colour, the others faded
+      ctx.fillStyle = withAlpha(cssVar("--surface") || "#ffffff", 0.55);
+      ctx.fillRect(left, top, width, height);
+      ctx.restore();
+      strongBars(u, s, m.ranges.flatMap(([a, b]) => [...Array(b - a + 1)].map((_, k) => a + k)));
+      return;
+    }
     else if (m.ranges) {
       const c = m.color || s.color;
       for (const [a, b] of m.ranges) {
@@ -812,6 +863,8 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, share
   // Value flag next to the point, exact x on the x axis, map sync.
   function cursorMoved(u, s) {
     const i = u.cursor.idx, b = u._tb;
+    const barAt = s.bars && u.cursor.left >= 0 ? i : null;
+    if (s.bars && u._barIdx !== barAt) { u._barIdx = barAt; u.redraw(false); } // the hovered column
     const show = i != null && u.cursor.left >= 0;
     hoverClimb(u, s, show ? i : null);
     b.tip.hidden = b.xflag.hidden = !show;
@@ -843,7 +896,7 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, share
     const t = s.targets?.find((x) => i >= x.i0 && i <= x.i1) || null;
     const z = zoneOf(s, v);
     b.tip.innerHTML = s.lines?.length
-      ? [{ label: s.label, color: s.color, values: s.values }, ...s.lines].map((l) => `<div><span class="chart-tip-name">${l.label}</span> <b style="color:${l.color}">${fmtY(s, l.values[i])}</b></div>`).join("")
+      ? [{ label: s.label, color: s.color, values: s.values }, ...s.lines].map((l) => `<div><span class="chart-tip-name">${l.label}</span> <b style="color:${l.color}">${l.fmt ? (l.values[i] == null ? "–" : l.fmt(l.values[i])) : fmtY(s, l.values[i])}</b></div>`).join("")
       : `<span class="chart-tip-name">${s.label}</span> <b style="color:${colorAt(s, v)}">${fmtY(s, v)}</b>${z?.label ? ` <span class="chart-tip-name">· ${z.label}</span>` : ""}${surfaceAt(s, i) ? `<div class="chart-tip-target"><span class="surface-swatch s-${surfaceAt(s, i)}"></span>${SURFACE_LABEL[surfaceAt(s, i)]}</div>` : ""}${t ? `<div class="chart-tip-target"><span class="chart-tip-swatch"></span>Target ${num(t.lo, s.dec)}–${num(t.hi, s.dec)}${s.unit ? " " + s.unit : ""}${v != null && (v < t.lo || v > t.hi) ? ` <span class="chart-tip-out">${v < t.lo ? "below" : "above"}</span>` : ""}</div>` : ""}`;
     // a stretch under the cursor (s.climbs.tip): its line in the value flag
     const st = s.climbs?.tip && s.climbs.items.find((c) => i >= c.i0 && i <= c.i1);
@@ -954,7 +1007,18 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, share
           if (m.i != null) onHover(m.i); // a point is shown on the map too
           if (m.ranges?.length) onRanges(m.ranges); // and stretches (best 20 min, climbs, above Z2…)
         };
-        st.onmouseleave = () => { g.mark = null; st.classList.remove("on"); u.redraw(false); onHover(null); onRanges(null); };
+        st.onmouseleave = () => {
+          st.classList.remove("on");
+          if (g.pinnedStat?.isConnected) { g.pinnedStat.onmouseenter(); return; } // a clicked stat stays marked
+          g.mark = null; u.redraw(false); onHover(null); onRanges(null);
+        };
+        // a click keeps the stat's marking (until it is clicked again)
+        st.onclick = () => {
+          const was = g.pinnedStat === st;
+          g.pinnedStat?.classList.remove("pinned");
+          g.pinnedStat = was ? null : st;
+          if (!was) { st.classList.add("pinned"); st.onmouseenter(); }
+        };
       });
       // A value pill highlights its point (current value, max, min) in its own colour.
       el.querySelectorAll("[data-tag]").forEach((st) => {

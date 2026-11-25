@@ -1206,8 +1206,15 @@ async function renderActivity(id) {
       on.has("altitude") ? "" : stat("Total ascent", a.ascent_m, meters(a.ascent_m), "total_ascent") + stat("Total descent", a.descent_m, meters(a.descent_m), "total_descent"),
     ].join("");
     const a1 = colA.join(""), n = (a1 + colB).match(/stat-card/g)?.length || 0;
-    // four cards or fewer: one column
-    return n <= 4 ? `<div class="stat-col">${a1}${colB}</div>` : `<div class="stat-col">${a1}</div><div class="stat-col">${colB}</div>`;
+    // two cards or fewer: one column; three or four: two columns, half each in order (one
+    // column of four squeezed them while the cards beside got the width); more: as above
+    if (n <= 2) return `<div class="stat-col">${a1}${colB}</div>`;
+    if (n <= 4) {
+      const cards = (a1 + colB).split(/(?=<div class="card stat-card">)/).filter((x) => x.trim());
+      const half = Math.ceil(cards.length / 2);
+      return `<div class="stat-col">${cards.slice(0, half).join("")}</div><div class="stat-col">${cards.slice(half).join("")}</div>`;
+    }
+    return `<div class="stat-col">${a1}</div><div class="stat-col">${colB}</div>`;
   };
 
   // Training types this sport can have: from the activity, else from the sport families.
@@ -1240,7 +1247,9 @@ async function renderActivity(id) {
   const ROUTE_MODES = [["plain", "Single colour", true], ["speed", "Speed", hasData(st.speed)], ["hr", "Heart rate", hasData(st.hr)],
     ["power", "Power", hasData(st.power)], ["cadence", "Cadence", hasData(st.cadence)], ["altitude", "Altitude", hasVals(st.altitude)], ["surface", "Surface", hasSurface(a)],
     ["intervals", "Intervals", sections?.kind === "intervals"]].filter((m) => m[2]);
-  const mode = "plain", kmOn = true; // fixed defaults on every visit
+  // fixed defaults on every visit; a Home Assistant card may set the route colour (when there is data)
+  const embedMode = typeof EMBED_ROUTE_MAP !== "undefined" && document.body.classList.contains("embed-detail") ? EMBED_ROUTE_MAP?.mode : null;
+  const mode = ROUTE_MODES.some(([k]) => k === embedMode) ? embedMode : "plain", kmOn = true;
   const laps = lapSource(a, chartX, st); // 1 km laps: the device auto-laps, else from the streams
   // grouped by 1 km (runs) or 5 km (rides, long activities); device laps without a distance
   const lapsN = laps.options.includes(lapKmStep(a)) ? lapKmStep(a) : laps.options[0];
@@ -2405,8 +2414,9 @@ async function createMap(container, mapSettings, opts = {}) {
   const zoomOffset = opts.zoomOffset || 0, focus = opts.focus, withReset = opts.reset, keepTone = opts.keepTone;
   delete opts.bounds; delete opts.fitBoundsOptions; delete opts.zoomOffset; delete opts.focus; delete opts.reset; delete opts.keepTone;
   // Route maps (activity, segment, segment creator): the fixed tone of the theme (routeTone).
-  // The Map tab (keepTone) shows exactly the tone of its options.
-  const tone = () => (keepTone ? mapTone(mapSettings) : routeTone());
+  // The Map tab (keepTone) shows exactly the tone of its options; a Home Assistant card's route
+  // map may give its own `tone`.
+  const tone = () => (keepTone ? mapTone(mapSettings) : validTone(mapSettings.tone) ? mapSettings.tone : routeTone());
   const map = new ml.Map({ container, style: baseStyle({ ...mapSettings, tone: tone() }), attributionControl: false,
                                        fadeDuration: 0, ...start, ...opts });
   if (extra) EXTRA_MAPS.push(map); else activeMap = map;
@@ -2900,15 +2910,20 @@ function bindSettingsPanel(el) {
   }; });
 }
 
+// A new base map, shading or trails: the base layers swapped, the layers on top (routes,
+// tiles) kept. setStyle alone diffs the style and drops them without a "style.load".
+function swapBase(map, style) {
+  const own = new Set(["background", "base", "relief", "trails"]), ownSrc = new Set(["base", "dem", "trails"]);
+  map.setStyle(style, { transformStyle: (prev, next) => prev ? { ...next,
+    sources: { ...Object.fromEntries(Object.entries(prev.sources).filter(([k]) => !ownSrc.has(k))), ...next.sources },
+    layers: [...next.layers, ...prev.layers.filter((l) => !own.has(l.id))] } : next });
+}
+
 function applyBase(newSource) {
   const map = heat.map;
   if (!map) return;
   const M = heat.settings.map;
-  if (newSource) {
-    map.setStyle(baseStyle(M));
-    map.once("style.load", () => drawHeatLayers());
-    return;
-  }
+  if (newSource) { swapBase(map, baseStyle(M)); return; }
   if (!map.getLayer("base")) return;
   const tone = toneOf(mapTone(M));
   for (const p of TONE_PROPS) map.setPaintProperty("base", p, tone[p] ?? TONE_DEFAULTS[p]);
@@ -3130,13 +3145,7 @@ function setCorridor(map, coords, halfWidth) {
 
 // ---- Coming-soon pages --------------------------------------------------------------
 
-const PLANNED = {
-  wellbeing: ["Wellbeing", "after Fitness", [
-    "Sleep, stress and heart rate — mostly charts over days, weeks and months.",
-    "Data from the Garmin Connect personal API (sleep, HRV, stress, resting heart rate, steps, weight).",
-    "Some daily values (resting heart rate, steps) will also appear in the Calendar.",
-  ]],
-};
+const PLANNED = {}; // section: [title, stage, [lines]] (none at the moment)
 
 function renderPlanned(key) {
   const [title, stage, items] = PLANNED[key];
@@ -3618,7 +3627,7 @@ async function settingsPeople(el) {
   el.innerHTML = `
     <div class="card">
       <h3>People <span class="title-note">(drag rows to reorder)</span></h3>
-      <div class="scroll"><table class="data people"><thead><tr><th></th><th>Icon</th><th>Color</th><th>Label</th><th>Id</th><th class="num">Activities</th><th>Training thresholds</th><th></th></tr></thead>
+      <div class="scroll"><table class="data people"><thead><tr><th></th><th>Icon</th><th>Color</th><th>Label</th><th>Sex</th><th>Id</th><th class="num">Activities</th><th>Training thresholds</th><th></th></tr></thead>
       <tbody id="people-rows">${people.map((p, i) => `<tr draggable="true" data-row="${esc(p.id)}">
         <td class="grip" title="Drag to reorder">${ICON.grip}</td>
         <td><select data-icon="${esc(p.id)}" class="icon-select">${PERSON_ICONS.map((ic) =>
@@ -3626,12 +3635,14 @@ async function settingsPeople(el) {
         <td><span class="swatches">${PERSON_COLORS.map((c) =>
           `<button class="swatch ${c === personColor(p, i) ? "active" : ""}" style="background:${c}" data-color="${c}" data-pid="${esc(p.id)}" aria-label="Color ${c}"></button>`).join("")}</span></td>
         <td><input data-label="${esc(p.id)}" value="${esc(p.label)}"></td>
+        <td><select data-sex="${esc(p.id)}" title="The silhouette in Wellbeing › Body">${[["", "–"], ["female", "Female"], ["male", "Male"]].map(([v, l]) =>
+          `<option value="${v}" ${v === (p.sex || "") ? "selected" : ""}>${l}</option>`).join("")}</select></td>
         <td><code>${esc(p.id)}</code></td>
         <td class="num">${num(p.activities)}</td>
         <td class="th-cell" data-th-sum="${esc(p.id)}"><span class="hint">…</span></td>
         <td class="actions"><button class="icon" data-th-edit="${esc(p.id)}" title="Edit training thresholds" aria-label="Edit training thresholds">${ICON_PENCIL}</button></td></tr>
-        <tr class="th-row" data-th-row="${esc(p.id)}" hidden><td colspan="8"><div data-th-box></div></td></tr>`).join("") || `<tr><td colspan="8" class="hint">No people yet.</td></tr>`}
-      ${unassigned && unassigned.activities ? `<tr><td></td><td></td><td></td><td>${state("Unassigned", "warn")}</td><td><code>—</code></td><td class="num">${num(unassigned.activities)}</td><td></td><td></td></tr>` : ""}
+        <tr class="th-row" data-th-row="${esc(p.id)}" hidden><td colspan="9"><div data-th-box></div></td></tr>`).join("") || `<tr><td colspan="9" class="hint">No people yet.</td></tr>`}
+      ${unassigned && unassigned.activities ? `<tr><td></td><td></td><td></td><td>${state("Unassigned", "warn")}</td><td></td><td><code>—</code></td><td class="num">${num(unassigned.activities)}</td><td></td><td></td></tr>` : ""}
       </tbody></table></div>
       <div class="card-row add-row"><input id="new-label" placeholder="New person's name"><button id="add" class="primary">Add person</button></div>
       <div class="card-row" style="margin-top:8px"><span id="people-msg"></span></div>
@@ -3658,6 +3669,7 @@ async function settingsPeople(el) {
   };
   el.querySelectorAll("[data-label]").forEach((inp) => inp.onchange = () => patch(inp.dataset.label, { label: inp.value }, "Label saved"));
   el.querySelectorAll("[data-icon]").forEach((sel) => sel.onchange = () => patch(sel.dataset.icon, { icon: sel.value || null }, "Icon saved"));
+  el.querySelectorAll("[data-sex]").forEach((sel) => sel.onchange = () => patch(sel.dataset.sex, { sex: sel.value || null }, "Saved"));
   el.querySelectorAll("[data-color]").forEach((b) => b.onclick = async () => {
     await patch(b.dataset.pid, { color: b.dataset.color }, "Color saved");
     settingsPeople(el);
@@ -4046,6 +4058,7 @@ async function route() {
     else if (section === "calendar") await renderCalendar(params);
     else if (section === "fitness") await renderFitness(params);
     else if (section === "stats") await renderStats(params);
+    else if (section === "wellbeing") await renderWellbeing(parts[1], params);
     else if (PLANNED[section]) renderPlanned(section);
     else await renderActivities(params);
     // The back button matches the page header's height.

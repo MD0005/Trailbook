@@ -69,6 +69,9 @@ def test_plan_counts_three_days_ahead(tmp_path):
     assert out["form_after_day"] == "2026-11-26" and out["form_after"] is not None
     assert out["form_after"] != out["form"]  # the plan's load moves it
     assert out["window"] == ["2026-11-17", "2026-11-26"]
+    f = out["fatigue"]  # fatigue now, the usual load, after the plan
+    assert f["now"] > 0 and f["usual"] > 0
+    assert f["after"] > f["now"]  # the plan's load adds to it
 
 
 def test_split_by_thresholds(tmp_path):

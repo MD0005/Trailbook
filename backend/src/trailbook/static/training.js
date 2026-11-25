@@ -578,6 +578,35 @@ function formAfter(d) {
   const zone = FORM_ZONES.find(([lo, hi]) => d.form_after >= lo && d.form_after < hi);
   return `<span class="stat-note nx-after" data-tip="${esc(`Estimated form after the planned workouts (to ${d.form_after_day}), from their estimated load; ${zone ? NEXT_FORM_NOTE[zone[2]].toLowerCase() : ""}`)}">Estimated after plan: <b>${v}</b></span>`;
 }
+// The form as a vertical scale (fresher up, more tired down) over the faint zones: 0 marked
+// inside, a solid line at the form now, a dashed one at the estimate after the plan.
+const NEXT_FORM_RANGE = [-40, 30];
+function formBar(d) {
+  const [lo, hi] = NEXT_FORM_RANGE, at = (v) => ((hi - Math.max(lo, Math.min(hi, v))) / (hi - lo)) * 100;
+  const bands = FORM_ZONES.map(([a, b, , c]) => `<em style="top:${at(b)}%;bottom:${100 - at(a)}%;background:${c}"></em>`).join("");
+  const after = d.form_after == null ? "" : `<s style="top:${at(d.form_after)}%"></s>`;
+  return `<span class="nx-vbar" aria-hidden="true"><span class="nx-vbands">${bands}</span><b style="top:${at(0)}%">0</b>${after}<i style="top:${at(d.form)}%"></i></span>`;
+}
+// Fatigue (ATL) against the limit: a share of the usual load (CTL, the 6-week average). Past
+// LIMIT the load rises faster than the body adapts; past HIGH it is excessive. The planned
+// workouts hatched on top.
+const FATIGUE_LIMIT = 1.3, FATIGUE_HIGH = 1.5, FATIGUE_END = 1.6;
+const FATIGUE_LEVELS = [[FATIGUE_LIMIT, "Within your usual load", null], [FATIGUE_HIGH, "High load: monitor recovery", "#f2c200"],
+  [Infinity, "Excessive load: reduce training", "#e53935"]]; // null: the fatigue colour (COLORS.atl)
+function fatigueItem(d) {
+  const f = d.fatigue;
+  if (!f) return "";
+  if (f.usual < 1) return `<div class="stat-item nx-fatigue"><span class="stat-label">Fatigue</span><span class="stat-value">${num(f.now, 0)}</span><span class="stat-note">No 6-week history yet</span></div>`;
+  const limit = f.usual * FATIGUE_LIMIT, end = Math.max(f.usual * FATIGUE_END, f.now, f.after ?? 0), pct = (v) => (v / end) * 100;
+  const level = (v) => { const l = FATIGUE_LEVELS.find(([r]) => v / f.usual <= r); return [l[0], l[1], l[2] || COLORS.atl]; };
+  const [, note, color] = level(f.now);
+  const more = f.after != null && f.after > f.now ? f.after - f.now : 0;
+  const tip = `7-day load against your 6-week average. Limit: ${num(FATIGUE_LIMIT, 1)} × the average; over ${num(FATIGUE_HIGH, 1)} × excessive.${more ? " Hatched: after the planned workouts." : ""}`;
+  return `<div class="stat-item nx-fatigue" data-tip="${esc(tip)}"><span class="stat-label">Fatigue</span>
+    <span class="stat-value">${num(f.now, 0)}<small> · limit ${num(limit, 0)}</small></span>
+    <span class="nx-bar"><i style="width:${pct(f.now)}%;background:${color}"></i>${more ? `<b style="width:${pct(more)}%;--c:${level(f.after)[2]}"></b>` : ""}<u style="left:${pct(limit)}%"></u></span>
+    <span class="stat-note">${note}</span>${f.after != null ? `<span class="stat-note nx-after">Estimated after plan: <b>${num(f.after, 0)}</b></span>` : ""}</div>`;
+}
 async function renderNextPanel(box, today) {
   const model = UI.data["training-model"] || "polarized";
   const d = await api("suggest?" + new URLSearchParams({ ...personParam(), today, model })).catch(() => null);
@@ -598,7 +627,8 @@ async function renderNextPanel(box, today) {
     <div class="badges">${badgeHtml("cmodel", "Model", d.models[d.model], { panel: `<div class="opt-panel">${pickList("cmodel", Object.entries(d.models), d.model)}</div>`, right: true })}</div></div>
     <div class="stat-strip cal-next">
     <div class="stat-item nx-zones"><span class="stat-label">Last 7 days + next 3 planned</span>${rows}</div>
-    <div class="stat-item" data-tip="${esc(NEXT_FORM_TIP)}"><span class="stat-label">Form</span><span class="stat-value">${d.form == null ? "–" : (d.form > 0 ? "+" : "") + num(d.form, 0)}</span><span class="stat-note">${esc(zone ? NEXT_FORM_NOTE[zone[2]] : "")}</span>${formAfter(d)}</div>
+    ${fatigueItem(d)}
+    <div class="stat-item nx-form" data-tip="${esc(NEXT_FORM_TIP)}">${d.form == null ? "" : formBar(d)}<div class="nx-form-text"><span class="stat-label">Form</span><span class="stat-value">${d.form == null ? "–" : (d.form > 0 ? "+" : "") + num(d.form, 0)}</span><span class="stat-note">${esc(zone ? NEXT_FORM_NOTE[zone[2]] : "")}</span>${formAfter(d)}</div></div>
     <div class="stat-item nx-next"><span class="stat-label">Next training · ${when.toLowerCase()}</span><span class="stat-value">${n.sport && n.kind !== "rest" ? groupIcon(n.sport, 18) : ""}${esc(what)}${n.minutes ? ` <small>· ${num(n.minutes)} min</small>` : ""}</span>
       ${n.reasons.map((r) => `<span class="stat-note">${esc(r)}</span>`).join("")}${d.notes.map((r) => `<span class="stat-note nx-note">${esc(r)}</span>`).join("")}</div>
   </div></div>`;

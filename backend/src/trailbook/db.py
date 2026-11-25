@@ -660,6 +660,29 @@ MIGRATIONS: list[str] = [
     ALTER TABLE activities ADD COLUMN fixes TEXT;
     ALTER TABLE activities ADD COLUMN excluded INTEGER NOT NULL DEFAULT 0;
     """,
+    # v45 — weigh-ins of scale FIT files (file type weight; fitfile.parse_weight), for
+    # Wellbeing › Body: one row per measurement, composition NULL when the scale did not measure
+    # it. `body_version`: the file was read (importer.backfill_body for files skipped before).
+    """
+    CREATE TABLE body_parts (
+        file_id     INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+        ts          TEXT NOT NULL,           -- UTC, ISO
+        weight      REAL NOT NULL,           -- kg
+        fat_pct     REAL,
+        water_pct   REAL,
+        muscle_kg   REAL,
+        bone_kg     REAL,
+        bmi         REAL,
+        PRIMARY KEY (file_id, ts)
+    );
+    CREATE INDEX body_parts_ts ON body_parts(ts);
+    ALTER TABLE files ADD COLUMN body_version INTEGER NOT NULL DEFAULT 0;
+    """,
+    # v46 — a person's sex (Settings › People: "male" | "female", NULL: not set), for the
+    # silhouette of Wellbeing › Body.
+    """
+    ALTER TABLE persons ADD COLUMN sex TEXT;
+    """,
 ]
 
 SCHEMA_VERSION = len(MIGRATIONS)

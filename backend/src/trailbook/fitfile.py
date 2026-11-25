@@ -574,6 +574,32 @@ def parse_garmin_metrics(data: bytes) -> dict[str, float]:
 MONITORING_ASCENT_MM = 35
 MONITORING_DESCENT_MM = 36
 FILE_TYPES_MONITORING = (15, 32)  # monitoring_a, monitoring_b
+FILE_TYPE_WEIGHT = 9
+
+
+def parse_weight(data: bytes) -> list[dict]:
+    """Weigh-ins of a scale FIT file: [{ts (UTC ISO), weight, fat_pct, water_pct, muscle_kg,
+    bone_kg, bmi}]; a value the scale did not measure (0 or missing) is None."""
+    messages, _errors = Decoder(Stream.from_byte_array(bytearray(data))).read(
+        convert_datetimes_to_dates=False
+    )
+    out = []
+    for m in messages.get("weight_scale_mesgs") or []:
+        w, t = m.get("weight"), m.get("timestamp")
+        if not isinstance(w, (int, float)) or not 20 <= w <= 300 or not isinstance(t, int):
+            continue
+
+        def val(key, m=m):
+            v = m.get(key)
+            return float(v) if isinstance(v, (int, float)) and v > 0 else None
+
+        ts = datetime.fromtimestamp(t + FIT_EPOCH_S, UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+        out.append({
+            "ts": ts, "weight": float(w), "fat_pct": val("percent_fat"),
+            "water_pct": val("percent_hydration"), "muscle_kg": val("muscle_mass"),
+            "bone_kg": val("bone_mass"), "bmi": val("bmi"),
+        })  # fmt: skip
+    return out
 
 
 def parse_monitoring(data: bytes) -> dict[tuple[str, str], tuple[float, int]]:

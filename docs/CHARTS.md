@@ -246,3 +246,37 @@ equally); hovering one marks its point. A pinned value shows every series of the
 
 `chartGroup` options used here: `kind: "date"`, `lines`, `tags`, `zones`, `invert`,
 `yMin` / `yMax`, `ySplits`, `height`, `hidden` + `api.show(key, on)`.
+
+## Wellbeing › Movement
+
+- **Dots** (steps, floors): an SVG grid in the same card: the plot framed in `--chart-frame`, a dashed
+  grid line through each row, the row labels as the y axis (months need no title), the x axis
+  numbered (days 1, 5 … 31 | W1, W5 … W53 | Jan … Dec) with its title; its plot takes the left and
+  right edge of the column charts. Each row's average in the side column, left of the stats (the
+  column one width for the page). Hovering a stat marks its dots and fades the others; Avg is a
+  value only.
+- **Dots | Columns**: a switch of two icons at the right of the chart's header.
+- Columns (`bars`, from 0, `barSize` 0,88 of the gap): the hovered column in full colour with a rim
+  (no dot); a stat whose mark is `{ ranges }` (Goal met) shows those columns that way and fades the
+  rest. The flag under the x axis names the period (`xExact`: "Week 12 2026", "March 2026").
+- A click on a stat keeps its marking until it is clicked again (every chart, `pinned`).
+- Intensity minutes carry the activity icons under the x axis as Fitness does, but one per column (`marksPerX`: the type done most often that week or month, smaller, with the count); hovering one marks its column (the others fade), a click lists its activities.
+- All charts of the tab are linked by period (a day → its week or month).
+
+## Wellbeing › Body
+
+- **Weight**: the standard chart (date axis, a dot per weigh-in); the moving average (orange, dashed)
+  and the goal (grey, dashed) as lines; value pills on the right at their height (Weight, Moving
+  average, Goal), as on Fitness. 330 px high beside the silhouette card (about a sixth of the width, the
+  same height). **Additional series** badge in its header: a line on its own scale with a y axis on
+  the right (`lines[].axis: "right"`, its title on the axis), lightly filled.
+- **Composition**: an SVG stacked area chart in the card style (framed plot, dashed grid, y axis
+  "Share of the weight (%)" over the data's range, month ticks with the year on January), 380 px,
+  fat at the bottom (amber), then muscle (teal) and bone (blue-grey); pills on the right
+  at the height of their layer's top at the last point, pushed apart when they would overlap. A click on a pill shows that layer alone as a line with dots, on its own range; again:
+  all. The fat goal dashed while fat is shown. Hovering shows the values and moves the weight chart's
+  cursor (and back). Its plot ends at the weight plot's right edge (also with the right axis).
+  Its height changes with the grip on the card's bottom edge like every chart (120–640 px).
+- **Tiles** under the silhouette (BMI, Fitness age): together as high as the composition card;
+  the latest value large in a colour of its own, a word under it (BMI class; VO2 max), at the
+  bottom a bar from the period's lowest to its highest with the latest value as a ring.

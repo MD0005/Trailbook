@@ -428,7 +428,17 @@ neighbour closer in heart rate, until none is shorter.
   rest = easy.
 - **Form**: now, from the training done (planned workouts not counted). Under it the estimated
   form after the planned workouts of the window: the fitness model run on with their estimated
-  loads, going into the day after the last one.
+  loads, going into the day after the last one. The vertical scale beside it:
+  fresher up, more tired down, from −40 to +30 (beyond that the bar stops at its end), over the
+  form zones of Fitness › Form, 0 marked inside; the solid line is the form now, the dashed line
+  the estimate after the plan.
+- **Fatigue**: the 7-day average of the daily load (Fitness › Fatigue) against your usual load,
+  the 42-day average (Fitness › Fitness). Up to 1,3 × the usual load: within it; 1,3–1,5 ×: high
+  (yellow), the load rises faster than the body adapts; over 1,5 ×: excessive (red). The line is
+  the limit (1,3 ×); the bar ends at 1,6 × (further when the value goes past it). Hatched: the
+  estimated fatigue on the day of the last planned workout, with their estimated loads (only
+  when it is higher than now), coloured by its own level. Shown before the form: fatigue says
+  whether the load is too much, the form whether you are rested today.
 - Why not Garmin's zones alone: their zone 4 ends near the lactate threshold, so it is mostly
   between the thresholds (moderate), and most of zone 3 is below the aerobic threshold (easy).
 - **Models** (easy / moderate / hard): Polarized 80 / 5 / 15, Pyramidal 75 / 20 / 5, Threshold
@@ -481,6 +491,47 @@ From today on, days without these values show:
 
 Month summary: sums of the month's activities; steps and floors as totals with the average of
 the days that have them; stress as the average of the days' averages.
+
+## Wellbeing › Movement
+
+- **Days**: steps and floors as in the Calendar (monitoring files; Garmin Connect's daily summary
+  wins); intensity minutes and active calories only from Garmin Connect.
+- **Goals** (Options, per person): steps a day 10 000, floors a day none, intensity minutes a week
+  150 — the same every day, Garmin's own goals are not used.
+- **Dot**: size grows with the square root of the share of the goal, up to 120 %; colour opacity is
+  7 % + 93 % × share² below the goal, full at the goal and above; from 1,5 × the goal the colour turns
+  towards red, fully red at 2,5 ×. Without a goal the 90th percentile of the values stands in for it
+  (no Goal met, Streak, red). Weeks and months: the average day of the days with data.
+- **Goal met**: share of the days (weeks, months) at the goal or above. **Streak**: the longest run
+  of days in a row at the goal.
+- **Weeks** as in Statistics: they start on Monday, the days before the first Monday of a year
+  belong to week 1. A column stands at the middle of its week or month.
+- **Intensity minutes**: moderate + 2 × vigorous, as Garmin counts them; a week or month shows the
+  average day × 7 (a week).
+- **Floors** and **active calories** (burned by moving, without the resting part): the average day
+  of the week or month.
+
+## Wellbeing › Body
+
+- **Weigh-ins** come from a scale's FIT files; a value the scale did not measure (0) is left out.
+  A full body composition has the fat %; muscle and bone are the scale's kg.
+- **Layers** (share of the weight): fat = fat %; muscle = muscle kg ÷ weight; bone = bone kg ÷
+  weight. The rest of the weight (organs, skin, water outside the muscles) is not drawn.
+- **Silhouette**: the last weigh-in with a full composition (any time), the layers stacked from
+  the feet up in their share of the height.
+- **Weeks / Months**: each value is the average of the weigh-ins of that week or month that have
+  it. **Moving average** of the weight: the mean of the weigh-ins (or periods) of the last 90 days
+  up to each point.
+- **Training load** (Additional series): the daily load of Fitness as a 30-day moving average (the
+  mean of the 30 days up to each day; a week or month: up to its last day).
+- **BMI**: the scale's value of each weigh-in; the tile shows the last one of the period, and its
+  highest and lowest.
+- **Fitness age**: the age at which the person's VO2 max is the average for their sex (Settings ›
+  People; male when not set), interpolated between the mean VO2 max of the HUNT fitness study by
+  age group (men 54,4 · 49,0 · 47,7 · 42,6 · 39,2 · 35,5 and women 43,0 · 40,0 · 38,4 · 34,4 · 31,1 ·
+  28,6 ml/kg/min at 25, 35 … 75 years), limited to 20–80. VO2 max: the watch's latest estimate
+  after a run (else a ride) on each day of the period.
+- **Days** of the weigh-ins are UTC days (a scale file has no time zone).
 
 ## Time of an activity: timer and elapsed
 

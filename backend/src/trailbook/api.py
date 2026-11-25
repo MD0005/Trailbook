@@ -62,6 +62,7 @@ from . import (
     tilechart,
     update,
     weather,
+    wellbeing,
     workout,
 )
 
@@ -198,7 +199,7 @@ HA_RECORDS_RETRY_S = 300  # how often record events Home Assistant missed are se
 
 # Time filter `last`: a period ending today, kept relative (a saved link stays "the last 3
 # months"): months back from today, or "ytd" from 1 January.
-LAST_MONTHS = {"1m": 1, "3m": 3, "6m": 6, "1y": 12}
+LAST_MONTHS = {"1m": 1, "3m": 3, "6m": 6, "1y": 12, "2y": 24}
 
 
 def last_since(key: str | None, today: date | None = None) -> str | None:
@@ -723,9 +724,11 @@ def create_app(db_path: str | Path) -> Starlette:
     async def person_update(request: Request):
         pid = request.path_params["id"]
         body = await request.json()
-        fields = {k: body[k] for k in ("label", "color", "icon") if k in body}
+        fields = {k: body[k] for k in ("label", "color", "icon", "sex") if k in body}
         if "label" in fields and not str(fields["label"]).strip():
             raise HTTPException(400, "label must not be empty")
+        if fields.get("sex") not in (None, "male", "female"):
+            raise HTTPException(400, "sex must be male, female or null")
         with closing(conn()) as c:
             if c.execute("SELECT 1 FROM persons WHERE id = ?", (pid,)).fetchone() is None:
                 raise HTTPException(404, "person not found")
@@ -1554,6 +1557,55 @@ def create_app(db_path: str | Path) -> Starlette:
                 "thresholds": th["effective"],
                 "pending": th["pending"],
                 "warnings": warnings,
+            }
+        )
+
+    async def wellbeing_movement(request: Request):
+        """Wellbeing › Movement: the days of the time filter (wellbeing.movement_days)."""
+        qp = request.query_params
+        with closing(conn()) as c:
+            pid = _single_person(c, request)
+            years = years_of(qp)
+            first = c.execute(
+                """SELECT MIN(d) FROM (
+                       SELECT MIN(day) d FROM garmin_days WHERE person_id = ?
+                       UNION ALL SELECT MIN(p.day) FROM daily_parts p
+                       JOIN files f ON f.id = p.file_id WHERE f.person_id = ?)""",
+                (pid, pid),
+            ).fetchone()[0]
+            since = max(filter(None, [qp.get("from"), last_since(qp.get("last"))]), default=None)
+            start, end = wellbeing.span(first, since, qp.get("to"), years)
+            days = wellbeing.movement_days(c, pid, start, end) if start <= end else []
+        if years:
+            days = [d for d in days if d["day"][:4] in years]
+        return JSONResponse({"from": start, "to": end, "first": first, "days": days})
+
+    async def wellbeing_body(request: Request):
+        """Wellbeing › Body: the weigh-ins of the time filter (wellbeing.body_rows) and the
+        last one with a full body composition (any time)."""
+        qp = request.query_params
+        with closing(conn()) as c:
+            pid = _single_person(c, request)
+            years = years_of(qp)
+            first = c.execute(
+                """SELECT MIN(substr(b.ts, 1, 10)) FROM body_parts b
+                   JOIN files f ON f.id = b.file_id WHERE f.person_id = ?""",
+                (pid,),
+            ).fetchone()[0]
+            since = max(filter(None, [qp.get("from"), last_since(qp.get("last"))]), default=None)
+            start, end = wellbeing.span(first, since, qp.get("to"), years)
+            rows = wellbeing.body_rows(c, pid, start, end) if start <= end else []
+            full = wellbeing.body_rows(c, pid, "0000-01-01", "9999-12-31")
+        if years:
+            rows = [r for r in rows if r["day"][:4] in years]
+        last_full = next((r for r in reversed(full) if r["fat_pct"] is not None), None)
+        return JSONResponse(
+            {
+                "from": start,
+                "to": end,
+                "items": rows,
+                "last_full": last_full,
+                "last": full[-1] if full else None,
             }
         )
 
@@ -2754,6 +2806,8 @@ def create_app(db_path: str | Path) -> Starlette:
         Route("/api/thresholds/{id}/{valid_from}", thresholds_delete, methods=["DELETE"]),
         Route("/api/fitness", fitness),
         Route("/api/calendar", calendar),
+        Route("/api/wellbeing/movement", wellbeing_movement),
+        Route("/api/wellbeing/body", wellbeing_body),
         Route("/api/forecast", forecast),
         Route("/api/stats/totals", stats_totals),
         Route("/api/stats/activities", stats_activities),
