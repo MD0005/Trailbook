@@ -742,7 +742,7 @@ function activitySummary(t) {
 async function renderActivities(params) {
   // Filters and sort stay for this tab: "#/activities" with no parameters (the back button, the
   // tab link from an activity) brings them back; leaving the tab or reloading forgets them.
-  const KEEP = ["from", "to", "last", "years", "types", "workouts", "person", "sort", "dir"];
+  const KEEP = ["from", "to", "last", "years", "types", "workouts", "device", "person", "sort", "dir"];
   if (!Object.keys(params).length && TAB.filter && Object.keys(TAB.filter).length) {
     location.replace("#/activities?" + new URLSearchParams(TAB.filter));
     return;
@@ -828,6 +828,7 @@ async function renderActivities(params) {
   view.innerHTML = `
     ${pageHead("Activities", `
       ${timeBadge(params)}${typeBadge(params)}${workoutBadge(params, data.workout_counts)}
+      ${data.device ? badgeHtml("device", "Device", `${esc(data.device.name || "unknown")} ×`, { on: true }) : ""}
       <button class="badge ${showSummary ? "on" : ""}" data-kpis>Summary</button>`,
       switchHtml("view", VIEWS.map(([k, label, icon]) => [k, `${icon}<span>${label}</span>`]), mode))}
     <div data-summary ${showSummary ? "" : "hidden"}>${activitySummary(data.totals)}</div>
@@ -835,6 +836,12 @@ async function renderActivities(params) {
   bindBadges(view.querySelector(".page-head"));
   bindTable("#/activities", params);
   bindFilterBadges(view.querySelector(".page-head"), "#/activities", params, { drop: ["date"] });
+  // one device only (a click on it on Statistics › Gear): the badge takes the filter off
+  const off = view.querySelector("[data-badge=device]");
+  if (off) off.onclick = () => {
+    const { device, ...rest } = params;
+    location.hash = "#/activities?" + new URLSearchParams(rest);
+  };
   infinite(view, data.items.length, data.total, async (offset) => (await fetchPage(offset)).items, (items) => {
     view.querySelector("[data-rows]").insertAdjacentHTML("beforeend", items.map((a) => (mode === "list" ? rowHtml(columns, a) : tile(a))).join(""));
   });
@@ -1719,13 +1726,16 @@ const DEVICE_ART = {
   light: `<rect x="22" y="10" width="20" height="44" rx="8" class="fill"/><rect x="26" y="16" width="12" height="20" rx="4" class="accent"/><path d="M14 26h-6M14 32h-8M14 38h-6"/>`,
   speed_cadence: `<rect x="18" y="20" width="28" height="24" rx="9" class="fill"/><circle cx="32" cy="32" r="5" class="screen"/><path d="M8 32h10M46 32h10"/>`,
   foot_pod: `<path d="M10 42c10 0 14-12 24-12h12c6 0 10 4 10 10v4H10z" class="fill"/><rect x="28" y="22" width="14" height="10" rx="4" class="screen"/>`,
+  scale: `<rect x="8" y="8" width="48" height="48" rx="12" class="fill"/><rect x="20" y="15" width="24" height="13" rx="4" class="screen"/><path d="M32 25l4-6" class="accent-stroke"/><path d="M18 46h8M38 46h8"/>`,
   trainer: `<circle cx="22" cy="40" r="12" class="fill"/><circle cx="22" cy="40" r="4"/><path d="M34 40h18l4 14H30M44 40V24l8-6"/>`,
   app: `<rect x="18" y="4" width="28" height="56" rx="6" class="fill"/><rect x="22" y="12" width="20" height="38" rx="2" class="screen"/><path d="M27 34l4-8 4 6 3-4" class="accent-stroke"/>`,
   sensor: `<rect x="16" y="18" width="32" height="28" rx="10" class="fill"/><path d="M26 32h12M32 26v12"/>`,
 };
 const DEVICE_KIND_LABEL = { watch: "Watch", bike_computer: "Bike computer", app: "App", power_meter: "Power meter",
   hr_strap: "Heart rate strap", trainer: "Smart trainer", radar: "Radar", light: "Bike light",
-  speed_cadence: "Speed / cadence sensor", foot_pod: "Foot pod", shifting: "Shifting", sensor: "Sensor" };
+  speed_cadence: "Speed / cadence sensor", foot_pod: "Foot pod", shifting: "Shifting", sensor: "Sensor",
+  scale: "Scale" };
+const devicePic = (d) => `<div class="device-pic">${d.image ? `<img src="${esc(d.image)}" alt="">` : `<svg viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">${DEVICE_ART[d.kind] || DEVICE_ART.sensor}</svg>`}</div>`;
 function devicesHtml(a) {
   const seen = new Set();
   const list = (Array.isArray(a.devices) ? a.devices : []).filter((d) => {
@@ -1734,7 +1744,7 @@ function devicesHtml(a) {
   });
   if (!list.length) return "";
   return `<div class="card act-tile act-devices"><h3 class="tile-title">${metricIcon("watch", 18)}<span>Gear</span></h3><div class="devices">${list.map((d) => `<div class="device">
-      <div class="device-pic">${d.image ? `<img src="${esc(d.image)}" alt="">` : `<svg viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">${DEVICE_ART[d.kind] || DEVICE_ART.sensor}</svg>`}</div>
+      ${devicePic(d)}
       <div class="device-text"><b>${esc(d.name || "Device")}</b><span title="${esc([d.maker, DEVICE_KIND_LABEL[d.kind]].filter(Boolean).join(" · "))}">${esc([d.maker, DEVICE_KIND_LABEL[d.kind]].filter(Boolean).join(" · "))}</span></div></div>`).join("")}</div></div>`;
 }
 

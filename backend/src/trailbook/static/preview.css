@@ -2179,6 +2179,10 @@ html.embed-page[data-theme="dark"] { --bg: #111111; --surface: #1c1c1c; --surfac
 /* a card while it loads: no header, the card's own background (clear), the loader in the middle */
 html.embed-page, html.embed-page body:not(.embed-ready) { background: transparent; }
 html.embed-page body > header { display: none; }
+/* a card keeps no room for a scroll bar (the app's pages always show one); taller than its
+   frame it still scrolls */
+html.embed-page { overflow-y: auto; scrollbar-width: none; }
+html.embed-page::-webkit-scrollbar { display: none; }
 html.embed-page .page-loader { min-height: 100vh; align-items: center; padding: 0; box-sizing: border-box; }
 html.embed-page main:has(> .page-loader) { padding: 0; }
 body.embed > header { display: none; }
@@ -2395,4 +2399,58 @@ body.embed-detail #route-map { margin-top: 0; }
   .pair-col:nth-child(2) > :nth-child(4) { order: 8; }
   .pair-col:nth-child(2) > :nth-child(5) { order: 9; }
   .pair-owner { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
+}
+
+/* Statistics › Gear: a row of square cards with rings, the spans chart, the table */
+.gear-rings { display: grid; gap: 12px; margin-bottom: 16px; }
+.gear-card { margin: 0; aspect-ratio: 1; min-width: 0; padding: 10px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; }
+.gear-ring { position: relative; flex: 1 1 0; min-height: 0; aspect-ratio: 1; display: grid; place-items: center; margin-bottom: 4px; }
+.gear-arc { position: absolute; inset: 0; width: 100%; height: 100%; }
+.gear-ring .device-pic { position: absolute; inset: 22%; width: auto; height: auto; }
+.gear-ring .device-pic svg { width: 100%; height: 100%; }
+.gear-ring .device-pic img { position: absolute; inset: 0; width: 100%; height: 100%; max-width: none; max-height: none; }
+.gear-value { font-size: 16px; line-height: 1.2; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.gear-name { max-width: 100%; font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gear-name i, .gear-ylab i { font-style: normal; font-size: 11px; }
+a.gear-card { position: relative; color: inherit; text-decoration: none; }
+a.gear-card:hover { text-decoration: none; background: var(--surface-2); }
+.gear-rings[hidden] { display: none; }
+.gear-bat { position: absolute; top: 7px; right: 7px; z-index: 1; display: flex; flex-direction: column; align-items: flex-end; gap: 1px; color: var(--muted); }
+.gear-bat svg { width: 20px; height: 10px; }
+.gear-bat i { font-style: normal; font-size: 9.5px; line-height: 1; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.gear-bat.b-low { color: var(--warn); }
+.gear-bat.b-critical { color: var(--danger); }
+/* the hovered device, lit in the cards, on the bars and in the table */
+a.gear-card.hot { background: color-mix(in srgb, var(--accent) 14%, var(--surface)); }
+.gear-ylab.hot, .gear-row.hot, .gear-table-card tbody tr.hot { background: color-mix(in srgb, var(--accent) 14%, transparent); }
+/* retired: faded hard, in the table (its toggle stays clear) and on the bars */
+tr.gear-retired td:not(:last-child), .gear-ylab.gear-retired, .gear-row.gear-retired .gear-bar { opacity: .25; }
+.gear-hide-retired .gear-retired { display: none; } /* Options › Retired devices: Hidden */
+.gear-span-card .chart-title, .gear-table-card .chart-title { margin: 0 0 10px; }
+.gear-span { display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: 8px; }
+.gear-yaxis, .gear-plot { display: flex; flex-direction: column; border: 1px solid transparent; }
+.gear-ylab { height: 44px; min-width: 44px; display: flex; flex-direction: column; align-items: center; justify-content: center; color: var(--muted); cursor: help; }
+.gear-ylab .device-pic svg { width: 32px; height: 32px; }
+.gear-ylab i { line-height: 1; }
+.gear-plot { position: relative; border-color: var(--chart-frame); }
+.gear-row { position: relative; height: 44px; box-sizing: border-box; }
+.gear-row + .gear-row { border-top: 1px dashed var(--chart-grid); }
+.gear-bar { position: absolute; top: 50%; height: 20px; min-width: 4px; transform: translateY(-50%); border-radius: 6px; box-shadow: 0 1px 4px rgba(0, 0, 0, .16); }
+.gear-bar:hover { filter: brightness(.92); }
+.gear-cursor { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--chart-pin); pointer-events: none; }
+.gear-xaxis { position: relative; height: 34px; font-size: 11px; line-height: 1.25; color: var(--muted); }
+.gear-xaxis [data-ticks] span { position: absolute; top: 4px; white-space: nowrap; border-left: 1px solid var(--chart-frame); padding-left: 3px; }
+.gear-flag { position: absolute; top: 3px; transform: translateX(-50%); padding: 1px 6px; border-radius: 5px; background: var(--surface); box-shadow: 0 1px 5px rgba(0, 0, 0, .28); color: var(--fg); white-space: nowrap; }
+.gear-cursor[hidden], .gear-flag[hidden] { display: none; }
+.gear-dev { display: inline-flex; align-items: center; gap: 10px; }
+.gear-dev > span { display: flex; flex-direction: column; line-height: 1.3; }
+.gear-dev > span > span { font-size: 11px; color: var(--muted); }
+.gear-dot { display: inline-block; width: 8px; height: 8px; margin-right: 5px; border-radius: 50%; }
+.gear-types { display: flex; flex-wrap: wrap; gap: 4px 6px; max-width: 216px; width: max-content; } /* nine icons a line */
+.gear-types > span { display: inline-flex; }
+@media (max-width: 760px) {
+  .gear-card { padding: 6px; }
+  .gear-bat { top: 4px; right: 4px; }
+  .gear-value { font-size: 14px; }
+  .gear-name { font-size: 11px; }
 }

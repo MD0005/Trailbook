@@ -29,6 +29,7 @@ const ICON_CAL_YEAR = svg(`<rect x="3" y="3" width="5" height="5" rx="1"/><rect 
 const ICON_YEARS = svg(`<path d="M3 19h18"/><path d="M4 16c3-5 6-7 9-7s5 2 7 3"/><path d="M4 12c3-4 6-6 9-6s5 1 7 2" opacity=".5"/>`);
 const ICON_TIMELINE = svg(`<path d="M3 19h18"/><path d="M4 17l4-5 4 2 4-6 4 3"/>`);
 const ICON_RECORDS = svg(`<path d="M8 21h8M12 17v4M7 4h10v5a5 5 0 0 1-10 0z"/><path d="M17 5h3a3 3 0 0 1-3 4M7 5H4a3 3 0 0 0 3 4"/>`);
+const ICON_GEAR = svg(`<rect x="6" y="7" width="12" height="10" rx="3"/><path d="M9 7l1-4h4l1 4M9 17l1 4h4l1-4M12 10v2.5l1.5 1"/>`);
 
 // ---- Calendar ---------------------------------------------------------------------------
 
@@ -1011,10 +1012,10 @@ const parsePace = (txt) => {
 };
 
 // ---- Statistics -------------------------------------------------------------------------
-// Three views (docs/SPEC.md › Statistics): Compare years (each year one series over its weeks or
+// Four views (docs/SPEC.md › Statistics): Compare years (each year one series over its weeks or
 // months; every metric as a chart and its running total, one under the other), Timeline (the whole
-// period on one axis) and Records. Header: Time, Type and X-axis. Compare years and Timeline open
-// on the last STAT_YEARS years (all time with fewer years of data; All time is `last=all`) and
+// period on one axis), Records and Gear (gear.js; header: Time, Options). Header: Time, Type and X-axis.
+// Compare years and Timeline open on the last STAT_YEARS years (all time with fewer years of data; All time is `last=all`) and
 // share Time, Type and X-axis while on the tab (`TAB.statFilter`, `TAB.statsX`). Records opens on
 // all time. X-axis: Compare years Mixed (each period chart by month, each running total by week) |
 // Weeks | Months; Timeline Weeks | Months | Years (a choice the other view lacks: its first one).
@@ -1048,21 +1049,27 @@ const STAT_METRICS = [
 let STAT_CHARTS = []; // chart groups of the page (destroyed on the next draw)
 
 async function renderStats(params) {
-  const tab = ["timeline", "records"].includes(params.tab) ? params.tab : "years";
-  if (tab !== "records") {
+  const tab = ["timeline", "records", "gear"].includes(params.tab) ? params.tab : "years";
+  const filtered = tab === "years" || tab === "timeline"; // the two tabs sharing their filters
+  if (filtered) {
     // entering without a period: the one last used on Compare years / Timeline, else the default
     if (!timeActive(params)) params = { ...params, ...(TAB.statFilter || { ...statDefaultTime(), types: params.types || "" }) };
     const pick = (keys) => Object.fromEntries(keys.filter((k) => params[k]).map((k) => [k, params[k]]));
     TAB.statFilter = { ...pick(TIME_KEYS), types: params.types || "" };
   }
   const sw = switchHtml("stab", [["years", `${ICON_YEARS}<span>Compare years</span>`], ["timeline", `${ICON_TIMELINE}<span>Timeline</span>`],
-    ["records", `${ICON_RECORDS}<span>Records</span>`]], tab);
+    ["records", `${ICON_RECORDS}<span>Records</span>`], ["gear", `${ICON_GEAR}<span>Gear</span>`]], tab);
   if (tab === "records") await renderRecords(params, sw);
+  else if (tab === "gear") await renderGear(params, sw);
   else if (tab === "timeline") await renderTimeline(params, sw);
   else await renderStatCharts(params, sw, tab);
-  // Compare years and Timeline share their filters (TAB.statFilter); Records opens on all time
+  // on a phone the switch scrolls sideways: the open tab stays in sight
+  const open = view.querySelector(".page-head .switch .on");
+  if (open) open.parentElement.scrollLeft = open.offsetLeft + open.offsetWidth - open.parentElement.offsetLeft - open.parentElement.clientWidth;
+  // Compare years and Timeline share their filters (TAB.statFilter); Records and Gear open on
+  // all time
   view.querySelectorAll("[data-switch=stab]").forEach((b) => b.onclick = () => {
-    const keep = b.dataset.value === "records" ? {} : Object.fromEntries(Object.entries(TAB.statFilter || {}).filter(([, v]) => v));
+    const keep = ["records", "gear"].includes(b.dataset.value) ? {} : Object.fromEntries(Object.entries(TAB.statFilter || {}).filter(([, v]) => v));
     location.hash = "#/stats?" + new URLSearchParams({ ...keep, tab: b.dataset.value });
   });
 }

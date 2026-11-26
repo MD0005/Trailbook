@@ -45,6 +45,7 @@ from . import (
     fitfile,
     fixes,
     garmin,
+    gear,
     hacards,
     homeassistant,
     icu,
@@ -304,6 +305,14 @@ def _workout_filter(q) -> tuple[list[str], list]:
     if "none" in chosen:
         parts.append(f"{_WORKOUT} IS NULL")
     return ["(" + " OR ".join(parts) + ")"], keys
+
+
+def _device_filter(c: sqlite3.Connection, q, person_id: str) -> tuple[dict, list[str], list]:
+    """Activities of one device (`device`: its key on Statistics › Gear): the device
+    ({name, serial}, {} when unknown) and the SQL condition; excluded activities are left out,
+    as in the counts there."""
+    device, ids = gear.activity_ids(c, person_id, q["device"])
+    return device, ["id IN (SELECT value FROM json_each(?))"], [json.dumps(ids)]
 
 
 # New tiles: earlier routes are looked at when they reach this close to the activity's box
@@ -935,18 +944,24 @@ def create_app(db_path: str | Path) -> Starlette:
         if q.get("q"):
             where.append("name LIKE ?")
             params.append(f"%{q['q']}%")
-        # Training type counts under the other filters (the Training type badge lists them).
-        base = f"WHERE {' AND '.join(where)}" if where else ""
-        base_params = list(params)
         wk = _WORKOUT
         w_where, w_params = _workout_filter(q)
-        where += w_where
-        params = [*params, *w_params]
-        clause = f"WHERE {' AND '.join(where)}" if where else ""
         limit = _int(request, "limit", 50, 1, 1000)
         offset = _int(request, "offset", 0, 0, 10**9)
         order = _order(q, ACTIVITY_SORTS, "date", "id")
         with closing(conn()) as c:
+            # one device of one person (a click on it on Statistics › Gear)
+            device = None
+            if q.get("device"):
+                device, d_where, d_params = _device_filter(c, q, _single_person(c, request))
+                where += d_where
+                params += d_params
+            # Training type counts under the other filters (the Training type badge lists them).
+            base = f"WHERE {' AND '.join(where)}" if where else ""
+            base_params = list(params)
+            where += w_where
+            params = [*params, *w_params]
+            clause = f"WHERE {' AND '.join(where)}" if where else ""
             totals = c.execute(
                 f"""SELECT COUNT(*) count, SUM(distance_m) distance_m, SUM(time_s) time_s,
                            SUM(ascent_m) ascent_m, SUM(calories) calories,
@@ -988,6 +1003,7 @@ def create_app(db_path: str | Path) -> Starlette:
                     "totals": dict(totals),
                     "items": items,
                     "workout_counts": workout_counts,
+                    "device": device,
                 }
             )
 
@@ -1066,6 +1082,9 @@ def create_app(db_path: str | Path) -> Starlette:
             nw, npar = activity_filters(q, "", person=every)
             if not every:
                 nw, npar = [*nw, "person_id = ?"], [*npar, row["person_id"]]
+                if q.get("device"):
+                    _, d_where, d_params = _device_filter(c, q, row["person_id"])
+                    nw, npar = [*nw, *d_where], [*npar, *d_params]
             w_where, w_params = _workout_filter(q)
             nf = " ".join(f"AND {w}" for w in [*nw, *w_where])
             key = (row["start_time_utc"], row["start_time_utc"], aid)
@@ -1967,6 +1986,20 @@ def create_app(db_path: str | Path) -> Starlette:
                        "avg_speed", "group", "type", "indoor", "gps", "country", "weather"],
             "items": items, "countries": countries.names(), "steps": steps,
         })  # fmt: skip
+
+    # Statistics › Gear: every device of the person with its use, over the whole history or in
+    # the Time filter
+    async def stats_gear(request: Request):
+        q = request.query_params
+        time_q = {k: q[k] for k in ("from", "to", "last", "years", "year") if q.get(k)}
+        with closing(conn()) as c:
+            pid = _single_person(c, request)
+            where, params = activity_filters(time_q, "", person=False)
+            data = gear.summary(c, pid, where, params)
+        for d in data["devices"]:
+            images = (_device_image(p) for p in d.pop("products"))
+            d["image"] = next((url for url in images if url), None)
+        return JSONResponse(data)
 
     # Statistics › Records: per sport (run, ride) and best effort (kind, key, v) the 3 best of
     # all time and, with a Time filter, the best in that time. Rides: outdoor and indoor (v = 1)
@@ -2998,6 +3031,7 @@ def create_app(db_path: str | Path) -> Starlette:
         Route("/api/stats/activities", stats_activities),
         Route("/api/suggest", suggest_next),
         Route("/api/stats/records", stats_records),
+        Route("/api/stats/gear", stats_gear),
         Route("/api/ha/records", ha_records),
         Route("/api/ha/setup", ha_setup),
         Route("/api/ha/cards", ha_cards_list),

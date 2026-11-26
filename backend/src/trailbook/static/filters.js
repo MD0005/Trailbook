@@ -369,7 +369,7 @@ function bindFilterBadges(root, route, params, { drop = [], allTime = null } = {
 // Query parameters for the API from the page parameters.
 function filterQuery(params) {
   const q = {};
-  for (const k of ["from", "to", "last", "years", "types", "workouts"]) if (params[k]) q[k] = params[k];
+  for (const k of ["from", "to", "last", "years", "types", "workouts", "device"]) if (params[k]) q[k] = params[k];
   if (q.last === "all") delete q.last; // All time on a page with a default period
   if (!q.types && params.type) q.types = params.type; // older links
   return q;

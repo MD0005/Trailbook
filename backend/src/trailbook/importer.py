@@ -23,7 +23,8 @@ TRACK_TOLERANCE_M = 5.0
 # Bump when the tile computation changes; activities are then re-tiled from stored streams.
 TILES_VERSION = 2  # 2: tiles whose corner the line cuts count too
 WATCH_VERSION = 1  # watch thresholds read from the FIT file, see backfill_watch
-METRICS_VERSION = 1  # Garmin's values read from the FIT file, see backfill_metrics
+# values read from the FIT file again, see backfill_metrics; 2: battery of the devices
+METRICS_VERSION = 2
 
 STATUSES = ("new", "imported", "skipped", "duplicate", "error", "missing", "removed")
 
@@ -357,8 +358,9 @@ def backfill_metrics(
     conn: sqlite3.Connection, root: Path | None, uploads_dir: Path | None = None, progress=None
 ) -> int:
     """Garmin's own values of each activity from its FIT file (training effect, training load,
-    recovery time; fitfile.garmin_metrics), once per activity: new ones after their import,
-    older ones the first time. Nothing else of the activity changes."""
+    recovery time; fitfile.garmin_metrics) and its devices with their batteries, once per
+    activity and METRICS_VERSION: new ones after their import, older ones the first time. What
+    a file no longer gives (missing, unreadable) stays as it was; nothing else changes."""
     rows = conn.execute(
         """SELECT a.id, f.rel_path, f.zip_member FROM activities a
            LEFT JOIN files f ON f.id = (SELECT MIN(id) FROM files
@@ -367,17 +369,18 @@ def backfill_metrics(
         (METRICS_VERSION,),
     ).fetchall()
     for i, r in enumerate(rows, start=1):
-        values: dict = {}
+        values, devices = {}, None
         if r["rel_path"] and not strava.is_manual(r["zip_member"] or ""):
             try:
                 data = read_file_bytes(root, r["rel_path"], r["zip_member"] or "", uploads_dir)
                 if trackfile.kind(data) == "fit":
-                    values = fitfile.parse_garmin_metrics(data)
-            except Exception:  # missing file or a decoder error: no values
-                values = {}
+                    values, devices = fitfile.parse_extras(data)
+            except Exception:  # missing file or a decoder error: keep what there is
+                values, devices = {}, None
         conn.execute(
-            "UPDATE activities SET fit_metrics = ?, metrics_version = ? WHERE id = ?",
-            (json.dumps(values) if values else None, METRICS_VERSION, r["id"]),
+            """UPDATE activities SET fit_metrics = COALESCE(?, fit_metrics),
+                      devices = COALESCE(?, devices), metrics_version = ? WHERE id = ?""",
+            (json.dumps(values) if values else None, devices, METRICS_VERSION, r["id"]),
         )
         if progress:
             progress(i, len(rows))

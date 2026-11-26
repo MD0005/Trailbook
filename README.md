@@ -92,6 +92,8 @@ export, FIT/GPX/TCX files) are there to bring in older history or a second devic
 - **Timeline**: when, where and in what weather you train, and your explorer tiles growing.
 - **Records**: your best efforts and their curves for running, cycling, walking and hiking,
   and segments, of all time or in any period.
+- **Gear**: how much each watch, bike computer, sensor and your scale has been used, and
+  since when.
 
 <table><tr><td align="center" valign="top"><a href="docs/screenshots/statistics.png"><img src="docs/screenshots/statistics.png" alt="Statistics › Compare years" width="260"></a><br><sub><em>Statistics › Compare years</em></sub></td><td align="center" valign="top"><a href="docs/screenshots/timeline.png"><img src="docs/screenshots/timeline.png" alt="Statistics › Timeline" width="260"></a><br><sub><em>Statistics › Timeline</em></sub></td><td align="center" valign="top"><a href="docs/screenshots/records.png"><img src="docs/screenshots/records.png" alt="Statistics › Records" width="260"></a><br><sub><em>Statistics › Records</em></sub></td></tr></table>
 

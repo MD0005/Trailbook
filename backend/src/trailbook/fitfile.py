@@ -559,12 +559,14 @@ def garmin_metrics(messages: dict) -> dict[str, float]:
     return {k: round(float(v), 1) for k, v in out.items() if isinstance(v, int | float)}
 
 
-def parse_garmin_metrics(data: bytes) -> dict[str, float]:
+def parse_extras(data: bytes) -> tuple[dict[str, float], str | None]:
+    """Garmin's values and the devices (JSON) of an activity file: what is read again for
+    activities imported before (importer.backfill_metrics)."""
     messages, _errors = Decoder(Stream.from_byte_array(bytearray(data))).read(
         apply_scale_and_offset=True, convert_types_to_strings=True, expand_components=False,
         merge_heart_rates=False,
     )  # fmt: skip
-    return garmin_metrics(messages)
+    return garmin_metrics(messages), devices_json(messages)
 
 
 # ---- daily monitoring (steps, floors, stress) ---------------------------------------------
@@ -762,18 +764,25 @@ def _app_sensor(maker: str, product_name: str, dtype) -> tuple[str, str | None]:
     return kind, model
 
 
+def _percent(value) -> int | None:
+    return round(value) if isinstance(value, int | float) and 0 <= value <= 100 else None
+
+
 def devices(messages: dict) -> list[dict]:
     """Devices that recorded the activity: the watch / bike computer and connected sensors.
 
     From `device_info`: the creator plus external sensors (ANT+ / Bluetooth); built-in
     sensors (barometer, GPS, wrist heart rate) are left out. One entry per physical device
-    (same maker, product and serial) with {kind, maker, product, name, serial, battery}.
+    (same maker, product and serial) with {kind, maker, product, name, serial, battery
+    (the last status), level (battery %, only where the file tells: the recording device and a
+    watch sending its heart rate)}.
     """
     file_id = (messages.get("file_id_mesgs") or [{}])[0]
     infos = messages.get("device_info_mesgs") or []
     # Training apps list their sensors without a source type, named "<maker> - Ant - <id>".
     app = is_virtual_app(file_id, infos)
     out: dict[tuple, dict] = {}
+    recorder = None  # the key of the watch or bike computer that wrote the file
     for d in infos:
         idx, src = d.get("device_index"), str(d.get("source_type") or "")
         creator = str(idx) == "creator" or idx == 0
@@ -798,6 +807,8 @@ def devices(messages: dict) -> list[dict]:
             kind = _DEVICE_KIND.get(dtype, "sensor")
         serial = d.get("serial_number")
         key = (str(maker), str(product), serial if serial else kind)
+        if creator:
+            recorder = key
         e = out.get(key)
         if e is None:
             name = (
@@ -818,7 +829,7 @@ def devices(messages: dict) -> list[dict]:
             e = out[key] = {
                 "kind": kind, "maker": _MAKER.get(str(maker), str(maker or "").title() or None),
                 "product": str(product) if product is not None else None, "name": name,
-                "serial": serial, "battery": None,
+                "serial": serial, "battery": None, "level": None,
             }  # fmt: skip
         elif _KIND_ORDER.index(kind) < _KIND_ORDER.index(e["kind"]):
             e["kind"] = kind  # e.g. a radar with a light: the radar
@@ -826,6 +837,13 @@ def devices(messages: dict) -> list[dict]:
                 e["name"] = {"radar": "Varia radar"}.get(kind, e["name"])
         if d.get("battery_status") is not None:
             e["battery"] = str(d["battery_status"])
+        if _percent(d.get("battery_level")) is not None:
+            e["level"] = _percent(d["battery_level"])
+    # the recording device logs its own battery as it goes: the last value is at the end
+    own = [_percent(m.get("capacity")) for m in messages.get("battery_mesgs") or []]
+    own = [v for v in own if v is not None]
+    if own and recorder in out:
+        out[recorder]["level"] = own[-1]
     return sorted(out.values(), key=lambda e: _KIND_ORDER.index(e["kind"]))
 
 

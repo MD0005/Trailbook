@@ -452,6 +452,44 @@ takes longer.
   unbroken vertical / horizontal line of visited tiles; Most visited = the visits of the most
   visited tile; One activity = the most tiles one activity visited.
 
+## Statistics › Gear
+
+- **Source**: the devices each activity's FIT file names (`device_info`): the watch or bike
+  computer or app that recorded it and the connected sensors; built-in sensors are not listed.
+  Activities left out of the statistics are not counted; activities without device information
+  (GPX, TCX, Strava files) are only counted under the table.
+- **One device = one serial number**, whatever the files call it (a training app lists sensors
+  under its own maker, sometimes as another kind or without a model). Shown as the most common
+  entry that names a model, else the most common entry. Two devices of one model with two serial
+  numbers stay two.
+- **Entries without a serial number** (some files leave it out) join the only device with one
+  that fits, tried in this order: the same product; a name that begins with the entry's name
+  ("Forerunner" → Forerunner 965); for an entry that names no model, the same kind (not for
+  unknown sensors). Several candidates, or none: a device of its own, "no serial".
+- A device listed twice in one activity (a watch recording and sending its heart rate) counts
+  once.
+- **Activities, distance, time, elevation gain**: sums over the activities with the device in
+  the Time filter; time is the activity's time as on Compare years. An activity counts in full
+  for every device in it, so the sums of the devices add up to more than the activities, and a
+  sensor connected for only a part of an activity gets all of it. Which entries are one device
+  and its colour always come from the whole history.
+- **Scale**: weigh-ins from the scale's FIT files (with its serial number) and from Garmin
+  Connect (those marked as from an Index scale; entered by hand ones are not counted); one per
+  minute. Connect names no serial number: its weigh-ins belong to the only scale of the files,
+  else to an "Index scale" of their own. The Time filter takes the weigh-ins of its days (UTC).
+- **Rings**: time of the device / time of the most used device that has a card (retired devices
+  have none).
+- **First and last used**: the local days of its first and last activity in the Time filter.
+- **In use**: a stretch of use runs from an activity to the next as long as fewer than 30 days
+  without the device lie between them; 30 days or more start a new stretch.
+- **Battery**: from the last activity (whole history) whose file says something. The watch or
+  bike computer that recorded it logs its own level; the value is the last one, at the end of
+  the activity. A watch sending its heart rate to a bike computer gives a level too. Other
+  sensors send no percentage, only a status — new, good, ok, low, critical — drawn as the
+  icon's filling (100, 80, 60, 25 and 8 %) without a number. Red: critical or 10 % and less;
+  warning colour: low or 25 % and less. Apps and trainers usually say nothing: no icon.
+  Activities imported before this was read are read again once, in the next import run.
+
 ## Next workout (Calendar › Next workout)
 
 - **Window**: the last 7 days (today included) and the workouts planned for the next 3 days

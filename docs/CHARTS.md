@@ -226,6 +226,19 @@ The activity charts of both people, one column each (SPEC §10a), coupled on one
   (pace only on foot). They fill the height of
   the table tile beside them.
 
+- Gear: **In use** is a chart of spans (plain HTML, not uPlot): a row per device, its picture
+  as the y label (the end of the serial number under it when two share a name), the first used
+  on top; the plot framed, dashed lines between the rows; a thick rounded bar (20 px, at least
+  4 px wide) over each stretch of use (first and last day whole), a break of 30 days or more
+  left empty, in the device's colour — the same as its ring and table dot, given by the order
+  of first use over the whole history. Retired devices: the rows below the others, bar and
+  picture strongly faded (25 %). X axis: the days of the Time filter (All time: from the
+  first activity to today), the date steps and labels of the Fitness page, no axis title.
+  The scale's bars are the days weighed. Hovering a row lights the device's card and table row, and the other way round.
+  Hovering the plot: a vertical line with the exact date in a flag on the x axis; hovering a
+  bar: its dates, then the device, its serial number, first and last date, activities, time and
+  distance (the same without the stretch on a picture).
+
 ## Fitness page
 
 One chart group over the days of the Time filter. **Date axis**: even steps chosen by what

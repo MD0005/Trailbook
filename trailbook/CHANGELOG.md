@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.27
+
+### Added
+- Statistics › Gear: your watches, bike computers, apps and sensors with the time and battery
+  of each, when each was in use and a table with activities, distance, time and activity types.
+- Statistics › Gear: mark a device as retired; click a device to see its activities.
+- Statistics › Gear: your scale with its weigh-ins; Options shows or hides retired devices.
+
+### Fixed
+- Home Assistant cards: no empty strip on the right kept for a scroll bar.
+
 ## 0.1.26
 
 ### Added
