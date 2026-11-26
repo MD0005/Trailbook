@@ -1172,7 +1172,7 @@ workouts* on. Code: `planner.py` (workouts, estimates, text), `icu.py` (key, syn
 - **Shipping a change:** commit to `main` with a bumped `version` in `trailbook/config.yaml`.
   GitHub Actions (`.github/workflows/addon.yml`) runs lint + tests on every push and builds both
   images only when that version is not on GHCR yet. When the run is green: HA › Settings ›
-  Add-ons › Add-on store › ⋮ › Check for updates → Update. Commits without a bump are not
+  Apps › Install app › ⋮ › Check for updates → Update. Commits without a bump are not
   shipped.
 - Database changes ship by themselves: migrations (`db.MIGRATIONS`) run on start. They only go
   forward — an older version refuses a newer database — so a rollback is an HA backup of the

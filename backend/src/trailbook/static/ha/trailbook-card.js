@@ -48,7 +48,7 @@ function findAddon(hass) {
   addonPromise ??= (async () => {
     const list = await hass.callWS({ type: "supervisor/api", endpoint: "/addons", method: "get" });
     const addon = (list.addons || []).find((a) => a.slug === "trailbook" || a.slug.endsWith("_trailbook"));
-    if (!addon) throw new Error("The Trailbook add-on is not installed.");
+    if (!addon) throw new Error("The Trailbook app is not installed.");
     const info = await hass.callWS({ type: "supervisor/api", endpoint: `/addons/${addon.slug}/info`, method: "get" });
     if (!info.ingress_url) throw new Error("Trailbook is not running.");
     return info.ingress_url.endsWith("/") ? info.ingress_url : info.ingress_url + "/";

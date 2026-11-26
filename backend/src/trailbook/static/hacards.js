@@ -124,7 +124,7 @@ function bindCopy(root) {
 async function haAutomationTab(el) {
   const [setup, last] = await Promise.all([api("ha/setup"), api("ha/records").catch(() => null)]);
   el.innerHTML = `<div class="card">
-      <h3>Record notification <span class="title-note">(sensor.trailbook_records, after each import${setup.addon ? "" : "; only in the Home Assistant add-on"})</span></h3>
+      <h3>Record notification <span class="title-note">(sensor.trailbook_records, after each import${setup.addon ? "" : "; only in the Home Assistant app"})</span></h3>
       <ol class="plain steps">
         <li>Home Assistant › Settings › Automations &amp; scenes › Create automation › Create new automation.</li>
         <li>⋮ › Edit in YAML, paste the text below, Save: a notification for every new record.</li>
@@ -192,7 +192,7 @@ function haSetupHtml() {
   const { addon, install, url } = HA.setup;
   if (!addon) return "";
   const steps = [];
-  if (!install || install.file === "no_access") steps.push("Update the Trailbook add-on, then restart it: it needs access to Home Assistant's config folder.");
+  if (!install || install.file === "no_access") steps.push("Update the Trailbook app in Home Assistant, then restart it: it needs access to Home Assistant's config folder.");
   else {
     if (install.www_created) steps.push("Restart Home Assistant once: it serves the new <code>www</code> folder only after a restart.");
     if (install.resource === "failed" || install.resource == null) {

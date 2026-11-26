@@ -1,5 +1,5 @@
 # Bump `version` to ship a change to Home Assistant: CI builds the images for a new version,
-# then HA shows the update (Settings › Add-ons › Trailbook).
+# then HA shows the update (Settings › Apps › Trailbook).
 name: Trailbook
 version: "0.1.25"
 slug: trailbook

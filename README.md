@@ -1,7 +1,7 @@
 # Trailbook — extended sports and fitness statistics for Garmin
 
-**Your Garmin training log, at home.** Trailbook is a Home Assistant add-on built around
-Garmin Connect: connect your account once and every activity you have ever recorded — and
+**Your Garmin training log, at home.** Trailbook is a Home Assistant app (formerly add-on)
+built around Garmin Connect: connect your account once and every activity you have ever recorded — and
 every new one — lands in Home Assistant as maps, charts and statistics. Everything runs on
 your own Home Assistant box, even a small one like the Home Assistant Yellow, and your data
 never leaves it.
@@ -22,7 +22,7 @@ export, FIT/GPX/TCX files) are there to bring in older history or a second devic
 
 - [Features](#features)
 - [Installation](#installation)
-  - [Home Assistant add-on](#home-assistant-add-on)
+  - [Home Assistant app](#home-assistant-app)
   - [Windows app](#windows-app)
   - [Docker](#docker)
 - [First steps](#first-steps)
@@ -109,22 +109,26 @@ export, FIT/GPX/TCX files) are there to bring in older history or a second devic
 
 Trailbook runs in three ways; the app is the same in all of them.
 
-- [Home Assistant add-on](#home-assistant-add-on) (recommended) — Home Assistant OS or
+- [Home Assistant app](#home-assistant-app) (recommended) — Home Assistant OS or
   Supervised.
 - [Windows app](#windows-app) — one Windows PC, without Docker or Home Assistant.
 - [Docker](#docker) — any other machine, also Home Assistant Container or Core (they have no
-  add-ons).
+  apps).
 
-### Home Assistant add-on
+### Home Assistant app
 
 [![Add repository to my Home Assistant](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2FMD0005%2FTrailbook)
 
-1. Click the button above, or in Home Assistant open **Settings › Add-ons › Add-on store**,
-   click **⋮ › Repositories**, paste `https://github.com/MD0005/Trailbook` and click **Add**.
-2. Find **Trailbook** in the store and click **Install**.
+Home Assistant calls add-ons **apps** since version 2026.2; in an older version look for
+*Add-ons* and *Add-on store* instead.
+
+1. Click the button above, or in Home Assistant open **Settings › Apps › Install app**,
+   click **⋮ › Repositories**, click **Add**, paste `https://github.com/MD0005/Trailbook` and
+   confirm with **Add**. If Trailbook does not show up, refresh the page.
+2. Find **Trailbook** in the list and click **Install**.
 3. Click **Start**, then **Open web UI** (or turn on *Show in sidebar*).
 
-- **Data:** inside the add-on; it is part of Home Assistant backups.
+- **Data:** inside the app; it is part of Home Assistant backups.
 - **Updates:** Home Assistant offers them (see [Updating](#updating)).
 - **Access:** through Home Assistant, with its login.
 
@@ -163,7 +167,7 @@ The same image runs on any machine with Docker (amd64 or arm64, e.g. a Raspberry
 - **Access:** a login with that password (log out at `/logout`). The compose file does not
   start without it; a plain `docker run` without a password has no login at all, so use that
   only if nobody else can reach the port.
-- Home Assistant notifications and the records sensor are only in the add-on.
+- Home Assistant notifications and the records sensor are only in the Home Assistant app.
 
 ## First steps
 
@@ -174,12 +178,12 @@ The same image runs on any machine with Docker (amd64 or arm64, e.g. a Raspberry
 4. **Settings › People** — check the heart rate and power thresholds; training load and
    zones depend on them.
 
-The watched folder must be inside a folder the add-on can see: `/share` (for example
-`/share/trailbook`), `/media` (read only) or the add-on's own config folder.
+In Home Assistant the watched folder must be inside a folder the app can see: `/share` (for example
+`/share/trailbook`), `/media` (read only) or the app's own config folder.
 
 ## Records in Home Assistant
 
-When a new activity sets a record, the add-on tells Home Assistant through one sensor,
+When a new activity sets a record, Trailbook tells Home Assistant through one sensor,
 `sensor.trailbook_records`. A record is a top-3 place of all time or of this year: the best
 efforts of runs and rides (fastest 5 km, best 20 min power…), the longest distance and your
 segments. Only activities from the last 14 days count, so importing old history never fires.
@@ -217,7 +221,7 @@ max: 30
 
 ## Updating
 
-Home Assistant shows when a new version is out (**Settings › Add-ons › Trailbook**); the
+Home Assistant shows when a new version is out (**Settings › Apps › Trailbook**); the
 update dialog lists what changed ([changelog](trailbook/CHANGELOG.md)).
 The database is upgraded on start. An older version cannot open a database a newer one has
 upgraded, so tick *Create backup* in the update dialog if you may want to go back.
