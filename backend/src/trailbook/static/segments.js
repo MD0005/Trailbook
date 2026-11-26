@@ -36,10 +36,9 @@ function worldPx(lat, lon, z) {
   return [((lon + 180) / 360) * s, ((1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2) * s];
 }
 
-// `dashed`: a segment (not an activity) is drawn dashed; `twoWay`: both ends yellow.
-function staticMap(polyline, { W = 560, H = 230, cls = "seg-map", tiles: tileCls = "seg-tiles", dashed = false, twoWay = false } = {}) {
-  const pts = decodePolyline(polyline);
-  if (pts.length < 2) return "";
+// The background of a static map showing the points [lat, lon]: `svg` (base map, relief,
+// trails) and `at([lat, lon])` = where a point is on it.
+function staticBase(pts, { W, H, tiles: tileCls }) {
   const { source, relief, trails } = loadMapSettings().map;
   const trail = trails && trails !== "none" ? trails : null;
   const src = baseSource(source);
@@ -67,15 +66,27 @@ function staticMap(polyline, { W = 560, H = 230, cls = "seg-map", tiles: tileCls
       }
     }
   }
-  const d = px.map(([x, y], i) => `${i ? "L" : "M"}${(x - x0).toFixed(1)},${(y - y0).toFixed(1)}`).join("");
-  const [sx, sy] = px[0], [ex, ey] = px[px.length - 1];
   if (shade) setTimeout(fillRelief, 0); // once the caller has put the map on the page
+  return {
+    svg: `<g class="${tileCls}">${tiles}</g>${shade ? `<g class="relief-tiles">${shade}</g>` : ""}${marked ? `<g class="trail-tiles">${marked}</g>` : ""}`,
+    at: ([lat, lon]) => { const [x, y] = worldPx(lat, lon, z); return [x - x0, y - y0]; },
+  };
+}
+
+// `dashed`: a segment (not an activity) is drawn dashed; `twoWay`: both ends yellow.
+function staticMap(polyline, { W = 560, H = 230, cls = "seg-map", tiles = "seg-tiles", dashed = false, twoWay = false } = {}) {
+  const pts = decodePolyline(polyline);
+  if (pts.length < 2) return "";
+  const base = staticBase(pts, { W, H, tiles });
+  const px = pts.map(base.at);
+  const d = px.map(([x, y], i) => `${i ? "L" : "M"}${x.toFixed(1)},${y.toFixed(1)}`).join("");
+  const [sx, sy] = px[0], [ex, ey] = px[px.length - 1];
   return `<svg class="${cls}" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
-    <g class="${tileCls}">${tiles}</g>${shade ? `<g class="relief-tiles">${shade}</g>` : ""}${marked ? `<g class="trail-tiles">${marked}</g>` : ""}
+    ${base.svg}
     <path d="${d}" fill="none" style="stroke:var(--map-halo)" stroke-width="7" stroke-linejoin="round" stroke-linecap="round" opacity=".8"/>
     <path d="${d}" fill="none" stroke="var(--accent)" stroke-width="4" stroke-linejoin="round" stroke-linecap="${dashed ? "butt" : "round"}"${dashed ? ` stroke-dasharray="5 2"` : ""}/>
-    <circle cx="${sx - x0}" cy="${sy - y0}" r="5" fill="${twoWay ? SEG_TWO_WAY_END : "#3ecf8e"}" style="stroke:var(--map-halo)" stroke-width="2"/>
-    <circle cx="${ex - x0}" cy="${ey - y0}" r="5" fill="${twoWay ? SEG_TWO_WAY_END : "#ff6b6b"}" style="stroke:var(--map-halo)" stroke-width="2"/></svg>`;
+    <circle cx="${sx}" cy="${sy}" r="5" fill="${twoWay ? SEG_TWO_WAY_END : "#3ecf8e"}" style="stroke:var(--map-halo)" stroke-width="2"/>
+    <circle cx="${ex}" cy="${ey}" r="5" fill="${twoWay ? SEG_TWO_WAY_END : "#ff6b6b"}" style="stroke:var(--map-halo)" stroke-width="2"/></svg>`;
 }
 
 // ---- list ---------------------------------------------------------------------------------

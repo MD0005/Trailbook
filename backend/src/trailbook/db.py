@@ -703,6 +703,19 @@ MIGRATIONS: list[str] = [
     ALTER TABLE garmin_accounts ADD COLUMN weights_from TEXT;
     ALTER TABLE garmin_accounts ADD COLUMN weights_to TEXT;
     """,
+    # v48 — activities two people did together (together.py), cached per pair and radius:
+    # `signature` names the versions of both recordings, `result` is JSON (NULL: never together).
+    """
+    CREATE TABLE together_cache (
+        a_id        INTEGER NOT NULL REFERENCES activities(id) ON DELETE CASCADE,
+        b_id        INTEGER NOT NULL REFERENCES activities(id) ON DELETE CASCADE,
+        radius_m    INTEGER NOT NULL,
+        signature   TEXT NOT NULL,
+        result      TEXT,
+        PRIMARY KEY (a_id, b_id, radius_m)
+    ) WITHOUT ROWID;
+    CREATE INDEX together_cache_b ON together_cache(b_id);
+    """,
 ]
 
 SCHEMA_VERSION = len(MIGRATIONS)

@@ -386,6 +386,50 @@ neighbour closer in heart rate, until none is shorter.
 - The card shows only when there is a new tile; the Size badge lists only sizes with new
   tiles, the largest first.
 
+## Together (two people)
+
+Code: `together.py`. Activities (*Activities together*) and the shared activity page, with
+two people selected.
+
+**Which activities are compared.** One of each person, both with a route, whose recordings
+overlap in time (give or take 5 minutes) and whose route boxes come within about 200 m. A watch
+clock is set by GPS, so the times of two watches are compared as they are.
+
+**When two people are together.**
+
+1. Each route is sampled every 20 m, with the clock time of every point. A jump of more than
+   500 m between two samples (lost signal, a lift) is no route.
+2. A point of one route is *together* when the other person was within the **accuracy** of it
+   (Options, 50 m), at most **5 minutes** earlier or later, going the same way (the directions
+   over about ±40 m less than 90° apart). People passing each other are therefore not together,
+   and neither are two who use one road at different times of the day.
+3. A gap shorter than 100 m inside a stretch together is filled; a stretch shorter than 100 m
+   is dropped.
+
+**Shared route** = length of the stretches together ÷ length of the route, both measured on the
+shorter of the two routes. The two activities are a shared activity when it is at least the
+**Shared route** option (10 %). A 5 km run inside a 40 km ride is 100 % of the shorter route.
+
+**Values.**
+
+- *Distance together* and *Time together*: on the shorter route; the time is the sum of each
+  stretch's duration (stops inside it count).
+- *Meeting*: the first moment both are on a stretch together (the later of the two arrival
+  times). It is 0 on the charts.
+- *Summary*: sums over the shared activities in the list; the shared route is their average.
+  The item of a person adds up their whole activities (together and apart), each once, with the
+  average heart rate weighted by time.
+- *Filters*: a shared activity passes when one of its two activities passes.
+
+**On the map** the second person's line follows the first one's where they are together and is
+drawn beside it, so both stay visible (within the accuracy, it is not exactly where they were).
+
+**Limits.** No GPS, no shared activity (treadmill, gym). A recording stopped and started again
+gives two shared activities with the same activity of the other person. Virtual routes of the
+same app world ridden at the same time count. Results are cached in the database and worked out
+again when a recording changes; the first visit after many new activities or a new accuracy
+takes longer.
+
 ## Statistics › Timeline
 
 - **Time of day**: an activity counts once in every hour it spans (start to start + elapsed
@@ -504,6 +548,10 @@ the days that have them; stress as the average of the days' averages.
   (no Goal met, Streak, red). Weeks and months: the average day of the days with data.
 - **Goal met**: share of the days (weeks, months) at the goal or above. **Streak**: the longest run
   of days in a row at the goal.
+- **Best day / Worst day** (steps, floors, active calories): the days of the period grouped by
+  weekday; the weekday with the highest and with the lowest average (days with data only).
+  Hovering marks those days; a chart by week or month shows that weekday alone in each (its
+  average).
 - **Weeks** as in Statistics: they start on Monday, the days before the first Monday of a year
   belong to week 1. A column stands at the middle of its week or month.
 - **Intensity minutes**: moderate + 2 × vigorous, as Garmin counts them; a week or month shows the
@@ -521,17 +569,20 @@ the days that have them; stress as the average of the days' averages.
 - **Silhouette**: the last weigh-in with a full composition (any time), the layers stacked from
   the feet up in their share of the height.
 - **Weeks / Months**: each value is the average of the weigh-ins of that week or month that have
-  it. **Moving average** of the weight: the mean of the weigh-ins (or periods) of the last 90 days
-  up to each point.
+  it.
+- **Trend** of the weight: at each weigh-in (or period) a straight line is fitted to the weigh-ins
+  around it, weighted by their distance in time (Gaussian, width *h* = the shown span ÷ 16, at
+  least 10 days; further than 4 *h* left out), and its value on that day is the trend. A longer
+  period so gives a smoother line, and its end does not lag behind. Where the weigh-ins around
+  bunch together the slope is held back (ridge (h ÷ 4)²). The change over the period: the trend
+  at its last weigh-in minus at its first.
 - **Training load** (Additional series): the daily load of Fitness as a 30-day moving average (the
   mean of the 30 days up to each day; a week or month: up to its last day).
 - **BMI**: the scale's value of each weigh-in; the tile shows the last one of the period, and its
   highest and lowest.
-- **Fitness age**: the age at which the person's VO2 max is the average for their sex (Settings ›
-  People; male when not set), interpolated between the mean VO2 max of the HUNT fitness study by
-  age group (men 54,4 · 49,0 · 47,7 · 42,6 · 39,2 · 35,5 and women 43,0 · 40,0 · 38,4 · 34,4 · 31,1 ·
-  28,6 ml/kg/min at 25, 35 … 75 years), limited to 20–80. VO2 max: the watch's latest estimate
-  after a run (else a ride) on each day of the period.
+- **VO2 max**: the watch's estimate after a run and after a ride (each sport its own, from the
+  activity's file), standing until the next one; the tile shows the last one of the period per
+  sport, with the period's lowest and highest.
 - **Days** of the weigh-ins are UTC days (a scale file has no time zone).
 
 ## Time of an activity: timer and elapsed

@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.1.26
+
+### Added
+- Compare two people: Activities together shows what they did together as tiles (both routes
+  on one map) or a list, with a summary; Options sets the least shared route and the accuracy.
+- A shared activity opens in two columns, one per person, with one route map and coupled charts.
+- Wellbeing › Movement: best and worst day of the week for steps, floors and active calories.
+
+### Changed
+- The person picker has a Compare entry per pair instead of Everyone; with a pair only
+  Activities is shown for now.
+- Wellbeing › Movement: a set goal is always shown on the charts, as a faint dashed line.
+- Wellbeing › Body: the weight shows a trend line (smoother over longer periods) instead of the
+  moving average.
+- Home Assistant cards: the dark theme uses Home Assistant's neutral dark colours.
+- Wellbeing › Body: a VO2 max tile (running and cycling) in place of Fitness age.
+
+### Fixed
+- Home Assistant cards: no more occasional "401: Unauthorized".
+- Home Assistant cards: no scroll bar in a card or window lower than its content.
+- Wellbeing › Movement: the activity icons no longer run into each other over long periods.
+
 ## 0.1.25
 
 ### Added

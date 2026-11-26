@@ -96,7 +96,7 @@ export, FIT/GPX/TCX files) are there to bring in older history or a second devic
 <table><tr><td align="center" valign="top"><a href="docs/screenshots/statistics.png"><img src="docs/screenshots/statistics.png" alt="Statistics › Compare years" width="260"></a><br><sub><em>Statistics › Compare years</em></sub></td><td align="center" valign="top"><a href="docs/screenshots/timeline.png"><img src="docs/screenshots/timeline.png" alt="Statistics › Timeline" width="260"></a><br><sub><em>Statistics › Timeline</em></sub></td><td align="center" valign="top"><a href="docs/screenshots/records.png"><img src="docs/screenshots/records.png" alt="Statistics › Records" width="260"></a><br><sub><em>Statistics › Records</em></sub></td></tr></table>
 
 **And more**
-- Several people in one install, and a side-by-side comparison of everyone.
+- Several people in one install; pick two to see the activities they did together.
 - New records as Home Assistant notifications and a sensor for your dashboards.
 - A built-in manual that explains every number.
 - Garmin Connect as the main source: the whole history, then every new activity on its own.

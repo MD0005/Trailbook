@@ -153,6 +153,25 @@ performance condition, stamina and potential stamina. Streams without data are n
 - Hovering a chart shows that moment on the map (a dot on the route); hovering the route
   moves the charts' cursor there.
 
+## Shared activity (two people)
+
+The activity charts of both people, one column each (SPEC §10a), coupled on one clock
+(`chartGroup` option `pair`).
+
+- X-axis is always **Time from meeting (h:mm)**: clock time from the first moment together,
+  negative before it (`−0:12`), ticks at round minutes. Both columns span the same range, from
+  the earlier start to the later end, so one position is one moment on both sides.
+- Where that person was together with the other, the x axis of every plot is thicker (in the
+  axis colour).
+- What is done on one side happens on the other: the cursor (each side its own values), zoom by
+  dragging, pins, reset, and the stretch highlighted by hovering a stat or a row of the tiles
+  above (best effort, zone, surface) — the same stretch of time.
+- Where a person has no sample within 30 s (or three times the usual sample step) of the cursor
+  — not started yet, paused, finished — nothing is shown on their side.
+- The map shows both people's positions at that moment; hovering either route moves both
+  columns there.
+- Charts choice, order and smoothing are one for both sides and all pairs.
+
 ## Statistics page
 
 - The same charts (frame, axes, grid, crosshair, drag to zoom, pins, card resize and order) with
@@ -254,20 +273,25 @@ equally); hovering one marks its point. A pinned value shows every series of the
   numbered (days 1, 5 … 31 | W1, W5 … W53 | Jan … Dec) with its title; its plot takes the left and
   right edge of the column charts. Each row's average in the side column, left of the stats (the
   column one width for the page). Hovering a stat marks its dots and fades the others; Avg is a
-  value only.
+  value only. **Best day / Worst day** mark that weekday's dots; by week or month each dot shows
+  that weekday alone.
+- **Goal** (columns and lines, not dots): always drawn when set, a faint dashed line (`goal`),
+  a bit stronger while its stat is hovered or clicked; the y range includes it.
+- **Best day / Worst day** on columns by day mark those columns; by week or month (and on the
+  years' lines) the chart shows that weekday alone while hovered (`{ swap }`).
 - **Dots | Columns**: a switch of two icons at the right of the chart's header.
 - Columns (`bars`, from 0, `barSize` 0,88 of the gap): the hovered column in full colour with a rim
   (no dot); a stat whose mark is `{ ranges }` (Goal met) shows those columns that way and fades the
   rest. The flag under the x axis names the period (`xExact`: "Week 12 2026", "March 2026").
 - A click on a stat keeps its marking until it is clicked again (every chart, `pinned`).
-- Intensity minutes carry the activity icons under the x axis as Fitness does, but one per column (`marksPerX`: the type done most often that week or month, smaller, with the count); hovering one marks its column (the others fade), a click lists its activities.
+- Intensity minutes carry the activity icons under the x axis as Fitness does, but one per column (`marksPerX`: the type done most often that week or month, smaller, with the count); hovering one marks its column (the others fade), a click lists its activities. Icons never touch: columns under 22 px drop the count and the icon shrinks (to 10 px); under 14 px they are dots (columns under 9 px apart share one), and hovering a dot opens the list.
 - All charts of the tab are linked by period (a day → its week or month).
 
 ## Wellbeing › Body
 
-- **Weight**: the standard chart (date axis, a dot per weigh-in); the moving average (orange, dashed)
-  and the goal (grey, dashed) as lines; value pills on the right at their height (Weight, Moving
-  average, Goal), as on Fitness. 330 px high beside the silhouette card (about a sixth of the width, the
+- **Weight**: the standard chart (date axis, a dot per weigh-in); the trend (orange, solid; the longer
+  the period, the smoother) and the goal (grey, dashed) as lines; value pills on the right at their
+  height (Weight, Trend, Goal), as on Fitness. 330 px high beside the silhouette card (about a sixth of the width, the
   same height). **Additional series** badge in its header: a line on its own scale with a y axis on
   the right (`lines[].axis: "right"`, its title on the axis), lightly filled.
 - **Composition**: an SVG stacked area chart in the card style (framed plot, dashed grid, y axis
@@ -277,6 +301,8 @@ equally); hovering one marks its point. A pinned value shows every series of the
   all. The fat goal dashed while fat is shown. Hovering shows the values and moves the weight chart's
   cursor (and back). Its plot ends at the weight plot's right edge (also with the right axis).
   Its height changes with the grip on the card's bottom edge like every chart (120–640 px).
-- **Tiles** under the silhouette (BMI, Fitness age): together as high as the composition card;
-  the latest value large in a colour of its own, a word under it (BMI class; VO2 max), at the
-  bottom a bar from the period's lowest to its highest with the latest value as a ring.
+- **Tiles** under the silhouette (BMI, VO2 max): together as high as the composition card;
+  the latest value large in a colour of its own, a word under it (BMI class; the sport), at the
+  bottom a bar from the period's lowest to its highest with the latest value as a ring. VO2 max:
+  running and cycling side by side in the Fitness chart's colours (one under another when
+  narrow; only the sports that have a value).

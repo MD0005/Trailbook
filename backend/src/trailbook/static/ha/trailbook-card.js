@@ -12,37 +12,45 @@ const VALIDATE_MS = 60000;
 const PHONE_W = 420; // Activity detailed: laid out as on a phone
 const MAX_SCALE = 1.6;
 
+const RENEW_TRIES = 3; // a frame refused (401) is loaded again with a checked session
+
 // One session and one add-on lookup for every Trailbook card on the page.
-let sessionPromise = null;
+let session = null;
+let sessionCheck = null; // one check at a time
 let addonPromise = null;
-let validateTimer = null;
+let lastHass = null;
+const shown = new Set(); // the cards on the page
 
 function setCookie(session) {
   const secure = location.protocol === "https:" ? ";Secure" : "";
   document.cookie = `${SESSION_COOKIE}=${session};path=/api/hassio_ingress/;SameSite=Strict${secure}`;
 }
 
-async function newSession(hass) {
-  const res = await hass.callWS({ type: "supervisor/api", endpoint: "/ingress/session", method: "post" });
-  setCookie(res.session);
-  return res.session;
-}
-
+// Puts a session Home Assistant still takes in the cookie, before every load of a card: Home
+// Assistant drops a session not checked for 15 minutes (a sleeping tab or phone), and the
+// add-on's own panel or another add-on may have put theirs in the cookie since.
 function ensureSession(hass) {
-  if (!sessionPromise) {
-    sessionPromise = newSession(hass);
-    clearInterval(validateTimer);
-    validateTimer = setInterval(async () => {
+  sessionCheck ??= (async () => {
+    if (session) {
       try {
-        const session = await sessionPromise;
         await hass.callWS({ type: "supervisor/api", endpoint: "/ingress/validate_session", method: "post", data: { session } });
       } catch (e) {
-        sessionPromise = newSession(hass).catch(() => null);
+        session = null;
       }
-    }, VALIDATE_MS);
-  }
-  return sessionPromise;
+    }
+    session ??= (await hass.callWS({ type: "supervisor/api", endpoint: "/ingress/session", method: "post" })).session;
+    setCookie(session);
+  })().finally(() => { sessionCheck = null; });
+  return sessionCheck;
 }
+
+// While cards are on the page the session is kept alive, and checked as soon as the page shows
+// again after sleeping.
+function keepSession() {
+  if (shown.size && lastHass) ensureSession(lastHass).catch(() => {});
+}
+setInterval(keepSession, VALIDATE_MS);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) keepSession(); });
 
 function findAddon(hass) {
   addonPromise ??= (async () => {
@@ -66,8 +74,20 @@ class TrailbookCard extends HTMLElement {
 
   set hass(hass) {
     const first = !this._hass;
-    this._hass = hass;
+    this._hass = lastHass = hass;
     if (first) this._build();
+  }
+
+  connectedCallback() {
+    shown.add(this);
+    if (this._away) { this._away = false; this._load(); }
+  }
+
+  // A card taken off the page (another view, a closed window) loads again when it is back:
+  // putting a frame back reloads it, and that must not happen with an old session.
+  disconnectedCallback() {
+    shown.delete(this);
+    if (this._frame) { this._away = true; this._frame.removeAttribute("src"); }
   }
 
   getCardSize() { return Math.ceil((this._height || 300) / 50); }
@@ -80,15 +100,26 @@ class TrailbookCard extends HTMLElement {
     const root = this.attachShadow({ mode: "open" });
     root.innerHTML = `<style>
         :host { display: block; height: 100%; }
-        ha-card { height: 100%; overflow: hidden auto; display: flex; flex-direction: column; }
+        ha-card { height: 100%; overflow: hidden auto; display: flex; flex-direction: column; scrollbar-width: none; }
+        ha-card::-webkit-scrollbar { display: none; }
         iframe { border: 0; width: 100%; flex: 1 0 auto; display: block; background: transparent; }
         .msg { padding: 16px; color: var(--secondary-text-color); font-size: 14px; }
       </style><ha-card><div class="msg">Loading…</div><iframe hidden title="Trailbook"></iframe></ha-card>`;
     this._msg = root.querySelector(".msg");
     this._frame = root.querySelector("iframe");
-    // The card's page tells its height (all but the map, which fills the card).
+    // Ingress answers "401: Unauthorized" in place of the page when it refuses the session.
+    this._frame.addEventListener("load", () => {
+      let text = "";
+      try { text = this._frame.contentDocument?.body?.textContent || ""; } catch (e) { return; }
+      if (text.trim().startsWith("401")) this._renew();
+    });
+    // The card's page tells its height (all but the map, which fills the card), and when one of
+    // its requests was refused ("auth").
     window.addEventListener("message", (e) => {
-      if (e.source !== this._frame.contentWindow || e.data?.trailbook !== "size") return;
+      if (e.source !== this._frame.contentWindow) return;
+      if (e.data?.trailbook === "auth") { this._renew(); return; }
+      if (e.data?.trailbook !== "size") return;
+      if (Date.now() - (this._renewed || 0) > VALIDATE_MS) this._tries = 0;
       this._height = e.data.height;
       this._phone = !!e.data.phone;
       if (e.data.fill) { this._frame.style.height = ""; this._frame.style.minHeight = `${e.data.height}px`; }
@@ -99,9 +130,26 @@ class TrailbookCard extends HTMLElement {
     this._load();
   }
 
+  // The frame once more with a checked session (a new one from the second try on); a few tries
+  // a minute at most.
+  async _renew() {
+    if (this._renewing) return;
+    if (Date.now() - (this._renewed || 0) > VALIDATE_MS) this._tries = 0;
+    if (this._tries >= RENEW_TRIES) return;
+    this._renewing = true;
+    this._tries += 1;
+    this._renewed = Date.now();
+    try {
+      if (this._tries > 1) session = null;
+      await ensureSession(this._hass);
+      this._frame.contentWindow?.location.reload();
+    } catch (e) { /* the next load of the card tries again */ }
+    this._renewing = false;
+  }
+
   // Activity detailed: its page is laid out phone-wide (PHONE_W) and zoomed to a wider card
   // (zoom, not a transform: the frame takes its zoomed size, so nothing is cut off). A card
-  // given a fixed height in the dashboard scrolls inside.
+  // given a fixed height in the dashboard scrolls inside, without a scroll bar.
   _fit() {
     const f = this._frame, w = this.clientWidth;
     const scale = this._phone && w > PHONE_W + 40 ? Math.min(w / PHONE_W, MAX_SCALE) : 1;

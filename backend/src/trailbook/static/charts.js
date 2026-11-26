@@ -38,6 +38,7 @@ const fillAlpha = (a) => (dark() ? a * 0.65 : a);
 //              bars: true (columns instead of a line, half a period of room at both ends; the
 //              hovered column is drawn in full colour with a rim), barSize (share of the gap, 0,72),
 //              headHtml: controls at the right of the card title (bound by the caller),
+//              goal: a value drawn all the time as a faint dashed line (kept in the y range),
 //              tags: [{ label, value, color, mark, values, range: [i0, i1] }]  value pills on the right at the height of their
 //              value; hovering marks the point i of `values`, or with `range` draws that stretch of `values` thick;
 //              value (instead of stats / legend), pushed apart so they never overlap }]
@@ -49,16 +50,25 @@ const fillAlpha = (a) => (dark() ? a * 0.65 : a);
 //              inside (smaller); a click on a pill hides / shows that series (by its label)
 //              on every chart of the group, the pill stays grey
 //   marks: [{ x, icon, tip, href }] icons in a strip under the x axis (marksHidden: start hidden;
-//              marksPerX: one icon per x value, hovering it marks that column)
+//              marksPerX: one icon per x value, hovering it marks that column; narrow columns get
+//              smaller icons, then dots that open the list (onMarks with { hover: true }))
 //   hidden: [key] charts built but not shown (api.show(key, on) toggles one without a rebuild)
 //   stats on a chart with tags: pills under the tag column (Statistics: Max); a stat's mark
 //   { i, values, color } is the point i of those values, the pill in that colour
 //   mark: what hovering the stat highlights - "max" | "min" (a point), "up" | "down" (the climbs or
-//   descents), { ranges: [[i0, i1]] }, a number (a line at that value, e.g. an average)
+//   descents), { ranges: [[i0, i1]] }, a number (a line at that value, e.g. an average),
+//   { goal: true } (the goal line drawn stronger), { swap: [values, …lines] } (these values
+//   shown in place of the chart's, e.g. one weekday of each week)
 //   targets: workout step targets (sample index range, low and high value), drawn dashed
 //   onHover(i | null): the hovered sample index (for the map), onRanges([[i0, i1]] | null): the
 //   stretches a hovered stat marks (for the map), onState(): pins/zoom changed,
 //   onOrder([key]): the charts were reordered by dragging a card
+//   kind "together" (x = seconds on a clock two recordings share, 0 = the first moment
+//   together; negative before it), with `pair`: { range: [x0, x1] (both recordings),
+//   runs: [[x0, x1]] this one's stretches together (the x axis thicker there),
+//   cursor(x | null), zoom(range), pin(x, on), reset() } - what the person does here, for the
+//   other recording's charts (api.hoverX, zoom, pin, reset). Where this recording has no
+//   sample near the cursor, nothing is shown.
 //   climbs on a series: s.climbs = { items: [{ i0, i1 }], label(i0, i1) => { lines, color },
 //               onChange(), edit: false (only drawn thick: no circles), lines [] = no tag,
 //               colorAt(v) (each value its own colour instead of one per stretch),
@@ -70,13 +80,14 @@ const fillAlpha = (a) => (dark() ? a * 0.65 : a);
 //               `keys` and a strip above each with the values of every section (label). A line
 //               can be dragged; on the strip a ball with − over a line removes it, a ball with +
 //               elsewhere adds one. Changes apply to all those charts.
-function chartGroup(root, { x, kind, series, hidden = [], sections = null, shared = null, xExact = null, onHover = () => {}, onRanges = () => {}, onState = () => {}, onOrder = () => {}, onToggle = () => {} }) {
+function chartGroup(root, { x, kind, series, hidden = [], sections = null, shared = null, xExact = null, pair = null, onHover = () => {}, onRanges = () => {}, onState = () => {}, onOrder = () => {}, onToggle = () => {} }) {
   const g = { kind, plots: [], pins: [], range: null, hoverIdx: null, dragged: false, mark: null, hidden: new Set(hidden), secs: [].concat(sections || []) };
   const syncKey = "tb-" + Math.random().toString(36).slice(2);
   const xs = () => x[g.kind];
   const X_TITLE = { distance: ["Distance (km)", "Distance from the start."], time: ["Elapsed time (h:mm)", "Time from the start, pauses and stops included."],
                     timer: ["Timer time (h:mm)", "Time with the watch running: pauses left out."],
-                    percent: ["Progress (%)", "Share of the whole activity: distance, or time when there is no distance."] };
+                    percent: ["Progress (%)", "Share of the whole activity: distance, or time when there is no distance."],
+                    together: ["Time from meeting (h:mm)", "Clock time from the first moment together, the same for both; negative before it."] };
   const fmtTime = (s, sec = false) => {
     const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), ss = Math.floor(s % 60);
     return `${h}:${String(m).padStart(2, "0")}${sec ? ":" + String(ss).padStart(2, "0") : ""}`;
@@ -124,10 +135,18 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, share
     for (let v = first; v <= max; v += step) if (v >= min) out.push(v);
     return out;
   };
+  const fmtSigned = (v, sec) => `${v <= -1 ? "−" : ""}${fmtTime(Math.abs(v), sec)}`;
+  // The nearest sample is further from x than this: the recording has nothing there (not
+  // started yet, paused, over).
+  const gapS = (() => {
+    if (!pair) return 0;
+    const v = x.together, steps = v.slice(1).map((q, k) => q - v[k]).sort((p, q) => p - q);
+    return Math.max(30, 3 * (steps[Math.floor(steps.length / 2)] || 0));
+  })();
   const fmtPeriod = (v, exact) => (g.kind === "month" ? (exact ? MONTHS_FULL[v - 1] : MONTHS_3[v - 1]) : `${exact ? "Week " : "W"}${v}`);
   const MONTHS_FULL = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
   const fmtX = (v, exact = false, incr = 1) => (v == null ? "" : exact && xExact ? xExact(v) : g.kind === "month" || g.kind === "week" ? fmtPeriod(Math.round(v), exact) : g.kind === "date" ? fmtDate(v) : g.kind === "distance" ? (exact ? `${num(v, 2)} km` : num(v, stepDec(incr)))
-    : g.kind === "percent" ? `${num(v, exact ? 1 : 0)}${exact ? " %" : ""}` : fmtTime(v, exact));
+    : g.kind === "percent" ? `${num(v, exact ? 1 : 0)}${exact ? " %" : ""}` : g.kind === "together" ? fmtSigned(v, exact) : fmtTime(v, exact));
   // columns over x values: half the step between the first two values of room at both ends
   const barRange = (mn, mx) => { const v = xs(), h = v.length > 1 ? (v[1] - v[0]) / 2 : 1; return [mn - h, mx + h]; };
   const fmtY = (s, v) => (v == null ? "–" : s.fmt ? s.fmt(v) : `${num(v, s.dec)}${s.unit ? " " + s.unit : ""}`);
@@ -188,7 +207,7 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, share
       points: s.multi && s.points ? { show: true, size: 5, width: 0, fill: l.color } : { show: false } }));
     const period = g.kind === "month" || g.kind === "week";
     const yRange = (u, mn, mx) => {
-      const lo = Math.min(mn ?? 0, s.yMin ?? Infinity), hi = Math.max(mx ?? 1, s.yMax ?? -Infinity);
+      const lo = Math.min(mn ?? 0, s.yMin ?? Infinity), hi = Math.max(mx ?? 1, s.yMax ?? -Infinity, s.goal ?? -Infinity);
       const pad = (hi - lo) * 0.06 || 1;
       return [lo === s.yMin ? lo : lo - pad, hi === s.yMax ? hi : hi + pad];
     };
@@ -205,7 +224,7 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, share
     const right = (s.lines || []).find((l) => l.axis === "right");
     return {
       width, height: s.height || CHART_H, padding: [8, period ? 14 : 2, 0, 0],
-      scales: { x: { time: g.kind === "date", range: (u, mn, mx) => (g.range || (period ? [mn - 0.5, mx + 0.5] : s.bars ? barRange(mn, mx) : [mn, mx])) },
+      scales: { x: { time: g.kind === "date", range: (u, mn, mx) => (g.range || (pair ? pair.range : period ? [mn - 0.5, mx + 0.5] : s.bars ? barRange(mn, mx) : [mn, mx])) },
                 y: { dir: s.invert ? -1 : 1,
                      range: (u, mn, mx) => liftForSurface(u, s.yMin != null || s.yMax != null ? yRange(u, mn, mx) : uPlot.rangeNum(mn ?? 0, mx ?? 1, 0.1, true)) },
                 ...(right ? { y2: { range: (u, mn, mx) => [0, (mx || 1) * 1.08] } } : {}) },
@@ -222,6 +241,7 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, share
       axes: [
         { font: CHART_FONT, stroke: muted, space: 46, size: date ? 32 : 18, gap: 2, border: { show: true, stroke: axis, width: 1 },
           grid: { show: false }, ticks: { stroke: axis, size: 3, width: 1 },
+          ...(pair ? { incrs: [60, 120, 300, 600, 900, 1800, 3600, 7200, 14400] } : {}), // round minutes
           ...(date ? { splits: dateSplits, values: dateLabels } : period ? { splits: periodSplits, values: (u, vals) => vals.map((v) => fmtX(v)) } : { values: (u, vals, ax, space, incr) => vals.map((v) => fmtX(v, false, incr)) }) },
         { font: CHART_FONT, stroke: muted, space: 22, gap: 2, border: { show: true, stroke: axis, width: 1 },
           ...(s.ySplits ? { splits: (u) => s.ySplits.filter((v) => v >= u.scales.y.min && v <= u.scales.y.max) } : {}),
@@ -242,7 +262,7 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, share
         // soft shadow under the series line
         drawClear: [(u) => drawZones(u, s)],
         drawAxes: [(u) => { u.ctx.save(); u.ctx.shadowColor = s.zones ? "rgba(0,0,0,.18)" : withAlpha(s.color, 0.55); u.ctx.shadowBlur = 6; u.ctx.shadowOffsetY = 2; }],
-        draw: [(u) => { u.ctx.restore(); drawExtend(u, s); drawSurface(u, s); drawTargets(u, s); drawClimbs(u, s); drawExt(u, s); drawBarHover(u, s); drawSections(u, s); drawMark(u, s); drawFocus(u, s); drawFrame(u, axis); placeSections(u, s); placeClimbs(u, s); drawPins(u); placeTags(u, s); placeMarks(u, s); }],
+        draw: [(u) => { u.ctx.restore(); drawExtend(u, s); drawSurface(u, s); drawTargets(u, s); drawClimbs(u, s); drawExt(u, s); drawBarHover(u, shownAs(u, s)); drawSections(u, s); drawGoal(u, s); drawMark(u, s); drawFocus(u, shownAs(u, s)); drawFrame(u, axis); drawPair(u, axis); placeSections(u, s); placeClimbs(u, s); drawPins(u); placeTags(u, s); placeMarks(u, s); }],
         setCursor: [(u) => cursorMoved(u, s)],
         setSelect: [(u) => {
           if (u.select.width < 4) return;
@@ -250,6 +270,7 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, share
           g.dragged = true;
           u.setSelect({ left: 0, width: 0 }, false);
           zoomTo([a, b]);
+          pair?.zoom([a, b]);
         }],
       },
     };
@@ -264,6 +285,20 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, share
     const { left, top, width, height } = u.bbox, ctx = u.ctx, dpr = devicePixelRatio || 1;
     ctx.save(); ctx.strokeStyle = stroke; ctx.lineWidth = dpr;
     ctx.strokeRect(Math.round(left) + 0.5, Math.round(top) + 0.5, Math.round(width) - 1, Math.round(height) - 1);
+    ctx.restore();
+  }
+
+  // Two recordings on one clock: where this one was together with the other, the x axis is
+  // thicker, in its own colour.
+  function drawPair(u, stroke) {
+    if (!pair?.runs.length) return;
+    const ctx = u.ctx, { left, top, width, height } = u.bbox, dpr = devicePixelRatio || 1;
+    ctx.save();
+    ctx.fillStyle = stroke;
+    for (const [a, b] of pair.runs) {
+      const x0 = Math.max(left, u.valToPos(a, "x", true)), x1 = Math.min(left + width, u.valToPos(b, "x", true));
+      if (x1 > x0) ctx.fillRect(x0, top + height - 2 * dpr, x1 - x0, 6 * dpr);
+    }
     ctx.restore();
   }
 
@@ -294,22 +329,33 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, share
   // one); a click calls `s.onMarks(items, el)` (else a single one links to its page). The
   // strip is rewritten only when it changes, so the hovered icon stays.
   function placeMarks(u, s) {
+    const MARK_ICON_PITCH = 14, MARK_COUNT_PITCH = 22, MARK_DOT_PITCH = 9; // px between columns
     const box = u._tb?.marks;
     if (!box || !s.marks || box.hidden) return;
     const left = u.over.offsetLeft, w = u.over.clientWidth, groups = [];
+    // one icon per column: full size with room for it, else smaller, else a dot (columns closer
+    // than the dots share one), so neighbours never run into each other
+    const v = xs();
+    const pitch = s.marksPerX && v.length > 1 ? Math.min(...v.slice(1).map((x, k) => Math.abs(u.valToPos(x, "x") - u.valToPos(v[k], "x")))) : Infinity;
+    const dots = pitch < MARK_ICON_PITCH, size = Math.round(Math.max(10, Math.min(16, pitch - 4)));
     for (const m of s.marks) {
       const px = u.valToPos(m.x, "x");
       if (px < -2 || px > w + 2) continue;
       const g0 = groups[groups.length - 1];
       // marksPerX: one icon per x (a column's period), else icons closer than ~35 px share one
-      if (g0 && (s.marksPerX ? g0.x === m.x : px - g0.px < 35)) g0.items.push(m); else groups.push({ px, x: m.x, items: [m] });
+      const same = g0 && (!s.marksPerX ? px - g0.px < 35 : g0.x === m.x || (dots && px - g0.px < MARK_DOT_PITCH));
+      if (same) g0.items.push(m); else groups.push({ px, x: m.x, items: [m] });
     }
+    groups.forEach((grp) => { grp.dot = dots; });
     u._tb.markGroups = groups;
+    const dotSize = Math.round(Math.max(5, Math.min(8, pitch - 2)));
     const html = groups.map(({ px, items }, k) => {
+      if (dots) return `<span class="chart-mark dot${s.onMarks ? " click" : ""}" data-mark-group="${k}" style="left:${left + px}px;--d:${dotSize}px"></span>`;
       const tip = s.marksTip ? s.marksTip(items)
         : items.slice(0, 8).map((m) => m.tip).join("\n\n") + (items.length > 8 ? `\n\n+${items.length - 8} more` : "");
       const tag = !s.onMarks && items.length === 1 && items[0].href ? "a" : "span";
-      return `<${tag} class="chart-mark${s.onMarks ? " click" : ""}" data-mark-group="${k}" style="left:${left + px}px" data-tip="${esc(tip)}"${tag === "a" ? ` href="${items[0].href}"` : ""}>${items[0].icon}${items.length > 1 ? `<b>${items.length}</b>` : ""}</${tag}>`;
+      const small = size < 16 ? `;--mk:${size}px` : "", count = items.length > 1 && pitch >= MARK_COUNT_PITCH;
+      return `<${tag} class="chart-mark${s.onMarks ? " click" : ""}" data-mark-group="${k}" style="left:${left + px}px${small}" data-tip="${esc(tip)}"${tag === "a" ? ` href="${items[0].href}"` : ""}>${items[0].icon}${count ? `<b>${items.length}</b>` : ""}</${tag}>`;
     }).join("");
     if (html !== box._html) { box.innerHTML = html; box._html = html; }
   }
@@ -318,10 +364,11 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, share
     if (!box) return;
     const groupOf = (e) => { const el = e.target.closest?.("[data-mark-group]"); return el ? [el, u._tb.markGroups?.[+el.dataset.markGroup]] : [null, null]; };
     box.addEventListener("mouseover", (e) => {
-      const [, grp] = groupOf(e);
+      const [el, grp] = groupOf(e);
       if (!grp) return;
-      const xv = grp.items.map((m) => m.x), i = s.marksPerX && s.bars ? xs().indexOf(xv[0]) : -1;
-      g.mark = i >= 0 ? { ranges: [[i, i]], u, fromMarks: true } // the icon's column marked
+      if (grp.dot && s.onMarks && !el.contains(e.relatedTarget)) s.onMarks(grp.items, el, { hover: true });
+      const xv = grp.items.map((m) => m.x), i = s.marksPerX && s.bars ? xs().indexOf(Math.min(...xv)) : -1;
+      g.mark = i >= 0 ? { ranges: [[i, xs().indexOf(Math.max(...xv))]], u, fromMarks: true } // the icon's columns marked
         : { band: [Math.min(...xv), Math.max(...xv) + (s.markSpan || 0)], u };
       u.redraw(false);
     });
@@ -772,6 +819,29 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, share
     if (set == null) onToggle(label, off);
   }
 
+  // The goal: a faint dashed line, a bit stronger while its stat is hovered or clicked.
+  function drawGoal(u, s) {
+    if (s.goal == null || u.scales.y.min == null) return;
+    const ctx = u.ctx, { left, top, width, height } = u.bbox, dpr = devicePixelRatio || 1;
+    const on = g.mark?.u === u && g.mark.goal, y = Math.round(u.valToPos(s.goal, "y", true)) + 0.5;
+    if (y < top || y > top + height) return;
+    ctx.save();
+    ctx.strokeStyle = cssVar("--fg") || "#1b1e25"; ctx.globalAlpha = on ? 0.65 : 0.32;
+    ctx.lineWidth = (on ? 1.4 : 1) * dpr; ctx.setLineDash([5 * dpr, 4 * dpr]);
+    ctx.beginPath(); ctx.moveTo(left, y); ctx.lineTo(left + width, y); ctx.stroke();
+    ctx.restore();
+  }
+
+  // The series as shown: with the values a stat put in place of its own (mark `swap`).
+  function shownAs(u, s) {
+    return u._swap ? { ...s, values: u._swap[0], lines: s.lines?.map((l, k) => ({ ...l, values: u._swap[k + 1] })) } : s;
+  }
+  function swapValues(u, s, swap = null) {
+    if ((u._swap || null) === swap) return;
+    u._swap = swap;
+    u.setData([xs(), ...(swap || [s.values, ...(s.lines || []).map((l) => l.values)])]);
+  }
+
   // Hovered stat: the point (max/min), the climbs/descents, or a line at the value (average).
   function drawMark(u, s) {
     const m = g.mark;
@@ -836,6 +906,8 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, share
   function markFor(s, mark) {
     const v = s.values;
     if (typeof mark === "number") return { y: mark };
+    if (mark?.goal) return { goal: true };
+    if (mark?.swap) return { swap: mark.swap };
     if (mark?.ranges) return mark;
     if (mark?.values) return { i: mark.i, s: { ...s, color: mark.color || s.color, values: mark.values } }; // a point of one line
     if (mark === "max" || mark === "min") {
@@ -862,10 +934,22 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, share
 
   // Value flag next to the point, exact x on the x axis, map sync.
   function cursorMoved(u, s) {
+    s = shownAs(u, s);
     const i = u.cursor.idx, b = u._tb;
     const barAt = s.bars && u.cursor.left >= 0 ? i : null;
     if (s.bars && u._barIdx !== barAt) { u._barIdx = barAt; u.redraw(false); } // the hovered column
-    const show = i != null && u.cursor.left >= 0;
+    // two recordings: where the cursor is on the shared clock, and whether this one was there
+    const at = pair && u.cursor.left >= 0 ? u.posToVal(u.cursor.left, "x") : null;
+    const away = at != null && (i == null || Math.abs(xs()[i] - at) > gapS);
+    if (pair) {
+      u.root.classList.toggle("tb-nodata", away);
+      // sent on only while the pointer is on these charts (and once more when it leaves)
+      if (u === g.plots[0]?.u && !g.following) {
+        const own = root.matches(":hover");
+        if (own || g.leading) { g.leading = own && at != null; pair.cursor(own ? at : null); }
+      }
+    }
+    const show = i != null && u.cursor.left >= 0 && !away;
     hoverClimb(u, s, show ? i : null);
     b.tip.hidden = b.xflag.hidden = !show;
     if (!show && u._tgt) { u._tgt = null; u.redraw(false); }
@@ -938,7 +1022,7 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, share
     const u0 = g.plots[0]?.u;
     if (!u0) return;
     const from = [u0.scales.x.min, u0.scales.x.max];
-    const target = to || [xs()[0], xs()[xs().length - 1]];
+    const target = to || pair?.range || [xs()[0], xs()[xs().length - 1]];
     cancelAnimationFrame(anim);
     const t0 = performance.now();
     const step = (t) => {
@@ -995,13 +1079,20 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, share
           g.plots.forEach(({ u: p }) => { p._tb.tip.hidden = true; p.redraw(false); });
         }
       });
-      u.over.addEventListener("click", () => { if (g.dragged) { g.dragged = false; return; } addPin(u.cursor.idx); });
-      reset.onclick = () => api.reset();
+      u.over.addEventListener("click", () => {
+        if (g.dragged) { g.dragged = false; return; }
+        if (u.root.classList.contains("tb-nodata")) return;
+        const i = u.cursor.idx;
+        addPin(i);
+        if (i != null) pair?.pin(xs()[i], g.pins.includes(i));
+      });
+      reset.onclick = () => { api.reset(); pair?.reset(); };
       el.querySelectorAll("[data-stat]").forEach((st) => {
         st.onmouseenter = () => {
           const m = markFor(s, s.stats[st.dataset.stat][2]);
           if (!m) return;
           const prev = g.mark?.u;
+          swapValues(u, s, m.swap || null);
           g.mark = { ...m, u }; st.classList.add("on"); u.redraw(false);
           if (prev && prev !== u) prev.redraw(false);
           if (m.i != null) onHover(m.i); // a point is shown on the map too
@@ -1009,13 +1100,16 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, share
         };
         st.onmouseleave = () => {
           st.classList.remove("on");
+          swapValues(u, s);
           if (g.pinnedStat?.isConnected) { g.pinnedStat.onmouseenter(); return; } // a clicked stat stays marked
           g.mark = null; u.redraw(false); onHover(null); onRanges(null);
         };
         // a click keeps the stat's marking (until it is clicked again)
+        st.restore = () => swapValues(u, s);
         st.onclick = () => {
           const was = g.pinnedStat === st;
           g.pinnedStat?.classList.remove("pinned");
+          if (!was) g.pinnedStat?.restore(); // the stat clicked before, maybe on another chart
           g.pinnedStat = was ? null : st;
           if (!was) { st.classList.add("pinned"); st.onmouseenter(); }
         };
@@ -1140,6 +1234,28 @@ function chartGroup(root, { x, kind, series, hidden = [], sections = null, share
       p.u.setCursor(i == null ? { left: -10, top: -10 } : { left: p.u.valToPos(xs()[i], "x"), top: -10 });
     },
     toggleLine(label, off) { toggleLine(label, off); },
+    // Two recordings (kind "together"): what was done on the other one's charts.
+    hoverX(at) {
+      const p = g.plots[0];
+      if (!p) return;
+      const i = at == null ? null : nearestIdx(at);
+      const there = i != null && Math.abs(xs()[i] - at) <= gapS && at >= p.u.scales.x.min && at <= p.u.scales.x.max;
+      g.following = true; // not sent back
+      p.u.setCursor(there ? { left: p.u.valToPos(at, "x"), top: -10 } : { left: -10, top: -10 });
+      g.following = false;
+    },
+    zoom(range) { zoomTo(range); },
+    pin(at, on) {
+      const i = nearestIdx(at);
+      const near = g.pins.filter((q) => Math.abs(xs()[q] - at) <= gapS);
+      if (on && !near.length && Math.abs(xs()[i] - at) <= gapS) addPin(i);
+      if (!on) near.forEach(addPin);
+    },
+    // stretches [[x0, x1], …] of the shared clock highlighted (null clears)
+    highlightX(ranges) {
+      const own = ranges?.map(([a, b]) => [nearestIdx(a), nearestIdx(b)]).filter(([a, b]) => b > a);
+      api.highlight(own?.length ? own : null);
+    },
     // Another part of the page points at one series (by label): the other lines fade; null clears.
     emphasize(label) {
       for (const { u, s } of g.plots) {

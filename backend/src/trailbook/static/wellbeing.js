@@ -13,7 +13,7 @@ const WB_X = [["mixed", "Mixed"], ["week", "Weeks"], ["month", "Months"]];
 const WB_PLANNED = {
   sleep: "Sleep length and stages, sleep score, bed and wake times, the night's heart rate, breathing and HRV.",
   recovery: "HRV status against its baseline, resting heart rate, training readiness and Body Battery.",
-  body: "Weight and body composition, blood pressure, VO2 max and fitness age.",
+  body: "Weight and body composition, blood pressure and VO2 max.",
 };
 const WB_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const WB_RED = "#e5484d"; // an extremely good day (far over the goal) turns towards it
@@ -71,7 +71,7 @@ async function renderWellbeing(tab, params) {
   if (tab === "body") {
     const data = await api("wellbeing/body?" + new URLSearchParams({ person: CURRENT, ...q }));
     data.years = yearList(params);
-    // Fitness's whole series, once: the daily load (Additional series) and VO2 max (Fitness age)
+    // Fitness's whole series, once: the daily load (Additional series) and VO2 max (its tile)
     const f = await api("fitness?" + new URLSearchParams({ person: CURRENT })).catch(() => null);
     data.fitness = f?.series || [];
     data.loads = Object.fromEntries(data.fitness.map((d) => [d.date, d.load || 0]));
@@ -140,6 +140,26 @@ function wbPeriods(days, by) {
     out.get(key).days.push(d);
   }
   return [...out.values()];
+}
+
+// The weekdays with the highest and the lowest average of `key` over the days (none with data
+// on one weekday only): [[label, weekday 0 = Sunday, average]].
+const WB_WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+const wbDow = (day) => new Date(wbMs(day)).getUTCDay();
+function wbBestDays(days, key) {
+  const by = WB_WEEKDAYS.map((_, dow) => [dow, wbAvg(days.filter((d) => wbDow(d.day) === dow), (d) => d[key])])
+    .filter(([, v]) => v != null).sort((a, b) => b[1] - a[1]);
+  return by.length < 2 ? [] : [["Best day", ...by[0]], ["Worst day", ...by[by.length - 1]]];
+}
+const wbDayText = (dow, avg, dec, unit = "") => `${WB_WEEKDAYS[dow].slice(0, 3)} ${num(avg, dec)}${unit}`;
+const wbDayTip = (label, dow, avg, dec, word) => `${label} of the week on average: ${WB_WEEKDAYS[dow]}, ${num(avg, dec)} ${word}.`;
+// Each period's average of one weekday (shown in place of the columns of whole periods).
+const wbOfDay = (periods, key, dow) => periods.map((p) => wbAvg(p.days.filter((d) => wbDow(d.day) === dow), (d) => d[key]));
+// Best day / Worst day of a column chart: `markOf(dow, average)` is what hovering one shows,
+// `shows` says it in the tooltip (* = the weekday).
+function wbDayStats(days, key, dec, unit, word, markOf, shows) {
+  return wbBestDays(days, key).map(([label, dow, avg]) => [label, wbDayText(dow, avg, dec, unit), markOf(dow, avg),
+    `${wbDayTip(label, dow, avg, dec, word)} Hover: ${shows.replace("*", `${WB_WEEKDAYS[dow]}s`)}.`]);
 }
 
 // A dot's colour: the metric's colour up to 1,5 × the goal, then towards red (full at 2,5 ×).
@@ -285,11 +305,15 @@ function wbGrid(el, data, by, periods, M, headHtml, onDot) {
     }
   }
   const unit = by === "day" ? "days" : by === "week" ? "weeks" : "months";
+  // Best day / Worst day: hovering marks those days (dots by day), else each dot shows them alone
+  const weekdays = wbBestDays(days, M.key);
   const stats = [
     ["Avg", num(avgDay, M.dec), "avg", `Average ${M.word} a day in the period.`],
     ...(M.goal ? [["Goal met", `${num((met.length / Math.max(1, cells.length)) * 100)} %`, "met", `Share of the ${unit} at ${num(M.goal)} ${M.word} a day or more (${num(met.length)} of ${num(cells.length)}).`]] : []),
     ["Best", num(best?.v, dec), "best", best ? `Most ${M.word}${by === "day" ? "" : " a day on average"}: ${best.label}.` : ""],
     ...(by === "day" && streak.length > 1 ? [["Streak", `${num(streak.length)} days`, "streak", `Longest run of days at the goal: ${wbShort(streak[0].days[0].day)} – ${wbShort(streak[streak.length - 1].days[0].day)}.`]] : []),
+    ...weekdays.map(([label, dow, avg]) => [label, wbDayText(dow, avg, M.dec), `dow${dow}`,
+      `${wbDayTip(label, dow, avg, M.dec, `${M.word} a day`)} Hover: ${by === "day" ? `the ${WB_WEEKDAYS[dow]}s marked` : `each dot shows the ${WB_WEEKDAYS[dow]}s of its ${by} alone`}.`]),
   ];
   const title = by === "day" ? `${M.title} a day` : `${M.title} a day, by ${by}`;
   const tip = M.goal ? `Each dot: the ${M.word} (a day, or a day on average in the week or month). Size and colour against the goal of ${num(M.goal)} ${M.word} a day (Options): full colour at the goal, turning red far above it (${num(M.goal * 2.5)} and more), fading towards none.`
@@ -302,11 +326,13 @@ function wbGrid(el, data, by, periods, M, headHtml, onDot) {
       </div></div>`;
   const grid = el.querySelector("[data-wb-grid]");
   const byKey = new Map(cells.map((c) => [`${c.row}|${c.col}`, c]));
+  let alt = null; // other dots shown in place of the cells (one weekday of each week or month)
   const api = {
     row: el.querySelector(".chart-row"),
     edges: () => null,
     sideNeed: () => WB_AVG_W + Math.ceil(Math.max(0, ...[...el.querySelectorAll(".wb-stats .chart-stat")].map((s) => s.getBoundingClientRect().width))) + 2,
-    paint() { grid.innerHTML = wbGridSvg(grid.clientWidth, rows, cells, n, by, M, dec, ref, api.edges()); },
+    paint() { grid.innerHTML = wbGridSvg(grid.clientWidth, rows, alt || cells, n, by, M, dec, ref, api.edges()); },
+    swap(list) { if (list === alt) return; alt = list; api.paint(); },
     // dots of these days marked, the others faded (null: all back)
     mark(daySet) {
       grid.classList.toggle("marking", !!daySet);
@@ -327,11 +353,21 @@ function wbGrid(el, data, by, periods, M, headHtml, onDot) {
   // hovering a stat marks its dots: Best its dot, Goal met the dots at the goal, Streak its days;
   // Avg is a value only (marks nothing)
   const sets = { best: best ? [best] : [], met, streak };
+  const swaps = {};
+  for (const [, dow] of weekdays) {
+    if (by === "day") sets[`dow${dow}`] = cells.filter((c) => wbDow(c.days[0].day) === dow);
+    else swaps[`dow${dow}`] = cells.map((c) => ({ ...c, v: wbAvg(c.days.filter((d) => wbDow(d.day) === dow), (d) => d[M.key]), label: `${c.label}, ${WB_WEEKDAYS[dow]}s` }))
+      .filter((c) => c.v != null);
+  }
   let pinned = null; // a clicked stat keeps its marking (until it is clicked again)
   el.querySelectorAll("[data-wb-stat]:not([data-wb-stat=avg])").forEach((s) => {
-    const on = () => api.mark(new Set(sets[s.dataset.wbStat].flatMap((c) => c.days.map((d) => d.day))));
+    const key = s.dataset.wbStat;
+    const on = () => {
+      api.swap(swaps[key] || null);
+      api.mark(sets[key] ? new Set(sets[key].flatMap((c) => c.days.map((d) => d.day))) : null);
+    };
     s.onmouseenter = on;
-    s.onmouseleave = () => (pinned ? pinned.onmouseenter() : api.mark(null));
+    s.onmouseleave = () => { if (pinned) pinned.onmouseenter(); else { api.swap(null); api.mark(null); } };
     s.onclick = () => {
       pinned?.classList.remove("pinned");
       pinned = pinned === s ? null : s;
@@ -385,7 +421,7 @@ const wbMetRanges = (values, goal) => values.map((x, i) => (x != null && x >= go
 function wbGoalStats(values, goal, per, word, unit = "") {
   const v = values.filter((x) => x != null);
   if (!goal || !v.length) return [];
-  return [["Goal", `${num(goal)}${unit}`, goal, `The ${word} goal (Options).`],
+  return [["Goal", `${num(goal)}${unit}`, { goal: true }, `The ${word} goal (Options), the dashed line.`],
     ["Goal met", `${num((v.filter((x) => x >= goal).length / v.length) * 100)} %`, { ranges: wbMetRanges(values, goal) }, `Share of the ${per} at the goal or above.`]];
 }
 function wbStepStats(values, per, goal) {
@@ -401,14 +437,18 @@ const wbAccent = () => cssVar("--accent") || "#5b8def";
 function wbDailySteps(days, headHtml, goal) {
   const values = days.map((d) => d.steps);
   return { x: { date: days.map((d) => wbMs(d.day) / 1000) }, kind: "date", xExact: (v) => wbDayLabel(isoDay(new Date(v * 1000))),
-    series: [{ ...WB_STEPS, title: "Steps a day", yTitle: "Steps", color: wbAccent(), values, headHtml,
-      tip: "Steps of each day; hovering Goal shows the goal as a dashed line.", stats: wbStepStats(values, "days", goal) }] };
+    series: [{ ...WB_STEPS, title: "Steps a day", yTitle: "Steps", color: wbAccent(), values, headHtml, goal: goal || null,
+      tip: "Steps of each day; the dashed line: the step goal (Options).",
+      stats: [...wbStepStats(values, "days", goal), ...wbDayStats(days, "steps", 0, "", "steps",
+        (dow) => ({ ranges: days.map((d, i) => (wbDow(d.day) === dow ? [i, i] : null)).filter(Boolean) }), "the * marked")] }] };
 }
 // Weeks / Months of one year: the average day of each period.
 function wbPeriodSteps(periods, by, headHtml, goal) {
   const values = periods.map((p) => wbAvg(p.days, (d) => d.steps));
-  return { ...WB_STEPS, title: `Steps a day, by ${by}`, yTitle: "Steps a day", color: wbAccent(), values, headHtml,
-    tip: `Steps a day, on average over the ${by}.`, stats: wbStepStats(values, `${by}s`, goal) };
+  return { ...WB_STEPS, title: `Steps a day, by ${by}`, yTitle: "Steps a day", color: wbAccent(), values, headHtml, goal: goal || null,
+    tip: `Steps a day, on average over the ${by}.`,
+    stats: [...wbStepStats(values, `${by}s`, goal), ...wbDayStats(periods.flatMap((p) => p.days), "steps", 0, "", "steps a day",
+      (dow) => ({ swap: [wbOfDay(periods, "steps", dow)] }), `each column shows the * of its ${by} alone`)] };
 }
 
 // Several years (Weeks / Months): a line per year over the weeks or months of the year, its
@@ -428,9 +468,13 @@ function wbYearSteps(periods, by, headHtml, goal) {
   for (const l of lines) l.values.forEach((v, i) => { if (v != null && (!top || v > top.v)) top = { v, i, l }; });
   const name = (i) => (by === "month" ? MONTHS[i] : `week ${i + 1}`);
   const stats = [...(top ? [["Max", num(top.v), { i: top.i, values: top.l.values, color: top.l.color }, `Most steps a day in one ${by}: ${num(top.v)} in ${name(top.i)} ${top.l.label}`]] : []),
-    ...(goal ? [["Goal", num(goal), goal, "The step goal (Options)."]] : [])];
+    ...(goal ? [["Goal", num(goal), { goal: true }, "The step goal (Options), the dashed line."]] : []),
+    ...wbDayStats(periods.flatMap((p) => p.days), "steps", 0, "", "steps a day", (dow, avg) => ({
+      swap: [xs.map(() => null), ...years.map((y) => xs.map((no) => { const p = periods.find((q) => q.year === y && q.no === no); return p ? wbOfDay([p], "steps", dow)[0] : null; }))],
+      values: [avg], i: 0, // the pill at the height of its average
+    }), "the lines show the * alone")];
   return { x: { [by]: xs }, kind: by, series: [{ key: "steps-years", label: "Steps", title: `Steps a day, by ${by}`, icon: "steps", yTitle: "Steps a day", unit: "", dec: 0,
-    multi: true, points: true, tagsInside: true, lines, tags, stats, yMin: 0, color: lines[0].color, headHtml,
+    multi: true, points: true, tagsInside: true, lines, tags, stats, yMin: 0, goal: goal || null, color: lines[0].color, headHtml,
     tip: `Steps a day on average in each ${by}, one line per year.` }] };
 }
 
@@ -461,22 +505,26 @@ function wbBars(periods, by, goals, acts = []) {
     return [["Avg", `${num(avg, dec)}${unit}`, avg], ["Max", `${num(Math.max(...v), dec)}${unit}`, "max"]];
   };
   const per = `${by}s`;
+  const days = periods.flatMap((p) => p.days);
+  const dayStats = (key, dec, unit, word) => wbDayStats(days, key, dec, unit, word,
+    (dow) => ({ swap: [wbOfDay(periods, key, dow)] }), `each column shows the * of its ${by} alone`);
   const series = [
     { key: "floors", label: "Floors", title: `Floors a day, by ${by}`, yTitle: "Floors a day", unit: "", dec: 1, color: "#93cf99", bars: true, barSize: 0.88, yMin: 0, values: floors,
       iconHtml: DAY_CONTENT.floors[2](), tip: `Floors climbed a day, on average over the ${by} (about 3 m of ascent each).`,
-      stats: [...stat(floors, 1, ""), ...wbGoalStats(floors, goals.floors, per, "floor")] },
+      goal: goals.floors || null, stats: [...stat(floors, 1, ""), ...wbGoalStats(floors, goals.floors, per, "floor"), ...dayStats("floors", 1, "", "floors a day")] },
     { key: "intensity", label: "Intensity minutes", title: `Intensity minutes a week${by === "week" ? "" : ", by month"}`, yTitle: "Intensity", unit: "min", dec: 0, color: "#f5b27f", bars: true, barSize: 0.88, yMin: 0, values: intensity,
       iconHtml: DAY_CONTENT.intensity[2](), tip: "Moderate minutes plus vigorous minutes counted twice, as Garmin counts them: the average day of the period × 7.",
-      marks, marksPerX: true, marksTip, onMarks: marksPopup, stats: [...stat(intensity, 0, " min"), ...wbGoalStats(intensity, igoal, per, "weekly intensity", " min")] },
+      marks, marksPerX: true, marksTip, onMarks: marksPopup, goal: igoal || null, stats: [...stat(intensity, 0, " min"), ...wbGoalStats(intensity, igoal, per, "weekly intensity", " min")] },
     { key: "calories", label: "Active calories", title: `Active calories a day, by ${by}`, yTitle: "Active calories", unit: "kcal", dec: 0, color: "#e99bbf", bars: true, barSize: 0.88, yMin: 0, values: kcal,
-      icon: "active_calories", tip: `Calories burned by moving, without the resting (BMR) part; a day on average over the ${by}.`, stats: stat(kcal, 0, " kcal") },
+      icon: "active_calories", tip: `Calories burned by moving, without the resting (BMR) part; a day on average over the ${by}.`,
+      stats: [...stat(kcal, 0, " kcal"), ...dayStats("calories_active", 0, " kcal", "kcal a day")] },
   ].filter((s) => s.values.some((v) => v != null));
   return { x: { date: xs }, kind: "date", series, xExact: (v) => label.get(v) || "" };
 }
 
 // ---- Body -----------------------------------------------------------------------------------
 // On top: a silhouette (a quarter of the width) filled with the layers of the last full body
-// composition, beside it the weight with its moving average (and the weight goal); under them,
+// composition, beside it the weight with its trend (and the weight goal); under them,
 // the whole width, the layers as a share of the weight (stacked, fat at the bottom; a click on a
 // layer's pill hides it, so e.g. fat alone can be compared; the fat goal dashed). X-axis: every
 // weigh-in, or the average of each week or month.
@@ -493,7 +541,9 @@ const WB_CHART_LAYERS = WB_LAYERS.filter(([k]) => k !== "other");
 const WB_EXTRA = [["", "None"], ["load", "Training load"]];
 const WB_LOAD = "#7c5cd6";
 const WB_WEIGHT = "#86aef5", WB_WEIGHT_AVG = "#e8833a", WB_GOAL_GREY = "#8d99ae";
-const WB_AVG_DAYS = 90; // the weight's moving average: the mean of the last 90 days
+// The weight's trend counts a neighbourhood of the shown span / WB_TREND_PARTS days, at least
+// WB_TREND_MIN days
+const WB_TREND_PARTS = 16, WB_TREND_MIN = 10;
 const WB_SCALE_ICON = `<svg class="tb-metric-icon" viewBox="0 0 24 24" width="18" height="18" style="--tb-metric-size:18px;color:var(--m-energy)" aria-hidden="true"><rect x="3.5" y="3.5" width="17" height="17" rx="4" ${iconLine()}/><path d="M8 9.5a5 5 0 0 1 8 0" ${iconLine()}/><path d="m12 11 1.6-2.4" ${iconLine(1.8)}/></svg>`;
 
 // The layers of a weigh-in in kg (fat from its share, the rest is what fat, muscle and bone
@@ -515,6 +565,28 @@ function wbBodyPoints(items, by) {
     ...Object.fromEntries(keys.map((k) => [k, wbAvg(p.days, (d) => d[k])])),
     x: Math.round((wbMs(p.from) + wbMs(p.to)) / 2 / 1000), label: p.name, n: p.days.length,
   }));
+}
+
+// The trend at every point with a value: a straight line fitted to the weigh-ins around it, the
+// near ones counting most (Gaussian weights, width h days) - so the wider the period, the smoother
+// the line, and its end does not lag behind (as a moving average does). Where the weigh-ins around
+// a point bunch together, the slope is held back and the line stays near their mean.
+// { values, days: h }
+function wbTrend(xs, values) {
+  const pts = xs.map((x, i) => [x / 86400, values[i]]).filter(([, v]) => v != null);
+  const h = pts.length ? Math.max(WB_TREND_MIN, (pts[pts.length - 1][0] - pts[0][0]) / WB_TREND_PARTS) : WB_TREND_MIN;
+  return { days: h, values: xs.map((x, i) => {
+    if (values[i] == null) return null;
+    let w0 = 0, w1 = 0, w2 = 0, v0 = 0, v1 = 0;
+    for (const [d, v] of pts) {
+      const u = d - x / 86400;
+      if (Math.abs(u) > 4 * h) continue;
+      const w = Math.exp(-0.5 * (u / h) ** 2);
+      w0 += w; w1 += w * u; w2 += w * u * u; v0 += w * v; v1 += w * u * v;
+    }
+    const slope = (w0 * v1 - w1 * v0) / (w0 * w2 - w1 * w1 + (w0 * h / 4) ** 2);
+    return (v0 - slope * w1) / w0;
+  }) };
 }
 
 // The training load of a point: the moving average of the daily load (Fitness) over the 30 days
@@ -586,19 +658,19 @@ function wbBody(box, data, by, redraw) {
   }
   if (wpts.length) {
     const xs = wpts.map((p) => p.x), values = wpts.map((p) => p.weight);
-    const win = WB_AVG_DAYS * 86400;
-    const avg = xs.map((x, i) => (values[i] == null && extra ? null : wbAvg(wpts.filter((p, k) => k <= i && p.x > x - win), (p) => p.weight)));
-    const lines = [{ label: `Moving average, ${WB_AVG_DAYS} days`, values: avg, color: WB_WEIGHT_AVG, dash: [7, 4] },
+    const { values: trend, days: trendDays } = wbTrend(xs, values);
+    const lines = [{ label: "Trend", values: trend, color: WB_WEIGHT_AVG },
       ...(goals.weight ? [{ label: "Goal", values: xs.map(() => goals.weight), color: WB_GOAL_GREY, dash: [3, 4] }] : []),
       ...(extra === "load" ? [{ label: "Training load", values: wpts.map((p) => wbLoadOf(data.loads, by === "day" ? { x: p.x - 43200 } : p, by)), color: WB_LOAD, axis: "right",
         axisTitle: `Load, ${WB_LOAD_DAYS}-day average`, fill: true, fmt: (v) => num(v) }] : [])];
-    const last = values.findLastIndex((v) => v != null), lastAvg = avg.findLastIndex((v) => v != null);
+    const last = values.findLastIndex((v) => v != null), first = values.findIndex((v) => v != null);
+    const change = Math.round((trend[last] - trend[first]) * 10) / 10 || 0;
     // pills on the right at the height of their value (as Fitness): the latest weight, the
-    // latest average, the goal
+    // trend at its end, the goal
     const label0 = (i) => wpts[i].label;
     const tags = [{ label: "Weight", value: values[last], i: last, color: WB_WEIGHT, text: `${num(values[last], 1)} kg` },
-      { label: "Moving average", value: avg[lastAvg], i: lastAvg, values: avg, color: WB_WEIGHT_AVG, text: `${num(avg[lastAvg], 1)} kg`,
-        tip: `Moving average: the mean weight of the last ${WB_AVG_DAYS} days, ${num(avg[lastAvg], 1)} kg` },
+      { label: "Trend", value: trend[last], i: last, values: trend, color: WB_WEIGHT_AVG, text: `${num(trend[last], 1)} kg`,
+        tip: `Trend at the last weigh-in: ${num(trend[last], 1)} kg; over the period ${change > 0 ? "+" : ""}${num(change, 1)} kg` },
       ...(goals.weight ? [{ label: "Goal", value: goals.weight, color: WB_GOAL_GREY, text: `${num(goals.weight, 1)} kg` }] : [])];
     // Max and Min: pills at their heights among the others; hovering marks the weigh-in
     let hi = -1, lo = -1;
@@ -611,7 +683,7 @@ function wbBody(box, data, by, redraw) {
     weight = chartGroup(box.querySelector("[data-wb-weight]"), { x: { date: xs }, kind: "date", xExact: (v) => label.get(v) || "", shared,
       series: [{ key: "weight", label: "Weight", title: "Weight", yTitle: "Weight", unit: "kg", dec: 1, color: WB_WEIGHT, values, points: true, height: 330,
         iconHtml: WB_SCALE_ICON, lines, tags, stats, headHtml: `<div class="badges">${head}</div>`,
-        tip: `${by === "day" ? "Every weigh-in" : `Average weight of each ${by}`}. Moving average (dashed): the mean weight of the last ${WB_AVG_DAYS} days.${extra ? ` Training load (right axis): the daily load, moving average of the last ${WB_LOAD_DAYS} days.` : ""}` }],
+        tip: `${by === "day" ? "Every weigh-in" : `Average weight of each ${by}`}. Trend: the general direction without the day-to-day ups and downs (the weigh-ins within about ${num(trendDays)} days count most; a longer period gives a smoother line).${extra ? ` Training load (right axis): the daily load, moving average of the last ${WB_LOAD_DAYS} days.` : ""}` }],
       onHover: (i) => layers.show(i == null ? null : comp.find((p) => Math.abs(p.x - xs[i]) < 43200)?.x ?? null) });
     WB_GROUPS.push(weight);
     const card = box.querySelector("[data-wb-weight]");
@@ -629,56 +701,40 @@ function wbBody(box, data, by, redraw) {
   }
 }
 
-// Fitness age from VO2 max: the age at which that VO2 max is the average of the person's sex,
-// interpolated in the norms of the HUNT fitness study (mean VO2 max by age, ml/kg/min); 20 to 80.
-const WB_VO2_NORMS = {
-  male: [[25, 54.4], [35, 49.0], [45, 47.7], [55, 42.6], [65, 39.2], [75, 35.5]],
-  female: [[25, 43.0], [35, 40.0], [45, 38.4], [55, 34.4], [65, 31.1], [75, 28.6]],
-};
-function wbFitnessAge(vo2, sex) {
-  const n = WB_VO2_NORMS[sex === "female" ? "female" : "male"];
-  if (vo2 >= n[0][1]) return Math.max(20, n[0][0] - ((vo2 - n[0][1]) / (n[0][1] - n[1][1])) * 10);
-  for (let i = 1; i < n.length; i++) {
-    if (vo2 >= n[i][1]) return n[i - 1][0] + ((n[i - 1][1] - vo2) / (n[i - 1][1] - n[i][1])) * 10;
-  }
-  const [a, b] = n.slice(-2);
-  return Math.min(80, b[0] + ((b[1] - vo2) / (a[1] - b[1])) * 10);
-}
-
 // The tiles under the silhouette (the activity's tile style), together as high as the
 // composition: the latest value of the period large, a word on it, and a bar from the period's
-// lowest to its highest with the latest value marked.
+// lowest to its highest with the latest value marked. VO2 max: running and cycling side by side.
 const WB_BMI_CLASSES = [[18.5, "Underweight"], [25, "Normal weight"], [30, "Overweight"], [Infinity, "Obese"]];
 function wbTiles(el, data) {
-  const tile = (title, icon, color, value, unit, note, last, lo, hi, fmt, loTip, hiTip, tip) => {
-    const span = hi - lo, pos = span > 0 ? ((last - lo) / span) * 100 : 50;
-    return `<div class="card wb-tile" style="--c:${color}">
-      <h3 class="tile-title" data-tip="${esc(tip)}">${icon}<span>${title}</span></h3>
-      <div class="wb-tile-main"><span class="wb-tile-value">${value}</span>${unit ? `<span class="wb-tile-unit">${unit}</span>` : ""}${note ? `<span class="wb-tile-note">${note}</span>` : ""}</div>
+  const pick = (list, key, better) => list.reduce((b, x) => (!b || better(x[key], b[key]) ? x : b), null);
+  // one value of a tile: { key, list (with `day`, oldest first), fmt, note, color }
+  const value = ({ key, list, fmt, note, color }) => {
+    const hi = pick(list, key, (a, b) => a > b), lo = pick(list, key, (a, b) => a < b), last = list[list.length - 1];
+    const pos = hi[key] > lo[key] ? ((last[key] - lo[key]) / (hi[key] - lo[key])) * 100 : 50;
+    return `<div class="wb-tile-part"${color ? ` style="--c:${color}"` : ""}>
+      <div class="wb-tile-main"><span class="wb-tile-value">${fmt(last[key])}</span><span class="wb-tile-note">${typeof note === "function" ? note(last[key]) : note}</span></div>
       <div class="wb-tile-range">
         <div class="wb-tile-bar"><i style="left:${pos.toFixed(1)}%"></i></div>
-        <div class="wb-tile-ends"><span data-tip="${esc(loTip)}"><small>min</small> ${fmt(lo)}</span><span data-tip="${esc(hiTip)}"><small>max</small> ${fmt(hi)}</span></div>
+        <div class="wb-tile-ends"><span data-tip="${esc(`Lowest in the period: ${wbShort(lo.day)}`)}"><small>min</small> ${fmt(lo[key])}</span><span data-tip="${esc(`Highest in the period: ${wbShort(hi.day)}`)}"><small>max</small> ${fmt(hi[key])}</span></div>
       </div></div>`;
   };
-  const bmi = data.items.filter((r) => r.bmi != null);
-  const sex = person(CURRENT)?.sex;
-  const vo2 = (data.fitness || []).filter((d) => d.date >= data.from && d.date <= data.to && (d.vo2_run ?? d.vo2_ride) != null)
-    .map((d) => ({ day: d.date, vo2: d.vo2_run ?? d.vo2_ride }));
-  const ages = vo2.map((d) => ({ ...d, age: wbFitnessAge(d.vo2, sex) }));
-  const pick = (list, key, f) => list.reduce((b, x) => (!b || f(x[key], b[key]) ? x : b), null);
+  const tile = (title, icon, color, tip, parts) => `<div class="card wb-tile" style="--c:${color}">
+      <h3 class="tile-title" data-tip="${esc(tip)}">${icon}<span>${title}</span></h3>
+      <div class="wb-tile-parts">${parts.map(value).join("")}</div></div>`;
   let html = "";
+  const bmi = data.items.filter((r) => r.bmi != null);
   if (bmi.length) {
-    const hi = pick(bmi, "bmi", (a, b) => a > b), lo = pick(bmi, "bmi", (a, b) => a < b), last = bmi[bmi.length - 1];
-    html += tile("BMI", WB_SCALE_ICON, "#4f8ff0", num(last.bmi, 1), "", WB_BMI_CLASSES.find(([lim]) => last.bmi < lim)[1],
-      last.bmi, lo.bmi, hi.bmi, (v) => num(v, 1), `Lowest in the period: ${wbShort(lo.day)}`, `Highest in the period: ${wbShort(hi.day)}`,
-      "Body mass index of the last weigh-in in the period (the scale's): weight ÷ height². The bar runs from the period's lowest to its highest.");
+    html += tile("BMI", WB_SCALE_ICON, "#4f8ff0",
+      "Body mass index of the last weigh-in in the period (the scale's): weight ÷ height². The bar runs from the period's lowest to its highest.",
+      [{ key: "bmi", list: bmi, fmt: (v) => num(v, 1), note: (v) => WB_BMI_CLASSES.find(([lim]) => v < lim)[1] }]);
   }
-  if (ages.length) {
-    const old = pick(ages, "age", (a, b) => a > b), young = pick(ages, "age", (a, b) => a < b), last = ages[ages.length - 1];
-    html += tile("Fitness age", metricIcon("aerobic_effect", 18), "#26a69a", num(last.age), "years", "",
-      last.age, young.age, old.age, (v) => num(v), `Lowest in the period: ${wbShort(young.day)}, VO2 max ${num(young.vo2, 1)}`,
-      `Highest in the period: ${wbShort(old.day)}, VO2 max ${num(old.vo2, 1)}`,
-      "The age at which your VO2 max (the watch's latest estimate from a run, else a ride) is the average for your sex (Settings › People). The bar runs from the period's lowest to its highest.");
+  const sports = [["run", "Running"], ["ride", "Cycling"]].map(([g, label]) => ({ key: "vo2", note: label, color: VO2_COLORS[g], fmt: (v) => num(v),
+    list: (data.fitness || []).filter((d) => d.date >= data.from && d.date <= data.to && d[`vo2_${g}`] != null)
+      .map((d) => ({ day: d.date, vo2: d[`vo2_${g}`] })) })).filter((s) => s.list.length);
+  if (sports.length) {
+    html += tile("VO2 max", ICON_VO2.replace("<svg", '<svg class="tb-metric-icon" width="18" height="18" style="color:var(--m-breath)"'), sports[0].color,
+      "VO2 max the watch estimated (ml/kg/min), running and cycling apart: the latest estimate in the period. The bar runs from the period's lowest to its highest.",
+      sports);
   }
   el.innerHTML = html;
 }

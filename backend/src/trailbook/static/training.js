@@ -915,9 +915,11 @@ function marksTip(items) {
   return [markDays(items), ...lines, ...(by.size > 1 ? [`Total load ${num(total)}`] : [])].join("\n");
 }
 // The activities of an icon in a small window under it: type icon, name, day and load; a row
-// opens the activity. Closes on a click outside, Escape or leaving the page.
-function marksPopup(items, anchor) {
-  document.querySelector(".mark-pop")?.remove();
+// opens the activity. Closes on a click outside, Escape or leaving the page; opened by hovering
+// (`hover`, a dot) also when the pointer leaves both.
+function marksPopup(items, anchor, { hover = false } = {}) {
+  document.querySelector(".mark-pop")?.close();
+  items = [...items].sort((p, q) => p.act.day.localeCompare(q.act.day)); // oldest first
   const total = items.reduce((t, m) => t + (m.act.load || 0), 0);
   const pop = document.createElement("div");
   pop.className = "mark-pop";
@@ -930,7 +932,16 @@ function marksPopup(items, anchor) {
   pop.style.top = `${r.bottom + 6}px`;
   pop.style.left = `${Math.max(8, Math.min(innerWidth - pop.offsetWidth - 8, r.left + r.width / 2 - pop.offsetWidth / 2))}px`;
   if (r.bottom + 6 + pop.offsetHeight > innerHeight - 8) pop.style.top = `${Math.max(8, r.top - 6 - pop.offsetHeight)}px`;
-  const close = () => { pop.remove(); document.removeEventListener("pointerdown", outside, true); document.removeEventListener("keydown", esc_); window.removeEventListener("hashchange", close); window.removeEventListener("scroll", close); };
+  const close = () => { clearTimeout(timer); anchor.removeEventListener("mouseleave", leave); pop.remove(); document.removeEventListener("pointerdown", outside, true); document.removeEventListener("keydown", esc_); window.removeEventListener("hashchange", close); window.removeEventListener("scroll", close); };
+  pop.close = close;
+  let timer = 0;
+  const stay = () => clearTimeout(timer);
+  const leave = () => { stay(); timer = setTimeout(close, 250); }; // time to move onto the window
+  if (hover) {
+    anchor.addEventListener("mouseleave", leave);
+    pop.onmouseenter = stay;
+    pop.onmouseleave = leave;
+  }
   const outside = (e) => { if (!pop.contains(e.target) && !anchor.contains(e.target)) close(); };
   const esc_ = (e) => { if (e.key === "Escape") close(); };
   document.addEventListener("pointerdown", outside, true);

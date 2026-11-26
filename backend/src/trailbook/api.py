@@ -60,6 +60,7 @@ from . import (
     suggest,
     surface,
     tilechart,
+    together,
     update,
     weather,
     wellbeing,
@@ -118,6 +119,27 @@ ACTIVITY_SORTS = {
     "ascent": "ascent_m",
     "person": "person_id",
 }
+
+# ?sort= of the shared activities of two people, on (row A, row B, result): the type, training
+# type and name are the first person's, distance, time and share the part done together
+SHARED_SORTS = {
+    "date": lambda i: i[2].meet_t,
+    "type": lambda i: i[0]["activity_type"],
+    "workout": lambda i: i[0]["workout_override"] or i[0]["workout"],
+    "name": lambda i: (i[0]["name"] or i[1]["name"] or i[0]["activity_type"]).lower(),
+    "distance": lambda i: i[2].together_m,
+    "time": lambda i: i[2].together_s,
+    "share": lambda i: i[2].share,
+}
+
+
+def _sort_shared(items: list, q) -> list:
+    """Sorted by `sort` / `dir` (date, newest first, by default); without a value last."""
+    value = SHARED_SORTS.get(q.get("sort"), SHARED_SORTS["date"])
+    known = [i for i in items if value(i) is not None]
+    known.sort(key=lambda i: (value(i), i[2].meet_t, i[0]["id"]), reverse=q.get("dir") != "asc")
+    return known + [i for i in items if value(i) is None]
+
 
 # Settings › Imported lists the files and, as one row per day, Garmin Connect's daily summaries
 # (garmin_days). Both come from this union (`x`), so sorting, filters and paging cover both.
@@ -403,15 +425,13 @@ def create_app(db_path: str | Path) -> Starlette:
         return Response(status_code=202)
 
     async def type_counts(request: Request):
-        """Activities per type for one person (or everyone): filters list only used types."""
-        pid = request.query_params.get("person")
-        sql = "SELECT activity_type, COUNT(*) FROM activities"
-        args: tuple = ()
-        if pid:
-            sql += " WHERE person_id = ?"
-            args = (pid,)
+        """Activities per type for one person, two (comma list) or everyone: filters list
+        only used types."""
+        where, params = activity_filters({"person": request.query_params.get("person")}, "")
+        clause = f"WHERE {' AND '.join(where)}" if where else ""
+        sql = f"SELECT activity_type, COUNT(*) FROM activities {clause} GROUP BY activity_type"
         with closing(conn()) as c:
-            counts = dict(c.execute(sql + " GROUP BY activity_type", args).fetchall())
+            counts = dict(c.execute(sql, params).fetchall())
         return JSONResponse(counts)
 
     async def time_range(request: Request):
@@ -737,6 +757,166 @@ def create_app(db_path: str | Path) -> Starlette:
             return JSONResponse(
                 dict(c.execute("SELECT * FROM persons WHERE id = ?", (pid,)).fetchone())
             )
+
+    # ---- together: activities two people did together (together.py) ------------------
+
+    def _match_options(request: Request) -> tuple[int, int]:
+        """The Together options: least share of the shorter route (%) and the radius (m)."""
+        share = _int(
+            request, "share", together.DEFAULT_SHARE, together.MIN_SHARE, together.MAX_SHARE
+        )
+        radius = _int(
+            request,
+            "radius",
+            together.DEFAULT_RADIUS_M,
+            together.MIN_RADIUS_M,
+            together.MAX_RADIUS_M,
+        )
+        return share, radius
+
+    def _together_list(c: sqlite3.Connection, q, people: list[str], share: int, radius: int):
+        """Shared activities of two people, newest first, as (row A, row B, result). Returns
+        every one reaching `share`, those of them passing the time and type filters, and of
+        these the ones passing the training type filter too. One of the two activities
+        passing is enough."""
+        found = [
+            f for f in together.find(c, people[0], people[1], radius) if f[2].share * 100 >= share
+        ]
+        ids = sorted({i for a, b, _ in found for i in (a, b)})
+        among = f"id IN ({','.join('?' for _ in ids)})"
+        fields = ", ".join(ACTIVITY_LIST_FIELDS)
+        rows = {
+            r["id"]: dict(r)
+            for r in c.execute(f"SELECT {fields} FROM activities WHERE {among}", ids)
+        }
+        items = [(rows[a], rows[b], r) for a, b, r in found]
+        items.sort(key=lambda i: (i[2].meet_t, i[0]["id"]), reverse=True)
+
+        def passing(where: list[str], params: list) -> list:
+            sql = f"SELECT id FROM activities WHERE {' AND '.join([among, *where])}"
+            ok = {r["id"] for r in c.execute(sql, [*ids, *params])}
+            return [i for i in items if i[0]["id"] in ok or i[1]["id"] in ok]
+
+        where, params = activity_filters(q, "", person=False)
+        w_where, w_params = _workout_filter(q)
+        base = passing(where, params)
+        chosen = passing([*where, *w_where], [*params, *w_params]) if w_where else base
+        return items, base, chosen
+
+    def _together_totals(chosen: list) -> dict:
+        def local_day(a: dict) -> str:
+            t = together.epoch(a["start_time_utc"]) + (a["utc_offset_s"] or 0)
+            return datetime.fromtimestamp(t, UTC).strftime("%Y-%m-%d")
+
+        longest = max(chosen, key=lambda i: i[2].together_m, default=None)
+        people = []
+        for side in (0, 1):
+            # an activity shared twice (the other watch was restarted) counts once
+            acts = list({i[side]["id"]: i[side] for i in chosen}.values())
+            with_hr = [a for a in acts if a["avg_hr"] and a["time_s"]]
+            hr_time = sum(a["time_s"] for a in with_hr)
+            total = {
+                k: sum(a[k] or 0 for a in acts)
+                for k in ("distance_m", "time_s", "ascent_m", "calories")
+            }
+            avg_hr = sum(a["avg_hr"] * a["time_s"] for a in with_hr) / hr_time if hr_time else None
+            people.append({**total, "avg_hr": round(avg_hr) if avg_hr else None})
+        days = sorted(local_day(i[0]) for i in chosen)
+        return {
+            "count": len(chosen),
+            "active_days": len(set(days)),
+            "first": days[0] if days else None,
+            "last": days[-1] if days else None,
+            "together_m": sum(i[2].together_m for i in chosen),
+            "together_s": sum(i[2].together_s for i in chosen),
+            "share": sum(i[2].share for i in chosen) / len(chosen) if chosen else None,
+            "longest_m": longest[2].together_m if longest else None,
+            "longest_day": local_day(longest[0]) if longest else None,
+            "people": people,
+        }
+
+    def _shared_values(r: together.Shared) -> dict:
+        return {
+            "share": round(r.share, 4),
+            "together_m": round(r.together_m),
+            "together_s": round(r.together_s),
+            "meet_time_utc": datetime.fromtimestamp(r.meet_t, UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        }
+
+    async def together_activities(request: Request):
+        """The activities two people (`person=a,b`) did together, with their totals; sorted
+        like the activities list (SHARED_SORTS)."""
+        q = request.query_params
+        people = [p for p in (q.get("person") or "").split(",") if p]
+        if len(people) != 2 or people[0] == people[1]:
+            raise HTTPException(400, "person must name two different people")
+        share, radius = _match_options(request)
+        limit = _int(request, "limit", 50, 1, 1000)
+        offset = _int(request, "offset", 0, 0, 10**9)
+
+        def work():
+            with closing(conn()) as c:
+                every, base, chosen = _together_list(c, q, people, share, radius)
+            type_counts: dict[str, int] = {}
+            for a, b, _ in every:
+                for key in {a["activity_type"], b["activity_type"]}:
+                    type_counts[key] = type_counts.get(key, 0) + 1
+            workout_counts: dict[str, int] = {}
+            for a, b, _ in base:
+                for key in {x["workout_override"] or x["workout"] or "none" for x in (a, b)}:
+                    workout_counts[key] = workout_counts.get(key, 0) + 1
+            items = []
+            for a, b, r in _sort_shared(chosen, q)[offset : offset + limit]:
+                item = {"a": a, "b": b, **_shared_values(r)}
+                if q.get("track") == "1":
+                    item["lines"] = [r.line_a, r.line_b]
+                items.append(item)
+            return {
+                "total": len(chosen),
+                "totals": _together_totals(chosen),
+                "items": items,
+                "type_counts": type_counts,
+                "workout_counts": workout_counts,
+            }
+
+        return JSONResponse(await run_in_threadpool(work))
+
+    async def together_pair(request: Request):
+        """One shared activity: when and where the two were together, on one clock (seconds
+        from the first moment together), and the shared activities before and after it."""
+        ids = (request.path_params["a"], request.path_params["b"])
+        share, radius = _match_options(request)
+
+        def work():
+            with closing(conn()) as c:
+                people = [_activity_or_404(c, i)["person_id"] for i in ids]
+                r = together.pair(c, ids[0], ids[1], radius)
+                if r is None:
+                    raise HTTPException(404, "these activities were not done together")
+                chosen = _together_list(c, request.query_params, people, share, radius)[2]
+            # newest first: the neighbours in time among the filtered ones
+            key = (r.meet_t, ids[0])
+            newer = [i for i in chosen if (i[2].meet_t, i[0]["id"]) > key]
+            older = [i for i in chosen if (i[2].meet_t, i[0]["id"]) < key]
+
+            def ref(i) -> dict:
+                return {"a": i[0]["id"], "b": i[1]["id"]}
+
+            def clock(runs) -> list:
+                return [[round(t0 - r.meet_t, 1), round(t1 - r.meet_t, 1)] for t0, t1 in runs]
+
+            return {
+                **_shared_values(r),
+                "people": people,
+                "offsets": [round(r.offset_a - r.meet_t, 1), round(r.offset_b - r.meet_t, 1)],
+                "span": [round(r.first_t - r.meet_t, 1), round(r.last_t - r.meet_t, 1)],
+                "runs": [clock(r.runs_a), clock(r.runs_b)],
+                "lines": [r.line_a, r.line_b],
+                "next": ref(newer[-1]) if newer else None,
+                "prev": ref(older[0]) if older else None,
+            }
+
+        return JSONResponse(await run_in_threadpool(work))
 
     # ---- activities ------------------------------------------------------------------
 
@@ -2770,6 +2950,8 @@ def create_app(db_path: str | Path) -> Starlette:
         Route("/api/persons", person_create, methods=["POST"]),
         Route("/api/persons/order", persons_order, methods=["PUT"]),
         Route("/api/compare", compare),
+        Route("/api/together", together_activities),
+        Route("/api/together/{a:int}/{b:int}", together_pair),
         Route("/api/devices", devices),
         Route("/api/devices/{serial:int}", device_update, methods=["PATCH"]),
         Route("/api/settings", settings_get),
