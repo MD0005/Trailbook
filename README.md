@@ -119,9 +119,6 @@ Trailbook runs in three ways; the app is the same in all of them.
 
 [![Add repository to my Home Assistant](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2FMD0005%2FTrailbook)
 
-Home Assistant calls add-ons **apps** since version 2026.2; in an older version look for
-*Add-ons* and *Add-on store* instead.
-
 1. Click the button above, or in Home Assistant open **Settings › Apps › Install app**,
    click **⋮ › Repositories**, click **Add**, paste `https://github.com/MD0005/Trailbook` and
    confirm with **Add**. If Trailbook does not show up, refresh the page.
