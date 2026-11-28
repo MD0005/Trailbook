@@ -802,6 +802,7 @@ underscores (`Michał Nowak` → `michal_nowak`); renaming the person changes on
 | `ride_distance_28d` | Cycling distance (km) of the last 28 days; virtual and e-bike rides count. |
 | `run_ride_distance_year` | Running + cycling distance (km) since 1 January; attributes `run_km`, `ride_km`. |
 | `distance_year` | Distance (km) of every activity since 1 January, whatever its type (motor sports too). |
+| `distance_all_time` | Distance (km) of every activity since the first one, whatever its type. |
 
 - The sports are the activity groups of the app (running includes treadmill, trail and virtual
   runs). Activities excluded from the statistics add no distance. Values have one decimal.

@@ -52,6 +52,7 @@ def test_values(tmp_path):
         "ride_distance_28d": 40.0,
         "run_ride_distance_year": 53.3,
         "distance_year": 56.3,
+        "distance_all_time": 66.3,
     }
     year = found["run_ride_distance_year"]["attributes"]
     assert (year["run_km"], year["ride_km"]) == (13.3, 40.0)
@@ -61,6 +62,8 @@ def test_values(tmp_path):
     assert all(s["enabled"] for s in found.values())
     history = dict(found["run_ride_distance_year"]["history"])
     assert (history[date(2025, 12, 31)], history[date(2026, 1, 1)]) == (10.0, 0.0)
+    ever = dict(found["distance_all_time"]["history"])  # a new year does not reset it
+    assert (ever[date(2025, 12, 31)], ever[date(2026, 1, 1)]) == (10.0, 10.0)
     # the 28 days of a day: the run of 02-01 is in until 02-28
     window = dict(found["run_distance_28d"]["history"])
     assert (window[date(2026, 2, 28)], window[date(2026, 3, 1)]) == (5.0, 8.3)
@@ -122,10 +125,10 @@ def ha(monkeypatch):
 
 def test_publish_sends_only_what_changed(tmp_path, ha):
     c = _conn(tmp_path)
-    assert hasensors.publish(c, TODAY) == 5
+    assert hasensors.publish(c, TODAY) == 6
     assert ha.states["sensor.trailbook_ann_run_distance_28d"][0] == "8.3"
     # a year of history per sensor and call, today left out
-    assert len(ha.statistics) == 10
+    assert len(ha.statistics) == 12
     first = ha.statistics[0]
     assert first["type"] == "recorder/import_statistics"
     assert first["metadata"]["source"] == "recorder" and first["metadata"]["mean_type"] == 1
@@ -134,9 +137,9 @@ def test_publish_sends_only_what_changed(tmp_path, ha):
     ha.statistics.clear()
     assert hasensors.publish(c, TODAY) == 0 and not ha.statistics
     ha.states.clear()  # Home Assistant restarted: the states again, not the history
-    assert hasensors.publish(c, TODAY) == 5 and not ha.statistics
+    assert hasensors.publish(c, TODAY) == 6 and not ha.statistics
     _activity(c, "2026-02-25", "ride", 10)  # only this year's values change
-    assert hasensors.publish(c, TODAY) == 3
+    assert hasensors.publish(c, TODAY) == 4
     assert {m["stats"][0]["start"][:4] for m in ha.statistics} == {"2026"}
 
 
@@ -146,14 +149,14 @@ def test_switched_off_removed_and_on_again_when_it_comes_back(tmp_path, ha):
     assert hasensors.set_enabled(c, "ann", "distance_year", False)
     assert not hasensors.set_enabled(c, "ann", "nothing", False)
     hasensors.publish(c, TODAY)
-    assert "sensor.trailbook_ann_distance_year" not in ha.states and len(ha.states) == 4
+    assert "sensor.trailbook_ann_distance_year" not in ha.states and len(ha.states) == 5
     assert not _by_key(hasensors.sensors(c, TODAY))["distance_year"]["enabled"]
     c.execute("UPDATE persons SET archived = 1")
     hasensors.publish(c, TODAY)
     assert ha.states == {}
     c.execute("UPDATE persons SET archived = 0")
     ha.statistics.clear()
-    assert hasensors.publish(c, TODAY) == 5 and ha.statistics  # all on, with their history
+    assert hasensors.publish(c, TODAY) == 6 and ha.statistics  # all on, with their history
     assert _by_key(hasensors.sensors(c, TODAY))["distance_year"]["enabled"]
 
 

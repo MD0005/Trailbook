@@ -64,6 +64,12 @@ KINDS = {
         "mdi:sigma",
         "Distance of every activity since 1 January, whatever its type.",
     ),
+    "distance_all_time": (
+        "All activities, all time",
+        "km",
+        "mdi:map-marker-path",
+        "Distance of every activity ever recorded, whatever its type.",
+    ),
 }
 
 
@@ -125,6 +131,7 @@ def series(c: sqlite3.Connection, person_id: str, today: date) -> dict[str, list
     day = date.fromisoformat(rows[0]["day"])
     window = [0.0, 0.0]
     year = [0.0, 0.0, 0.0]
+    total = 0.0
     estimate: tuple[float, date] | None = None
     none = (0.0, 0.0, 0.0)
     km = lambda m: round(m / 1000, 1) + 0.0  # noqa: E731 (+ 0.0: never "-0.0")
@@ -135,6 +142,7 @@ def series(c: sqlite3.Connection, person_id: str, today: date) -> dict[str, list
             year = [0.0, 0.0, 0.0]
         window = [window[i] + new[i] - gone[i] for i in (0, 1)]
         year = [year[i] + new[i] for i in range(3)]
+        total += new[2]
         if day in vo2:
             estimate = (round(vo2[day], 1), day)
         if estimate:
@@ -144,6 +152,7 @@ def series(c: sqlite3.Connection, person_id: str, today: date) -> dict[str, list
         parts = {"run_km": km(year[0]), "ride_km": km(year[1])}
         out["run_ride_distance_year"].append((day, km(year[0] + year[1]), parts))
         out["distance_year"].append((day, km(year[2]), {}))
+        out["distance_all_time"].append((day, km(total), {}))
         day += timedelta(days=1)
     return out
 

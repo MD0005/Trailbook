@@ -186,7 +186,8 @@ In Home Assistant the watched folder must be inside a folder the app can see: `/
 
 The Home Assistant app creates sensors for every person by itself, for example
 `sensor.trailbook_anna_run_distance_28d`: VO2 max (running), running and cycling over the last
-4 weeks, running and cycling this year, and the distance of all activities this year. Their
+4 weeks, running and cycling this year, and the distance of all activities this year and of all
+time. Their
 history since the first activity goes into Home Assistant's long-term statistics. See the list,
 with what each one counts, under **Home Assistant › Sensors**, and switch off the ones you do
 not want.

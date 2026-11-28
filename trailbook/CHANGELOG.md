@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.29
+
+### Added
+- Home Assistant sensor with the distance of all activities of all time, with its history.
+
 ## 0.1.28
 
 ### Added

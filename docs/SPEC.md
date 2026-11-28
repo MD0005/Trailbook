@@ -1417,7 +1417,7 @@ workouts* on. Code: `planner.py` (workouts, estimates, text), `icu.py` (key, syn
 - The add-on makes sensors for every person who has activities (`hasensors.py`), pushed like
   §12a (`homeassistant.set_state`, so without a unique id: not editable in HA's UI): VO2 max
   running, running and cycling distance of 28 days, running + cycling distance of the year and
-  the distance of all activities of the year. Values and rules: Manual › Sensors.
+  the distance of all activities of the year and of all time. Values and rules: Manual › Sensors.
 - **Home Assistant › Sensors:** a card per person, a row per sensor — name, entity id, value,
   an **On / Off** badge; the row's tooltip says what it counts. A sensor is **on when it
   appears** (also when it comes back); only the person switches it off (setting
