@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.1.30
+
+### Added
+- Gear tab: Electronics (moved from Statistics) and, in the Home Assistant app, Equipment.
+- Equipment: shoes and bikes from Home Assistant gear sensors (e.g. from Garmin Connect) with
+  distance, wear, when they were used and the activities that used them.
+- The activity page shows the shoes or bike paired with the activity in its Gear tile.
+- Gear › Electronics: several devices can share one line of the In use chart.
+- Home Assistant › Cards: Duplicate makes a copy of a card.
+
+### Changed
+- Statistics › Compare years: one pair of charts, for the metric picked in the Data badge.
+- Statistics › Records: the tables without a curve sit side by side.
+- Treadmill and indoor runs and walks have no records over a distance or a climb.
+- The activity page's Gear tile lists every device the activity file names.
+- The Home Assistant page and Equipment show only in the Home Assistant app.
+
+### Fixed
+- A treadmill distance corrected on the watch now also applies to charts, laps and best efforts.
+- Copying a card's dashboard text works over http too, with an icon inside the text box.
+- Option lists in the card editor are no longer cut off by its window.
+- Tooltips of the power and heart rate curves are no longer cut off by their tile.
+- Statistics: All time stays when the Type filter is changed.
+
 ## 0.1.29
 
 ### Added

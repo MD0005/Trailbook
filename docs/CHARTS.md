@@ -198,8 +198,10 @@ The activity charts of both people, one column each (SPEC §10a), coupled on one
   columns of all three and fades the other years' lines on every chart below
   (`api.emphasize(label)`); a click on a column keeps its year marked until it is clicked again
   or the page reloads.
-  Then four pairs of charts (cumulative, then per period), each the full width, one under the
-  other, and Steps per period and their running total (daily data, the Type filter does not apply).
+  Then one pair of charts (cumulative, then per period), each the full width, one under the
+  other, for the metric picked in the **Data** badge at the right of the first chart's head:
+  Distance (on entering the tab, kept while on it) | Activities | Elevation gain | Time | Steps
+  (daily data, the Type filter does not apply); the titles and icons follow the metric.
   The per-period charts (not the running totals) have a **Max** pill among the year pills, at
   its height (pushed aside like them when they would overlap): the highest week or month of all
   years in that year's colour; hovering it marks the point and the tooltip names the period and
@@ -226,7 +228,8 @@ The activity charts of both people, one column each (SPEC §10a), coupled on one
   (pace only on foot). They fill the height of
   the table tile beside them.
 
-- Gear: **In use** is a chart of spans (plain HTML, not uPlot): a row per device, its picture
+- Gear (both parts): **In use** is a chart of spans (plain HTML, not uPlot): a row per device
+  or equipment, its picture
   as the y label (the end of the serial number under it when two share a name), the first used
   on top; the plot framed, dashed lines between the rows; a thick rounded bar (20 px, at least
   4 px wide) over each stretch of use (first and last day whole), a break of 30 days or more
@@ -238,6 +241,10 @@ The activity charts of both people, one column each (SPEC §10a), coupled on one
   Hovering the plot: a vertical line with the exact date in a flag on the x axis; hovering a
   bar: its dates, then the device, its serial number, first and last date, activities, time and
   distance (the same without the stretch on a picture).
+  A joined line (Electronics): one rounded bar per unbroken stretch of its devices, cut where
+  one starts or ends; each part in its device's colour, the height shared equally by those in
+  use then; the label is the first one's picture and ×n, its tooltip names them with their
+  periods. Equipment: the x axis runs from the first day of statistics to today.
 
 ## Fitness page
 

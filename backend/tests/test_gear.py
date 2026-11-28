@@ -277,9 +277,9 @@ def test_activities_of_one_device(tmp_path):
     # previous / next stay within the device
     one = client.get(f"/api/activities/{first}?device=sn222").json()
     assert one["next_id"] == third
-    # the activity page names the device the entry joined
+    # the activity page lists what the file names, counted for a device or not
     gear_tile = client.get(f"/api/activities/{third}").json()["devices"]
-    assert [(d["name"], d["serial"]) for d in gear_tile] == [("HRM-Dual", 222)]
+    assert [(d["name"], d["serial"]) for d in gear_tile] == [("HRM-Dual", None)]
 
 
 def test_api(tmp_path):

@@ -1363,7 +1363,8 @@ function curveChart(root, { points, color, unit, label, compareLabel, onHover = 
     gr.addColorStop(0, withAlpha(c, fillAlpha(a0))); gr.addColorStop(1, withAlpha(c, 0.03));
     return gr;
   };
-  const tip = Object.assign(document.createElement("div"), { className: "chart-tip", hidden: true });
+  // fixed on the window (curve-tip): the curve's tile would cut it off
+  const tip = Object.assign(document.createElement("div"), { className: "chart-tip curve-tip", hidden: true });
   const u = new uPlot({
     width: holder.clientWidth || 300, height: Math.max(140, holder.clientHeight || 150), padding: [8, 14, 0, 0], legend: { show: false },
     scales: { x: { time: false, range: (uu, mn, mx) => [mn, mx] } }, // durations evenly spaced, each labelled
@@ -1393,8 +1394,9 @@ function curveChart(root, { points, color, unit, label, compareLabel, onHover = 
         // compact: the duration or distance, then one line per series - value, its name, the date
         const line = (v, c, name, date) => `<div><b${c ? ` style="color:${c}"` : ""}>${fmtVal(v, p)}</b> <span class="chart-tip-name">${name}${date ? ` · ${date}` : ""}</span></div>`;
         tip.innerHTML = `<div class="chart-tip-name">Best ${keyFull(p.key)}</div>${p.value != null ? line(p.value, color, mainLabel.toLowerCase(), p.date) : ""}${p.compare != null ? line(p.compare, "", compareLabel.toLowerCase(), p.compareDate) : ""}`;
-        const left = uu.cursor.left, w = uu.over.clientWidth;
-        tip.style.transform = `translate(${left + 12 + tip.offsetWidth > w ? left - 12 - tip.offsetWidth : left + 12}px, 4px)`;
+        const left = uu.cursor.left, w = uu.over.clientWidth, r = uu.over.getBoundingClientRect();
+        const x = r.left + (left + 12 + tip.offsetWidth > w ? left - 12 - tip.offsetWidth : left + 12);
+        tip.style.transform = `translate(${Math.max(8, Math.min(x, document.documentElement.clientWidth - tip.offsetWidth - 8))}px, ${r.top + 4}px)`;
       }],
     },
   }, [pts.map((p, k) => k), pts.map((p) => p.value), pts.map((p) => p.compare ?? null)], holder);

@@ -255,6 +255,7 @@ const NAV = [
   { key: "fitness", label: "Fitness", single: true },
   { key: "wellbeing", label: "Wellbeing", single: true },
   { key: "stats", label: "Statistics", single: true },
+  { key: "gear", label: "Gear", single: true },
 ];
 // What a pair of people has: the other tabs are not built for two yet.
 const PAIR_PAGES = ["activities", "settings", "manual", "ha"];
@@ -303,7 +304,7 @@ function renderHeader(section) {
     </div>
     <button id="theme" class="icon" aria-label="Switch theme"></button>
     <a href="#/manual" class="icon-link ${section === "manual" ? "active" : ""}" title="Manual" aria-label="Manual">${ICON.help}</a>
-    <a href="#/ha" class="icon-link ${section === "ha" ? "active" : ""}" title="Home Assistant" aria-label="Home Assistant">${ICON.ha}</a>
+    ${APP.ha ? `<a href="#/ha" class="icon-link ${section === "ha" ? "active" : ""}" title="Home Assistant" aria-label="Home Assistant">${ICON.ha}</a>` : ""}
     <a href="#/settings" class="icon-link ${section === "settings" ? "active" : ""}" title="Settings" aria-label="Settings">${ICON.gear}</a>`;
   const menu = document.getElementById("person-menu");
   document.getElementById("person-btn").onclick = (e) => { e.stopPropagation(); menu.hidden = !menu.hidden; };
@@ -742,7 +743,7 @@ function activitySummary(t) {
 async function renderActivities(params) {
   // Filters and sort stay for this tab: "#/activities" with no parameters (the back button, the
   // tab link from an activity) brings them back; leaving the tab or reloading forgets them.
-  const KEEP = ["from", "to", "last", "years", "types", "workouts", "device", "person", "sort", "dir"];
+  const KEEP = ["from", "to", "last", "years", "types", "workouts", "device", "equipment", "person", "sort", "dir"];
   if (!Object.keys(params).length && TAB.filter && Object.keys(TAB.filter).length) {
     location.replace("#/activities?" + new URLSearchParams(TAB.filter));
     return;
@@ -828,7 +829,7 @@ async function renderActivities(params) {
   view.innerHTML = `
     ${pageHead("Activities", `
       ${timeBadge(params)}${typeBadge(params)}${workoutBadge(params, data.workout_counts)}
-      ${data.device ? badgeHtml("device", "Device", `${esc(data.device.name || "unknown")} ×`, { on: true }) : ""}
+      ${data.device ? badgeHtml("device", params.equipment ? "Equipment" : "Device", `${esc(data.device.name || "unknown")} ×`, { on: true }) : ""}
       <button class="badge ${showSummary ? "on" : ""}" data-kpis>Summary</button>`,
       switchHtml("view", VIEWS.map(([k, label, icon]) => [k, `${icon}<span>${label}</span>`]), mode))}
     <div data-summary ${showSummary ? "" : "hidden"}>${activitySummary(data.totals)}</div>
@@ -836,10 +837,10 @@ async function renderActivities(params) {
   bindBadges(view.querySelector(".page-head"));
   bindTable("#/activities", params);
   bindFilterBadges(view.querySelector(".page-head"), "#/activities", params, { drop: ["date"] });
-  // one device only (a click on it on Statistics › Gear): the badge takes the filter off
+  // one device or equipment only (a click on it on Gear): the badge takes the filter off
   const off = view.querySelector("[data-badge=device]");
   if (off) off.onclick = () => {
-    const { device, ...rest } = params;
+    const { device, equipment, ...rest } = params;
     location.hash = "#/activities?" + new URLSearchParams(rest);
   };
   infinite(view, data.items.length, data.total, async (offset) => (await fetchPage(offset)).items, (items) => {
@@ -1450,8 +1451,9 @@ async function renderActivity(id, col = null) {
     route?.highlight?.([[i0, i1]]);
   };
   // Top tiles: rebuilt when the comparison changes.
-  let curve = null, hrCurve = null;
+  let curve = null, hrCurve = null, topData = null;
   const renderTop = (records, year) => {
+    topData = [records, year];
     const cmp = COMPARE.find(([k]) => k === compare) || COMPARE[0];
     const efforts = (a.best_efforts || []).map((e) => {
       const r = records ? records[`${e.kind}:${e.key}:${e.v}`] : { value: e.record, start_time_utc: e.record_time, utc_offset_s: e.record_offset_s };
@@ -1474,7 +1476,7 @@ async function renderActivity(id, col = null) {
     // a column: every group has its place (an empty one too), so both sides line up
     const place = (name, html) => `<div class="t-stack t-${name}">${html}</div>`;
     top.innerHTML = col ? statsBox + place("gear", devicesHtml(a) + surfaceCardHtml(a)) + place("zones", hrZonesCard(a) + powerZonesCard(a))
-      + place("curve", powerCard(a, efforts) || hrCurveCard(efforts)) + place("efforts", efforts_()) : `${statsBox}${(a.devices || []).length <= 1
+      + place("curve", powerCard(a, efforts) || hrCurveCard(efforts)) + place("efforts", efforts_()) : `${statsBox}${(a.devices || []).length + (a.equipment || []).length <= 1
       // no device tile: the surface goes under the heart rate zones (no column of its own that
       // would take room from the power curve)
       // Power in zones goes under the heart rate zones
@@ -1535,6 +1537,13 @@ async function renderActivity(id, col = null) {
     if (yr) yearRecords = byKey(yr);
     renderTop(cr ? byKey(cr) : null, yearRecords);
   };
+  // Paired equipment comes from Home Assistant: asked apart, so the page does not wait for it.
+  if (APP?.ha) {
+    api(`activities/${id}/equipment`).then(({ items }) => {
+      a.equipment = items;
+      if (items.length && topData && root.isConnected) renderTop(...topData);
+    }).catch(() => {});
+  }
   // Moved, added or removed lines are saved at once (seconds from the start); Edit › Reset lines
   // drops them and the detection is back.
   const saveLines = (kind, at) => {
@@ -1726,6 +1735,10 @@ const DEVICE_ART = {
   light: `<rect x="22" y="10" width="20" height="44" rx="8" class="fill"/><rect x="26" y="16" width="12" height="20" rx="4" class="accent"/><path d="M14 26h-6M14 32h-8M14 38h-6"/>`,
   speed_cadence: `<rect x="18" y="20" width="28" height="24" rx="9" class="fill"/><circle cx="32" cy="32" r="5" class="screen"/><path d="M8 32h10M46 32h10"/>`,
   foot_pod: `<path d="M10 42c10 0 14-12 24-12h12c6 0 10 4 10 10v4H10z" class="fill"/><rect x="28" y="22" width="14" height="10" rx="4" class="screen"/>`,
+  shoe: `<path d="M6 44V28c0-3 3-4 5-2 3 4 7 6 12 4l5-3c4 6 11 10 21 11 6 1 9 4 9 6z" class="fill"/><path d="M6 44h52v4c0 2-2 4-4 4H10c-2 0-4-2-4-4z" class="screen"/><path d="M29 31l-4 5M35 35l-4 5M41 37l-3 5" class="accent-stroke"/>`,
+  bike: `<circle cx="15" cy="42" r="11" class="fill"/><circle cx="49" cy="42" r="11" class="fill"/><path d="M15 42l10-18h17l7 18M25 24l8 18H15M33 42l9-18M21 17h9M25 24l-2-7M42 24l-2-8h7" class="accent-stroke"/>`,
+  ebike: `<circle cx="15" cy="44" r="11" class="fill"/><circle cx="49" cy="44" r="11" class="fill"/><path d="M15 44l10-17h17l7 17M25 27l8 17H15M33 44l9-17M21 20h9M25 27l-2-7M42 27l-2-8h7"/><path d="M36 3l-7 10h6l-3 9 10-12h-6l3-7z" class="accent"/>`,
+  equipment: `<rect x="10" y="22" width="44" height="32" rx="8" class="fill"/><path d="M23 22v-5c0-3 2-5 5-5h8c3 0 5 2 5 5v5"/><path d="M10 36h44M28 33h8v7h-8z" class="accent-stroke"/>`,
   scale: `<rect x="8" y="8" width="48" height="48" rx="12" class="fill"/><rect x="20" y="15" width="24" height="13" rx="4" class="screen"/><path d="M32 25l4-6" class="accent-stroke"/><path d="M18 46h8M38 46h8"/>`,
   trainer: `<circle cx="22" cy="40" r="12" class="fill"/><circle cx="22" cy="40" r="4"/><path d="M34 40h18l4 14H30M44 40V24l8-6"/>`,
   app: `<rect x="18" y="4" width="28" height="56" rx="6" class="fill"/><rect x="22" y="12" width="20" height="38" rx="2" class="screen"/><path d="M27 34l4-8 4 6 3-4" class="accent-stroke"/>`,
@@ -1736,16 +1749,25 @@ const DEVICE_KIND_LABEL = { watch: "Watch", bike_computer: "Bike computer", app:
   speed_cadence: "Speed / cadence sensor", foot_pod: "Foot pod", shifting: "Shifting", sensor: "Sensor",
   scale: "Scale" };
 const devicePic = (d) => `<div class="device-pic">${d.image ? `<img src="${esc(d.image)}" alt="">` : `<svg viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">${DEVICE_ART[d.kind] || DEVICE_ART.sensor}</svg>`}</div>`;
+// The Gear tile: the activity's devices, then the shoes or bike paired with it (a.equipment,
+// Gear › Equipment), each a link to its activities in its person's own view.
 function devicesHtml(a) {
   const seen = new Set();
   const list = (Array.isArray(a.devices) ? a.devices : []).filter((d) => {
     const k = `${d.maker}|${d.name}|${d.kind}`;
     return !seen.has(k) && seen.add(k);
   });
-  if (!list.length) return "";
-  return `<div class="card act-tile act-devices"><h3 class="tile-title">${metricIcon("watch", 18)}<span>Gear</span></h3><div class="devices">${list.map((d) => `<div class="device">
-      ${devicePic(d)}
-      <div class="device-text"><b>${esc(d.name || "Device")}</b><span title="${esc([d.maker, DEVICE_KIND_LABEL[d.kind]].filter(Boolean).join(" · "))}">${esc([d.maker, DEVICE_KIND_LABEL[d.kind]].filter(Boolean).join(" · "))}</span></div></div>`).join("")}</div></div>`;
+  const equipment = a.equipment || [];
+  if (!list.length && !equipment.length) return "";
+  const text = (name, sub) => `<div class="device-text"><b>${esc(name)}</b><span title="${esc(sub)}">${esc(sub)}</span></div>`;
+  const devices = list.map((d) => `<div class="device">${devicePic(d)}${text(d.name || "Device", [d.maker, DEVICE_KIND_LABEL[d.kind]].filter(Boolean).join(" · "))}</div>`);
+  const paired = equipment.map((x) => {
+    const inner = `${devicePic(x)}${text(x.label, EQ_KIND_LABEL[x.kind])}`;
+    return CURRENT === a.person_id
+      ? `<a class="device plain-link" href="#/activities?${new URLSearchParams({ equipment: x.key })}" data-tip="Show its activities">${inner}</a>`
+      : `<div class="device">${inner}</div>`;
+  });
+  return `<div class="card act-tile act-devices"><h3 class="tile-title">${metricIcon("watch", 18)}<span>Gear</span></h3><div class="devices">${devices.join("")}${paired.join("")}</div></div>`;
 }
 
 // A segment ridden in the activity: title with its name (link), a Show segment badge and the
@@ -2756,6 +2778,18 @@ function switchHtml(name, options, current) {
   return `<div class="switch" role="group">${options.map(([v, l]) =>
     `<button class="${v === current ? "on" : ""}" data-switch="${name}" data-value="${v}">${l}</button>`).join("")}</div>`;
 }
+// A panel in a dialog would be cut off by it: placed on the window instead, under its badge
+// (higher up when there is little room), never past an edge. Phones have their own rule (CSS).
+function floatPanel(badge, panel) {
+  if (!badge.closest("dialog") || matchMedia("(max-width: 760px)").matches) return;
+  const gap = 6, edge = 8;
+  Object.assign(panel.style, { position: "fixed", right: "auto", left: "0px", top: "0px", maxHeight: `${innerHeight - 2 * edge}px` });
+  const b = badge.getBoundingClientRect(), under = b.bottom + gap;
+  const top = innerHeight - under - edge >= 320 ? under : Math.max(edge, Math.min(under, innerHeight - edge - panel.offsetHeight));
+  panel.style.left = `${Math.max(edge, Math.min(b.left, innerWidth - panel.offsetWidth - edge))}px`;
+  panel.style.top = `${top}px`;
+  panel.style.maxHeight = `${innerHeight - top - edge}px`;
+}
 function bindBadges(root) {
   root.querySelectorAll("[data-badge]").forEach((b) => b.addEventListener("click", (e) => {
     const own = `[data-panel="${b.dataset.badge}"]`;
@@ -2767,6 +2801,7 @@ function bindBadges(root) {
     root.querySelectorAll(".badge.open").forEach((x) => x.classList.remove("open"));
     panel.hidden = !open;
     b.classList.toggle("open", open);
+    if (open) floatPanel(b, panel);
   }));
   root.querySelectorAll(".badge-panel").forEach((p) => p.addEventListener("click", (e) => e.stopPropagation()));
   document.onclick = () => {
@@ -4114,6 +4149,7 @@ new MutationObserver(() => document.body.classList.toggle("fullmap", Boolean(vie
   .observe(view, { childList: true });
 
 let pageLoader = null;
+let APP = null; // /api/info, asked once: `ha` = running as the Home Assistant app
 async function route() {
   clearTimeout(timer);
   // A page that takes long (over 0,4 s) shows the cyclist meanwhile; only while the old page is
@@ -4128,6 +4164,7 @@ async function route() {
   const parts = path.split("/").filter(Boolean);
   try {
     TYPES ??= await api("types");
+    APP ??= await api("info");
     PERSONS = await api("persons");
     if (parts[0] === "embed") PAIR = null; // a Home Assistant card chooses its own people
     else keepSelection();
@@ -4139,8 +4176,8 @@ async function route() {
       UI.person = CURRENT;
     }
     // Pages a pair does not have, and those that only make sense for one person.
-    const single = section === "fitness" || section === "stats" || section === "wellbeing";
-    if (section === "compare" || (PAIR && !PAIR_PAGES.includes(section)) || (CURRENT === "all" && single)) { location.hash = "#/activities"; return; }
+    const single = section === "fitness" || section === "stats" || section === "wellbeing" || section === "gear";
+    if (section === "compare" || (section === "ha" && !APP.ha) || (PAIR && !PAIR_PAGES.includes(section)) || (CURRENT === "all" && single)) { location.hash = "#/activities"; return; }
     const chosen = PAIR ? PAIR.join(",") : CURRENT !== "all" ? CURRENT : "";
     const who = chosen ? "?" + new URLSearchParams({ person: chosen }) : "";
     let alerts;
@@ -4161,6 +4198,7 @@ async function route() {
     else if (section === "fitness") await renderFitness(params);
     else if (section === "stats") await renderStats(params);
     else if (section === "wellbeing") await renderWellbeing(parts[1], params);
+    else if (section === "gear") await renderGearPage(parts[1], params);
     else if (PLANNED[section]) renderPlanned(section);
     else await renderActivities(params);
     // The back button matches the page header's height.

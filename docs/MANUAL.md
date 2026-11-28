@@ -452,7 +452,7 @@ takes longer.
   unbroken vertical / horizontal line of visited tiles; Most visited = the visits of the most
   visited tile; One activity = the most tiles one activity visited.
 
-## Statistics › Gear
+## Gear › Electronics
 
 - **Source**: the devices each activity's FIT file names (`device_info`): the watch or bike
   computer or app that recorded it and the connected sensors; built-in sensors are not listed.
@@ -472,9 +472,9 @@ takes longer.
   entry is left out.
 - **A watch sending its heart rate under a number of its own** (listed as a heart rate strap
   with a watch's name) is counted for the watch of that model.
-- **Left out everywhere** (this tab and the activity page): anything without a serial number,
-  unknown sensors (no model: just "Sensor") and a device with fewer than 5 activities none of
-  which is in the last 61 days (a test or a mistake in a file). A new device shows from its
+- **Left out** of this tab (the activity page's Gear tile lists whatever the file names):
+  anything without a serial number, unknown sensors (no model: just "Sensor") and a device with
+  fewer than 5 activities none of which is in the last 61 days (a test or a mistake in a file). A new device shows from its
   first activity. The scale from Garmin Connect is the exception to the serial number rule.
 - A device listed twice in one activity (a watch recording and sending its heart rate) counts
   once.
@@ -500,6 +500,27 @@ takes longer.
   icon's filling (100, 80, 60, 25 and 8 %) without a number. Red: critical or 10 % and less;
   warning colour: low or 25 % and less. Apps and trainers usually say nothing: no icon.
   Activities imported before this was read are read again once, in the next import run.
+
+## Gear › Equipment (Home Assistant app)
+
+- **Distance**: the sensor's state now (m and mi converted to km). **Activities**, **time**,
+  **limit** and retired: the sensor's attributes, as Garmin Connect counts them; a sensor
+  without them shows none.
+- **Use**: Home Assistant's long-term statistics of the sensor, day by day since it records
+  them. A day with a growth of 0,3 km or more is a day of use; a drop (a correction) is
+  ignored. In use joins days into stretches as for devices (30 days).
+- **Pairing**: every growth is matched with activities of that day or the days before: their
+  distances must add up to it within 3 % (at least 0,2 km). In order: one activity of the last
+  3 days, up to 4 together, then the same within 14 days (a sensor updated late). The closest
+  pairs are taken first; an activity counts once for one equipment, and can belong to several
+  (shoes aside, Garmin can give a ride two bikes). The whole history is paired each time.
+- **Sport**: each equipment is paired with the activities of the one sport that explains most
+  of its growth (running and walking, cycling, winter, water, swimming); its drawing follows
+  (shoe, bike, e-bike, trainer).
+- A growth with no matching activity still counts as use; days before the statistics begin
+  show nothing.
+- The activity page shows the equipment paired with it in its Gear tile, so a new activity
+  gets it only after the sensor has grown.
 
 ## Next workout (Calendar › Next workout)
 
@@ -788,9 +809,20 @@ can go: run 12 m/s, walk and hike 6, ride 30, swim 4, water 15, winter 40, other
 3. Speed samples with the same test: the speed from the corrected distance there.
 4. Distance, average and top speed of the activity and its laps computed again.
 
+## Treadmill distance corrected on the watch
+
+After a treadmill or indoor run the watch can correct the distance (Calibrate and save). The
+FIT file then has the new total, but its samples still run to the old distance. Without a
+route, when the total and the last distance sample differ by more than 2 %
+(`fitfile.CALIBRATE_MIN`), every distance and speed sample is multiplied by total / last sample
+— evenly over the activity — so the charts, the laps cut from the line, the best efforts and
+the intervals match the total. Activities imported earlier are scaled once from their stored
+streams (`importer.backfill_calibration`) and analysed again. Activities with a route are never
+scaled.
+
 ## Sensors (Home Assistant)
 
-Home Assistant › Sensors lists them; only the Home Assistant app sends them. Every person with
+Home Assistant › Sensors (in the Home Assistant app) lists them. Every person with
 at least one activity (not archived, not the unassigned ones) has their own, on until switched
 off. Entity id: `sensor.trailbook_<person>_<key>`, the person's id in small letters, digits and
 underscores (`Michał Nowak` → `michal_nowak`); renaming the person changes only the shown name.
@@ -820,7 +852,7 @@ underscores (`Michał Nowak` → `michal_nowak`); renaming the person changes on
   1 mi, 5 km, 10 km, half and full marathon), ride time over a distance (5–100 km), power over
   a duration (all time: 5 s to 5 h; this year: 20 min and 1 h only), the longest distance, the
   top speed over 1 min (rides), and per segment — indoor rides' distances, times and top speed
-  on lists of their own; each with its 3 best results of all time and of this calendar year (UTC year
+  on lists of their own, indoor runs none; each with its 3 best results of all time and of this calendar year (UTC year
   of the start, like the other year filters). Heart rate is no record. Times: lower is better;
   power, distance and top speed: higher is better; a tie goes to the earlier activity.
 - A record needs a result that beat one already on the list: with 2 results on a list a new

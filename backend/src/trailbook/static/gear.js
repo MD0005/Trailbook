@@ -1,12 +1,12 @@
 "use strict";
-// Statistics › Gear (docs/SPEC.md › Statistics, docs/CHARTS.md › Statistics, Manual › Gear):
+// Gear (its own tab; docs/SPEC.md §12d, docs/CHARTS.md › Gear, Manual › Gear). Electronics:
 // a row of square cards, the most used device first, each with a ring filled against it and
-// its battery; per device a bar over the stretches it was used; a table, the last used first,
-// where a device is marked retired: faded and at the bottom there and on the bars, no card.
-// The scale has weigh-ins only, so no card. Header: Time (All time on every visit) and
-// Options (retired devices shown or hidden, remembered per person). Hovering a device
-// anywhere lights its card, bars and row; a click on it opens its activities. Each device
-// keeps one colour.
+// its battery; per device a bar over the stretches it was used (several devices can share one
+// line); a table, the last used first, where a device is marked retired: faded and at the
+// bottom there and on the bars, no card. The scale has weigh-ins only, so no card. Header:
+// Time (All time on every visit) and Options (retired devices shown or hidden, lines joined;
+// remembered per person). Hovering a device anywhere lights its card, bars and row; a click on
+// it opens its activities. Each device keeps one colour. Equipment: equipment.js.
 
 const GEAR_CARD_MIN = 150, GEAR_CARD_MIN_PHONE = 104, GEAR_GAP = 12; // px
 const GEAR_TICK_PX = 52; // room a date label needs
@@ -15,6 +15,9 @@ const GEAR_RETIRED = "gear-retired"; // ui setting of the person: keys of the re
 const GEAR_VIEW = "gear-view"; // ui setting of the person: Options, each "show" | "hide"
 // [key, label, hint] of the Options rows
 const GEAR_OPTIONS = [["retired", "Retired devices", "In the chart and table"]];
+const GEAR_GROUPS = "gear-groups"; // ui setting of the person: [[device keys that share a line]]
+const GEAR_TAB = "gear-tab"; // ui setting of the person: the part of Gear opened last
+const GEAR_TABS = [["electronics", "Electronics", "watch"], ["equipment", "Equipment", "distance_total"]];
 // The series colours and a few more: a person soon has more than ten devices.
 const GEAR_MORE_COLORS = ["#7aa95c", "#a8628f", "#4d7f94", "#c4645a", "#6f6bb8", "#8c7a5b"];
 // How full the battery is drawn for a status without a percentage.
@@ -37,15 +40,110 @@ const gearTip = (d) => [`${d.name}${gearTag(d) ? ` ${gearTag(d)}` : ""}`, gearKi
 
 // Options changed while the page shows: redraws it (set once the data is there).
 let GEAR_REDRAW = null;
+const gearGroups = () => (Array.isArray(UI.data[GEAR_GROUPS]) ? UI.data[GEAR_GROUPS] : []);
+
+// The Gear page: the part named in the address, else the one used last. Equipment comes from
+// Home Assistant: without it Electronics is the whole page.
+async function renderGearPage(tab, params) {
+  if (!APP.ha) {
+    if (tab === "equipment") location.replace("#/gear/electronics");
+    else await renderGear(params, "");
+    return;
+  }
+  if (!GEAR_TABS.some(([k]) => k === tab)) tab = GEAR_TABS.some(([k]) => k === UI.data[GEAR_TAB]) ? UI.data[GEAR_TAB] : "electronics";
+  if (UI.data[GEAR_TAB] !== tab) saveUi(GEAR_TAB, tab);
+  const sw = switchHtml("gtab", GEAR_TABS.map(([k, l, icon]) => [k, `${metricIcon(icon, 16)}<span>${l}</span>`]), tab);
+  if (tab === "equipment") await renderEquipment(sw);
+  else await renderGear(params, sw);
+}
+const bindGearTabs = (head) => head.querySelectorAll("[data-switch=gtab]").forEach((b) => b.onclick = () => { location.hash = "#/gear/" + b.dataset.value; });
+
+// Hovering a device in one place lights it everywhere: its card, bars and table row.
+function gearLight(key) {
+  view.querySelectorAll(".gear-card, .gear-ylab, .gear-row, .gear-table-card tr[data-key]")
+    .forEach((x) => x.classList.toggle("hot", key != null && (x.dataset.keys || x.dataset.key || "").split(" ").includes(key)));
+}
+function gearLink(box) {
+  box.onmouseover = (e) => gearLight(e.target.closest("[data-key]")?.dataset.key);
+  box.onmouseleave = () => gearLight(null);
+}
+
+// Retired ones below the others, faded; a joined line when all of its devices are.
+function gearOrder(lists, off) {
+  const retired = (r) => (r.dataset.keys || r.dataset.key).split(" ").every((k) => off.has(k));
+  for (const rows of lists) {
+    for (const r of [...rows.filter((x) => !retired(x)), ...rows.filter(retired)]) {
+      r.classList.toggle("gear-retired", retired(r));
+      // the bars' cursor line stays the last child of the plot
+      r.parentElement.insertBefore(r, r.parentElement.querySelector(":scope > .gear-cursor"));
+    }
+  }
+}
+
+// The cards on top, drawn anew (the old row's size watcher ends with it).
+function gearCards(items, opts) {
+  const old = view.querySelector(".gear-rings");
+  const el = old.cloneNode(false);
+  old.replaceWith(el);
+  el.hidden = !items.length;
+  if (items.length) gearRings(el, items, opts);
+  gearLink(el);
+}
+
+// The chart's rows: a joined line takes the place of its devices (two or more of them shown).
+function gearRows(devices) {
+  const rows = [], taken = new Set();
+  for (const keys of gearGroups()) {
+    const members = devices.filter((d) => keys.includes(d.key) && !taken.has(d.key));
+    if (members.length < 2) continue;
+    members.forEach((d) => taken.add(d.key));
+    rows.push({ members });
+  }
+  for (const d of devices) if (!taken.has(d.key)) rows.push({ members: [d] });
+  for (const r of rows) {
+    r.members.sort((a, b) => a.first.day.localeCompare(b.first.day) || a.order - b.order);
+    r.start = r.members[0].first.day;
+    r.order = r.members[0].order;
+  }
+  return rows;
+}
+const gearName = (d) => `${d.name}${gearTag(d) ? ` ${gearTag(d)}` : ""}`;
+const gearBar = {
+  label: (d) => gearTip(d),
+  bar: (d, when) => `${d.weighins ? "Weighed" : "In use"} ${when}\n\n${gearTip(d)}`,
+};
+
+// A list in an Options panel to pick several from, and its button (enabled with `min` picked).
+const gearChecks = (items, button) => `<div class="checks-col">${items.map(([v, label, note]) =>
+  `<label class="check"><input type="checkbox" value="${esc(v)}"><span>${esc(label)}${note ? ` <small>${esc(note)}</small>` : ""}</span></label>`).join("")}</div>
+  <div class="opt-actions"><button type="button" class="badge" disabled>${button}</button></div>`;
+function gearBindChecks(box, min, done) {
+  const button = box.querySelector(".opt-actions button");
+  if (!button) return;
+  const picked = () => [...box.querySelectorAll("input[type=checkbox]:checked")].map((x) => x.value);
+  box.querySelectorAll("input[type=checkbox]").forEach((x) => x.onchange = () => { button.disabled = picked().length < min; });
+  button.onclick = (e) => { e.stopPropagation(); done(picked()); }; // the panel is drawn anew: stay open
+}
+
+// Options › One line: the lines joined (each with Separate) and the devices to join.
+function gearJoinHtml(devices) {
+  const groups = gearGroups().map((keys) => ({ keys, members: devices.filter((d) => keys.includes(d.key)) })).filter((g) => g.members.length);
+  const taken = new Set(gearGroups().flat());
+  const free = devices.filter((d) => !taken.has(d.key));
+  const lines = groups.map((g) => `<div class="opt-line"><span>${g.members.map((d) => esc(gearName(d))).join(" + ")}</span><button type="button" class="badge" data-separate="${esc(g.keys.join(" "))}">Separate</button></div>`).join("");
+  return row(`One line<small class="opt-hint">Devices that share a line of the chart</small>`,
+    `${lines}${free.length > 1 ? gearChecks(free.map((d) => [d.key, gearName(d)]), "Join") : ""}`);
+}
 
 async function renderGear(params, sw) {
   GEAR_REDRAW = null;
-  const options = `<div class="opt-panel">${GEAR_OPTIONS.map(([key, label, hint]) => row(`${label}<small class="opt-hint">${hint}</small>`,
-    pickList(`gear-${key}`, [["show", "Shown"], ["hide", "Hidden"]], gearView()[key]))).join("")}</div>`;
-  view.innerHTML = `${pageHead("Statistics", timeBadge(params) + badgeHtml("gear-options", "Options", "", { panel: options }), sw)}<div class="page-loader">${loaderHtml()}</div>`;
+  const options = `<div class="opt-panel gear-panel">${GEAR_OPTIONS.map(([key, label, hint]) => row(`${label}<small class="opt-hint">${hint}</small>`,
+    pickList(`gear-${key}`, [["show", "Shown"], ["hide", "Hidden"]], gearView()[key]))).join("")}<div data-gear-join></div></div>`;
+  view.innerHTML = `${pageHead("Gear", timeBadge(params) + badgeHtml("gear-options", "Options", "", { panel: options }), sw)}<div class="page-loader">${loaderHtml()}</div>`;
   const head = view.querySelector(".page-head");
   bindBadges(head);
-  bindFilterBadges(head, "#/stats", { ...params, tab: "gear" });
+  bindGearTabs(head);
+  bindFilterBadges(head, "#/gear/electronics", params);
   GEAR_OPTIONS.forEach(([key]) => head.querySelectorAll(`[data-pick="gear-${key}"]`).forEach((b) => b.onclick = () => {
     head.querySelectorAll(`[data-pick="gear-${key}"]`).forEach((o) => { o.classList.toggle("on", o === b); o.setAttribute("aria-checked", o === b); });
     saveUi(GEAR_VIEW, { ...gearView(), [key]: b.dataset.value });
@@ -67,54 +165,51 @@ async function renderGear(params, sw) {
     // the scale is in no activity
     d.href = d.weighins ? null : "#/activities?" + new URLSearchParams({ ...time, device: d.key });
   });
-  // the x axis: the days of the Time filter, else from the first activity to today
+  // the x axis: the days of the Time filter, else from the first device to today
   const days = Object.keys(time).length ? statWindow(params) : [data.first_day, todayDay()];
   view.insertAdjacentHTML("beforeend", `<div class="gear-rings"></div>
-    <div class="card gear-span-card"><h3 class="chart-title" data-tip="When each device was used; a break of 30 days or more is left empty">${metricIcon("date", 18)}<span>In use</span></h3>${gearSpans(devices, days)}</div>
+    <div class="card gear-span-card"><h3 class="chart-title" data-tip="When each device was used; a break of 30 days or more is left empty">${metricIcon("date", 18)}<span>In use</span></h3><div data-spans></div></div>
     <div class="card gear-table-card"><h3 class="chart-title" data-tip="The last used first">${metricIcon("watch", 18)}<span>Devices</span></h3>${gearTable(devices)}
       ${data.without ? hint(`${gearCount(data.without)} without device information.`) : ""}</div>`);
-  bindGearSpans(view.querySelector(".gear-span"), days);
   const table = view.querySelector(".gear-table-card table");
-  // the rows as first drawn (table: the last used first; bars: the first used first)
-  const rowsOf = (sel) => [...view.querySelectorAll(sel)];
-  const trs = [...table.tBodies[0].rows], labels = rowsOf(".gear-ylab"), tracks = rowsOf(".gear-row");
+  const trs = [...table.tBodies[0].rows];
   trs.forEach((tr, i) => { tr.dataset.key = devices[i].key; });
-  // hovering a device in one place lights it in all three: its card, bars and table row
-  const light = (key) => view.querySelectorAll(".gear-card, .gear-ylab, .gear-row, .gear-table-card tr[data-key]")
-    .forEach((x) => x.classList.toggle("hot", x.dataset.key === key));
-  const link = (box) => {
-    box.onmouseover = (e) => light(e.target.closest("[data-key]")?.dataset.key);
-    box.onmouseleave = () => light(null);
+  gearLink(table.tBodies[0]);
+  // the chart with its joined lines, drawn anew when they change
+  const chart = () => {
+    const box = view.querySelector("[data-spans]");
+    box.innerHTML = gearSpans(gearRows(devices), days, gearBar);
+    bindGearSpans(box.querySelector(".gear-span"), days);
+    gearLink(box);
   };
-  link(view.querySelector(".gear-span"));
-  link(table.tBodies[0]);
-  // the cards and the rows follow the retired devices (faded, moved below the others) and
-  // the Options
+  // the cards and the rows follow the retired devices and the Options
   const mark = () => {
-    const off = gearRetired(), shown = gearView();
+    const off = new Set(gearRetired()), shown = gearView();
     view.querySelectorAll(".gear-span-card, .gear-table-card").forEach((c) => {
       for (const [key] of GEAR_OPTIONS) c.classList.toggle(`gear-hide-${key}`, shown[key] === "hide");
     });
-    const old = view.querySelector(".gear-rings");
-    const el = old.cloneNode(false);
-    old.replaceWith(el); // the old row's size watcher ends with it
-    const active = devices.filter((d) => d.time_s != null && !off.includes(d.key))
+    const active = devices.filter((d) => d.time_s != null && !off.has(d.key))
       .sort((a, b) => b.time_s - a.time_s || b.activities - a.activities);
-    el.hidden = !active.length;
-    if (active.length) gearRings(el, active);
-    link(el);
-    for (const rows of [trs, labels, tracks]) {
-      const retired = (r) => off.includes(r.dataset.key);
-      for (const r of [...rows.filter((x) => !retired(x)), ...rows.filter(retired)]) {
-        r.classList.toggle("gear-retired", retired(r));
-        // the bars' cursor line stays the last child of the plot
-        r.parentElement.insertBefore(r, r.parentElement.querySelector(":scope > .gear-cursor"));
-      }
-    }
+    gearCards(active, {
+      max: active[0]?.time_s, amount: (d) => d.time_s, tip: gearTip, badge: (d) => gearBattery(d.battery),
+      body: (d) => `<b class="gear-value">${hours(d.time_s)}</b><span class="gear-name">${esc(d.name)}${gearTag(d) ? ` <i>${gearTag(d)}</i>` : ""}</span>`,
+    });
+    const rowsOf = (sel) => [...view.querySelectorAll(sel)];
+    gearOrder([trs, rowsOf(".gear-ylab"), rowsOf(".gear-row")], off);
     table.querySelectorAll("[data-retire]").forEach((b) => {
-      const on = off.includes(b.dataset.retire);
+      const on = off.has(b.dataset.retire);
       b.classList.toggle("on", on);
       b.setAttribute("aria-pressed", on);
+    });
+  };
+  const join = head.querySelector("[data-gear-join]");
+  const drawJoin = () => {
+    join.innerHTML = gearJoinHtml(devices);
+    const change = (groups) => { saveUi(GEAR_GROUPS, groups); drawJoin(); chart(); mark(); };
+    gearBindChecks(join, 2, (keys) => change([...gearGroups(), keys]));
+    join.querySelectorAll("[data-separate]").forEach((b) => b.onclick = (e) => {
+      e.stopPropagation();
+      change(gearGroups().filter((keys) => keys.join(" ") !== b.dataset.separate));
     });
   };
   table.querySelectorAll("[data-retire]").forEach((b) => b.onclick = () => {
@@ -122,6 +217,8 @@ async function renderGear(params, sw) {
     saveUi(GEAR_RETIRED, off.includes(key) ? off.filter((k) => k !== key) : [...off, key]);
     mark();
   });
+  drawJoin();
+  chart();
   mark();
   spreadColumns(table);
   GEAR_REDRAW = () => { if (table.isConnected) mark(); };
@@ -146,13 +243,12 @@ function gearRing(share, color) {
     stroke-width="8" stroke-linecap="round" stroke-dasharray="${share >= 1 ? "none" : `${(share * round).toFixed(2)} ${round.toFixed(2)}`}" transform="rotate(-90 50 50)"/></svg>`;
 }
 
-// As many cards as one row takes.
-function gearRings(el, devices) {
-  const max = devices[0].time_s;
-  const card = (d) => `<a class="card gear-card" data-key="${esc(d.key)}" href="${esc(d.href)}" data-tip="${esc(gearTip(d))}">${gearBattery(d.battery)}
-    <div class="gear-ring">${max && d.time_s ? gearRing(d.time_s / max, d.color) : ""}${devicePic(d)}</div>
-    <b class="gear-value">${hours(d.time_s)}</b>
-    <span class="gear-name">${esc(d.name)}${gearTag(d) ? ` <i>${gearTag(d)}</i>` : ""}</span></a>`;
+// As many cards as one row takes. `max` / `amount`: the ring's share; `tip`, `body` and
+// `badge` (top right) of a card.
+function gearRings(el, items, { max, amount, tip, body, badge }) {
+  const card = (d) => `<a class="card gear-card" data-key="${esc(d.key)}" href="${esc(d.href)}" data-tip="${esc(tip(d))}">${badge ? badge(d) : ""}
+    <div class="gear-ring">${max && amount(d) ? gearRing(amount(d) / max, d.color) : ""}${devicePic(d)}</div>
+    ${body(d)}</a>`;
   let shown = 0;
   const fit = () => {
     if (!el.isConnected) { ro.disconnect(); return; }
@@ -161,7 +257,7 @@ function gearRings(el, devices) {
     if (n === shown) return;
     shown = n;
     el.style.gridTemplateColumns = `repeat(${n}, minmax(0, 1fr))`;
-    el.innerHTML = devices.slice(0, n).map(card).join("");
+    el.innerHTML = items.slice(0, n).map(card).join("");
   };
   const ro = new ResizeObserver(fit);
   ro.observe(el);
@@ -174,19 +270,43 @@ function gearAxis([first, last]) {
   return { lo, hi, at: (ms) => ((ms - lo) / (hi - lo)) * 100 };
 }
 
-// A row per device, the first used on top, its picture on the y axis; a bar per stretch of use.
-function gearSpans(devices, days) {
+// A line per row, the first used on top, its picture on the y axis; a bar per stretch of
+// use. A row of several (`members`) is one bar: each in its colour, the height shared where
+// their stretches overlap. rows: [{members, start, order}]; tips: {label(d), bar(d, when)}.
+function gearSpans(rows, days, tips) {
   const { at } = gearAxis(days);
-  const rows = [...devices].sort((a, b) => a.first.day.localeCompare(b.first.day) || a.order - b.order);
-  const bar = (d, [first, last]) => {
-    const from = at(dayMs(first)), to = at(dayMs(last) + 86400000);
-    const what = d.weighins ? "Weighed" : "In use";
-    const tip = `${what} ${first === last ? gearDate(first) : `${gearDate(first)} – ${gearDate(last)}`}\n\n${gearTip(d)}`;
-    return `<i class="gear-bar" style="left:min(${from}%, 100% - 4px);width:${to - from}%;background:${d.color}" data-tip="${esc(tip)}"></i>`;
+  const when = ([first, last]) => (first === last ? gearDate(first) : `${gearDate(first)} – ${gearDate(last)}`);
+  const place = (from, to) => `left:min(${from}%, 100% - 4px);width:${to - from}%`;
+  const edges = ([first, last]) => [dayMs(first), dayMs(last) + 86400000];
+  const single = (d) => d.spans.map((x) => `<i class="gear-bar" style="${place(...edges(x).map(at))};background:${d.color}" data-tip="${esc(tips.bar(d, when(x)))}"></i>`).join("");
+  const joined = (members) => {
+    const all = members.flatMap((d) => d.spans.map((x) => ({ d, x, from: edges(x)[0], to: edges(x)[1] }))).sort((a, b) => a.from - b.from);
+    const bars = []; // stretches that touch or overlap are one bar
+    for (const part of all) {
+      const last = bars.at(-1);
+      if (last && part.from <= last.to) { last.to = Math.max(last.to, part.to); last.parts.push(part); } else bars.push({ from: part.from, to: part.to, parts: [part] });
+    }
+    return bars.map((b) => {
+      const cuts = [...new Set(b.parts.flatMap((q) => [q.from, q.to]))].sort((x, y) => x - y);
+      const width = b.to - b.from;
+      const slices = cuts.slice(0, -1).map((from, i) => {
+        const to = cuts[i + 1], here = b.parts.filter((q) => q.from <= from && q.to >= to);
+        return here.map((q, k) => `<b data-key="${esc(q.d.key)}" style="left:${((from - b.from) / width) * 100}%;width:${((to - from) / width) * 100}%;top:${(k / here.length) * 100}%;height:${100 / here.length}%;background:${q.d.color}" data-tip="${esc(tips.bar(q.d, when(q.x)))}"></b>`).join("");
+      }).join("");
+      return `<span class="gear-bar gear-join" style="${place(at(b.from), at(b.to))}">${slices}</span>`;
+    }).join("");
+  };
+  const sorted = [...rows].sort((a, b) => a.start.localeCompare(b.start) || a.order - b.order);
+  const keys = (r) => `data-key="${esc(r.members[0].key)}" data-keys="${esc(r.members.map((d) => d.key).join(" "))}"`;
+  const label = (r) => {
+    const [first] = r.members;
+    if (r.members.length === 1) return `<div class="gear-ylab" ${keys(r)} data-tip="${esc(tips.label(first))}">${devicePic(first)}${gearTag(first) ? `<i>${gearTag(first)}</i>` : ""}</div>`;
+    const tip = `${num(r.members.length)} devices in one line\n${r.members.map((d) => `${gearName(d)}: ${gearDate(d.first.day)} – ${gearDate(d.last.day)}`).join("\n")}`;
+    return `<div class="gear-ylab" ${keys(r)} data-tip="${esc(tip)}">${devicePic(first)}<i>×${num(r.members.length)}</i></div>`;
   };
   return `<div class="gear-span">
-    <div class="gear-yaxis">${rows.map((d) => `<div class="gear-ylab" data-key="${esc(d.key)}" data-tip="${esc(gearTip(d))}">${devicePic(d)}${gearTag(d) ? `<i>${gearTag(d)}</i>` : ""}</div>`).join("")}</div>
-    <div class="gear-plot">${rows.map((d) => `<div class="gear-row" data-key="${esc(d.key)}">${d.spans.map((x) => bar(d, x)).join("")}</div>`).join("")}<i class="gear-cursor" hidden></i></div>
+    <div class="gear-yaxis">${sorted.map(label).join("")}</div>
+    <div class="gear-plot">${sorted.map((r) => `<div class="gear-row" ${keys(r)}>${r.members.length === 1 ? single(r.members[0]) : joined(r.members)}</div>`).join("")}<i class="gear-cursor" hidden></i></div>
     <span></span><div class="gear-xaxis"><div data-ticks></div><span class="gear-flag" hidden></span></div></div>`;
 }
 

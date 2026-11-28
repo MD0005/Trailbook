@@ -50,6 +50,24 @@ def _call(service: str, data: dict) -> bool:
     return status is not None and 200 <= status < 300
 
 
+def get_json(path: str):
+    """The answer of a GET on Home Assistant's REST API, parsed; None without a token, when
+    it did not answer or had nothing (e.g. an unknown entity)."""
+    token = os.environ.get("SUPERVISOR_TOKEN")
+    if not token:
+        return None
+    req = urllib.request.Request(f"{API_URL}/{path}", headers={"Authorization": f"Bearer {token}"})
+    try:
+        with urllib.request.urlopen(req, timeout=TIMEOUT_S) as resp:  # noqa: S310 (fixed host)
+            return json.loads(resp.read())
+    except urllib.error.HTTPError as exc:
+        if exc.code != 404:
+            log.warning("Home Assistant %s failed: HTTP %s", path, exc.code)
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        log.warning("Home Assistant %s failed: %s", path, exc)
+    return None
+
+
 def set_state(entity_id: str, state: str, attributes: dict) -> bool:
     """Create or update an entity's state (it lives until Home Assistant restarts)."""
     status = _request(f"states/{entity_id}", {"state": state, "attributes": attributes})

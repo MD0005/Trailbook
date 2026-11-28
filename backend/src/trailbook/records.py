@@ -37,22 +37,27 @@ YEAR_POWER_S = (1200, 3600)  # power: every duration of all time, these only for
 # the others. Activities the person excluded (activity › Edit) have none.
 # v = 1: an indoor ride's (virtual ride, trainer) distance, time over a distance and top speed -
 # their own records (a trainer's speed is no road speed); their power counts with every ride.
+# Other indoor activities (treadmill and indoor runs, walks) have no best efforts over a distance
+# or a climb (a treadmill's distance is no road distance); their heart rate stays.
 VIRTUAL_KINDS = ("ride", "longest", "within", "speed", "ascent", "climb", "grade")
 _VK = ", ".join(f"'{k}'" for k in VIRTUAL_KINDS)
+_NOT_INDOOR = "'pace', 'longest', 'within', 'ascent', 'climb', 'grade'"
 EFFORTS_SQL = f"""(SELECT b.activity_id, b.kind, b.key, b.value, b.start_s, b.end_s,
         CASE WHEN b.kind IN ({_VK}) AND va.category = 'ride' AND va.indoor THEN 1 ELSE 0 END
             AS v
-    FROM best_efforts b JOIN activities va ON va.id = b.activity_id WHERE NOT va.excluded
+    FROM best_efforts b JOIN activities va ON va.id = b.activity_id
+    WHERE NOT va.excluded
+        AND (va.category = 'ride' OR NOT va.indoor OR b.kind NOT IN ({_NOT_INDOOR}))
     UNION ALL
     SELECT id, 'longest', 0, distance_m, 0, elapsed_s,
         CASE WHEN category = 'ride' AND indoor THEN 1 ELSE 0 END
     FROM activities WHERE distance_m > 0 AND NOT excluded
-        AND category IN ('run', 'ride', 'walk', 'hike')
+        AND category IN ('run', 'ride', 'walk', 'hike') AND (category = 'ride' OR NOT indoor)
     UNION ALL
     SELECT id, 'ascent', 0, ascent_m, 0, elapsed_s,
         CASE WHEN category = 'ride' AND indoor THEN 1 ELSE 0 END
     FROM activities WHERE ascent_m > 0 AND NOT excluded
-        AND category IN ('run', 'ride', 'walk', 'hike'))"""
+        AND category IN ('run', 'ride', 'walk', 'hike') AND (category = 'ride' OR NOT indoor))"""
 
 LOWER_IS_BETTER = ("pace", "ride", "segment")  # times; power and distance: higher
 _ORDER = "CASE WHEN o.kind IN ('pace', 'ride') THEN o.value ELSE -o.value END"

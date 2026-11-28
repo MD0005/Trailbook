@@ -98,8 +98,9 @@ function timeBadge(params) {
       <div class="tf-values"><span data-tf-date="lo"></span><span data-tf-date="hi"></span></div>
       <div class="chips tf-last"><button class="chip" data-tf-last="">All time</button>${LAST_PERIODS.map(([k, l]) => `<button class="chip" data-tf-last="${k}">${l}</button>`).join("")}</div>
       <div class="chips tf-years">${years.map((y) => `<button class="chip" data-tf-year="${y}">${y}</button>`).join("")}</div>
-      ${filterActions("time", timeActive(params))}</div>`;
-  return badgeHtml("time", "Time", timeLabel(params), { panel, on: timeActive(params) });
+      ${filterActions("time", timeActive(params) && params.last !== "all")}</div>`;
+  // last=all: All time on a page with a default period - no filter
+  return badgeHtml("time", "Time", timeLabel(params), { panel, on: timeActive(params) && params.last !== "all" });
 }
 
 // The panel: the first row is one choice (All time or a period up to today), the years can be
@@ -369,7 +370,7 @@ function bindFilterBadges(root, route, params, { drop = [], allTime = null } = {
 // Query parameters for the API from the page parameters.
 function filterQuery(params) {
   const q = {};
-  for (const k of ["from", "to", "last", "years", "types", "workouts", "device"]) if (params[k]) q[k] = params[k];
+  for (const k of ["from", "to", "last", "years", "types", "workouts", "device", "equipment"]) if (params[k]) q[k] = params[k];
   if (q.last === "all") delete q.last; // All time on a page with a default period
   if (!q.types && params.type) q.types = params.type; // older links
   return q;

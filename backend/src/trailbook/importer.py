@@ -439,6 +439,56 @@ def _store_tiles(conn: sqlite3.Connection, activity_id: int, lats: list, lons: l
     return len(tiles)
 
 
+CALIBRATE_SETTING = "calibrated_streams"  # set once the stored activities were checked
+
+
+def backfill_calibration(conn: sqlite3.Connection) -> int:
+    """Once: activities without a route imported before their distance and speed samples were
+    scaled to a distance corrected on the watch (fitfile.calibrate), from the stored streams.
+    Their best efforts, segments and intervals are worked out again. Returns how many."""
+    if db.get_setting(conn, CALIBRATE_SETTING):
+        return 0
+    rows = conn.execute(
+        """SELECT a.id, a.distance_m FROM activities a
+           JOIN streams s ON s.activity_id = a.id AND s.channel = 'distance'
+           WHERE a.has_gps = 0 AND a.distance_m > 0"""
+    ).fetchall()
+    done = 0
+    conn.execute("BEGIN")
+    try:
+        for r in rows:
+            ch = {
+                s["channel"]: streams.decode(s["encoding"], s["data"])
+                for s in conn.execute(
+                    """SELECT channel, encoding, data FROM streams
+                       WHERE activity_id = ? AND channel IN ('distance', 'speed', 'lat')""",
+                    (r["id"],),
+                )
+            }
+            if not fitfile.calibrate(ch, r["distance_m"]):
+                continue
+            for key in ("distance", "speed"):
+                if ch.get(key):
+                    encoding, blob = streams.encode(ch[key], "f32")
+                    conn.execute(
+                        """UPDATE streams SET encoding = ?, length = ?, data = ?
+                           WHERE activity_id = ? AND channel = ?""",
+                        (encoding, len(ch[key]), blob, r["id"], key),
+                    )
+            conn.execute(
+                """UPDATE activities SET analysis_version = 0, segments_version = 0,
+                          workout_version = 0, workout_stats = NULL WHERE id = ?""",
+                (r["id"],),
+            )
+            done += 1
+        db.set_setting(conn, CALIBRATE_SETTING, "1")
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    return done
+
+
 def backfill_tiles(conn: sqlite3.Connection, progress=None) -> int:
     """Compute explorer tiles for activities that have none yet, from stored GPS streams.
 

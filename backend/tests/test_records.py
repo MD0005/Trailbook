@@ -306,3 +306,22 @@ def test_changing_the_type_moves_a_ride_between_outdoor_and_indoor_records(conn)
     assert v() == 1
     importer.set_activity_type(conn, aid, "road_ride")
     assert v() == 0
+
+
+def test_a_treadmill_run_has_no_best_efforts_over_a_distance(conn):
+    from trailbook import importer
+
+    _person(conn)
+    _history(conn, [1300, 1320, 1340])  # 5 km outdoors
+    aid = _activity(conn, 1)
+    importer.set_activity_type(conn, aid, "treadmill_run")
+    _effort(conn, aid, 1100)  # faster than every outdoor run
+    _effort(conn, aid, 170, kind="hr", key=300)
+    kinds = {
+        r["kind"]
+        for r in conn.execute(
+            f"SELECT kind FROM {records.EFFORTS_SQL} WHERE activity_id = ?", (aid,)
+        )
+    }
+    assert kinds == {"hr"}
+    assert records.refresh(conn, NOW) == []

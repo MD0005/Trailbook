@@ -404,6 +404,7 @@ def parse_activity(data: bytes) -> ParsedActivity:
 
     # --- summary --------------------------------------------------------------------
     summary = _summary(sessions, channels, on_foot)
+    calibrate(streams, summary["distance_m"])
     summary["zones"] = time_in_zones(messages)
     summary["devices"] = devices_json(messages)
 
@@ -690,13 +691,6 @@ _DEVICE_KIND = {
 }  # fmt: skip
 _KIND_ORDER = ("watch", "bike_computer", "app", "power_meter", "hr_strap", "trainer", "radar",
                "light", "speed_cadence", "foot_pod", "shifting", "sensor")  # fmt: skip
-
-
-def kind_order(kind: str) -> int:
-    """Where a kind of device comes in a list: the recording devices first."""
-    return _KIND_ORDER.index(kind) if kind in _KIND_ORDER else len(_KIND_ORDER)
-
-
 _NAME_PREFIX = {
     "fr": "Forerunner", "edge": "Edge", "fenix": "fēnix", "epix": "epix", "venu": "Venu",
     "vivoactive": "vívoactive", "instinct": "Instinct", "enduro": "Enduro", "marq": "MARQ",
@@ -887,6 +881,27 @@ def time_in_zones(messages: dict) -> str | None:
             else:
                 out[key] = {"times": times, "bounds": bounds}
     return json.dumps(out, separators=(",", ":")) if out else None
+
+
+CALIBRATE_MIN = 0.02  # the activity's distance and the line's end differ by more: calibrated
+
+
+def calibrate(ch: dict[str, list], distance_m: float | None) -> bool:
+    """A distance corrected on the watch after the activity (a treadmill run's Calibrate and
+    save) changes the session's total but not the samples: without a route the distance and
+    speed samples are scaled to the total, evenly over the activity. In place; True when
+    scaled."""
+    dist = ch.get("distance")
+    if not dist or not distance_m or any(v is not None for v in ch.get("lat") or []):
+        return False
+    end = next((d for d in reversed(dist) if d is not None), None)
+    if not end or abs(distance_m / end - 1) <= CALIBRATE_MIN:
+        return False
+    k = distance_m / end
+    for key in ("distance", "speed"):
+        if ch.get(key):
+            ch[key] = [None if v is None else v * k for v in ch[key]]
+    return True
 
 
 def _summary(sessions: list[dict], ch: dict[str, list], on_foot: bool) -> dict:

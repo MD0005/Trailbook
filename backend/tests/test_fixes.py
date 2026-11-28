@@ -124,3 +124,28 @@ def test_api_export_fix_and_exclude(tdb):
     assert client.get(f"/api/activities/{aid}").status_code == 200  # still in the list
     client.patch(f"/api/activities/{aid}", json={"excluded": False})
     assert client.get("/api/stats/records?person=anna").json()["run"]
+
+
+def test_calibrated_treadmill_distance_scales_the_samples(tdb):
+    from trailbook import importer
+
+    c, aid, _ = tdb
+    # a treadmill run: 5 km in the samples, 3 km after Calibrate and save on the watch
+    ch = {"distance": [0.0, 2500.0, 5000.0], "speed": [2.0, 3.0, None], "lat": [None] * 3}
+    assert fitfile.calibrate(ch, 3000.0)
+    assert ch["distance"] == [0.0, 1500.0, 3000.0]
+    assert ch["speed"][:2] == pytest.approx([1.2, 1.8]) and ch["speed"][2] is None
+    assert not fitfile.calibrate({"distance": [0.0, 5000.0]}, 5050.0)  # within 2 %
+    assert not fitfile.calibrate({"distance": [0.0, 5000.0], "lat": [52.0, 52.1]}, 3000.0)
+    # stored before: scaled once from the streams, analysed again
+    c.execute("UPDATE activities SET has_gps = 0, distance_m = 2700, analysis_version = 9 "
+              "WHERE id = ?", (aid,))  # fmt: skip
+    c.execute("DELETE FROM streams WHERE activity_id = ? AND channel = 'lat'", (aid,))
+    assert importer.backfill_calibration(c) == 1
+    dist = streams.decode(*c.execute(
+        "SELECT encoding, data FROM streams WHERE activity_id = ? AND channel = 'distance'", (aid,)
+    ).fetchone())  # fmt: skip
+    assert abs(dist[-1] - 2700) < 1
+    row = c.execute("SELECT analysis_version FROM activities WHERE id = ?", (aid,)).fetchone()
+    assert row[0] == 0
+    assert importer.backfill_calibration(c) == 0  # once

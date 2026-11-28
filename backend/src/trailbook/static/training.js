@@ -29,7 +29,6 @@ const ICON_CAL_YEAR = svg(`<rect x="3" y="3" width="5" height="5" rx="1"/><rect 
 const ICON_YEARS = svg(`<path d="M3 19h18"/><path d="M4 16c3-5 6-7 9-7s5 2 7 3"/><path d="M4 12c3-4 6-6 9-6s5 1 7 2" opacity=".5"/>`);
 const ICON_TIMELINE = svg(`<path d="M3 19h18"/><path d="M4 17l4-5 4 2 4-6 4 3"/>`);
 const ICON_RECORDS = svg(`<path d="M8 21h8M12 17v4M7 4h10v5a5 5 0 0 1-10 0z"/><path d="M17 5h3a3 3 0 0 1-3 4M7 5H4a3 3 0 0 0 3 4"/>`);
-const ICON_GEAR = svg(`<rect x="6" y="7" width="12" height="10" rx="3"/><path d="M9 7l1-4h4l1 4M9 17l1 4h4l1-4M12 10v2.5l1.5 1"/>`);
 
 // ---- Calendar ---------------------------------------------------------------------------
 
@@ -1049,27 +1048,32 @@ const STAT_METRICS = [
 let STAT_CHARTS = []; // chart groups of the page (destroyed on the next draw)
 
 async function renderStats(params) {
-  const tab = ["timeline", "records", "gear"].includes(params.tab) ? params.tab : "years";
+  // Gear has its own tab now: older links still come here
+  if (params.tab === "gear") { const { tab: _, ...rest } = params; location.replace("#/gear/electronics?" + new URLSearchParams(rest)); return; }
+  const tab = ["timeline", "records"].includes(params.tab) ? params.tab : "years";
   const filtered = tab === "years" || tab === "timeline"; // the two tabs sharing their filters
   if (filtered) {
     // entering without a period: the one last used on Compare years / Timeline, else the default
-    if (!timeActive(params)) params = { ...params, ...(TAB.statFilter || { ...statDefaultTime(), types: params.types || "" }) };
+    // (all time is kept as last=all, so Apply / Clear of the Type filter never looks like entering)
+    if (!timeActive(params)) {
+      params = { ...params, ...(TAB.statFilter || { ...statDefaultTime(), types: params.types || "" }) };
+      if (!timeActive(params)) params.last = "all";
+    }
     const pick = (keys) => Object.fromEntries(keys.filter((k) => params[k]).map((k) => [k, params[k]]));
     TAB.statFilter = { ...pick(TIME_KEYS), types: params.types || "" };
   }
   const sw = switchHtml("stab", [["years", `${ICON_YEARS}<span>Compare years</span>`], ["timeline", `${ICON_TIMELINE}<span>Timeline</span>`],
-    ["records", `${ICON_RECORDS}<span>Records</span>`], ["gear", `${ICON_GEAR}<span>Gear</span>`]], tab);
+    ["records", `${ICON_RECORDS}<span>Records</span>`]], tab);
   if (tab === "records") await renderRecords(params, sw);
-  else if (tab === "gear") await renderGear(params, sw);
   else if (tab === "timeline") await renderTimeline(params, sw);
   else await renderStatCharts(params, sw, tab);
   // on a phone the switch scrolls sideways: the open tab stays in sight
   const open = view.querySelector(".page-head .switch .on");
   if (open) open.parentElement.scrollLeft = open.offsetLeft + open.offsetWidth - open.parentElement.offsetLeft - open.parentElement.clientWidth;
-  // Compare years and Timeline share their filters (TAB.statFilter); Records and Gear open on
-  // all time
+  // Compare years and Timeline share their filters (TAB.statFilter); Records opens on all
+  // time
   view.querySelectorAll("[data-switch=stab]").forEach((b) => b.onclick = () => {
-    const keep = ["records", "gear"].includes(b.dataset.value) ? {} : Object.fromEntries(Object.entries(TAB.statFilter || {}).filter(([, v]) => v));
+    const keep = b.dataset.value === "records" ? {} : Object.fromEntries(Object.entries(TAB.statFilter || {}).filter(([, v]) => v));
     location.hash = "#/stats?" + new URLSearchParams({ ...keep, tab: b.dataset.value });
   });
 }
@@ -1099,22 +1103,40 @@ async function renderStatCharts(params, sw, tab) {
     // every chart of the page: one y axis width and one pill column, so the plots line up
     const shared = {};
     if (bars) yearBars(box.appendChild(document.createElement("div")), bars);
-    if (builds.length === 1) STAT_CHARTS = [chartGroup(box.appendChild(document.createElement("div")), { ...builds[0], shared })];
-    else {
-      const [byMonth, byWeek] = builds;
-      const onToggle = (label, off) => STAT_CHARTS.forEach((c) => c.toggleLine(label, off));
-      for (const s of byMonth.series.filter((c) => !c.key.endsWith("-cum"))) {
-        const cum = byWeek.series.find((c) => c.key === `${s.key}-cum`);
-        for (const [b, one] of [[byWeek, cum], [byMonth, s]]) {
-          if (!one) continue;
-          const el = box.appendChild(document.createElement("div"));
-          STAT_CHARTS.push(chartGroup(el, { ...b, series: [one], onToggle, shared }));
+    // one pair of charts (running total, per period) for the metric of the Data badge in the
+    // first chart's head: Distance on entering the tab, kept while on it; switching it redraws
+    // only the pair
+    const pairBox = box.appendChild(document.createElement("div"));
+    const metrics = STAT_METRICS.filter(([k]) => builds[0].series.some((s) => s.key === k));
+    const [cumB, perB] = builds.length === 1 ? [builds[0], builds[0]] : [builds[1], builds[0]]; // Mixed: totals by week, periods by month
+    const onToggle = (label, off) => STAT_CHARTS.forEach((c) => c.toggleLine(label, off));
+    const drawPair = () => {
+      STAT_CHARTS.forEach((c) => c?.destroy?.());
+      STAT_CHARTS = [];
+      pairBox.innerHTML = "";
+      const metric = metrics.find(([k]) => k === TAB.statMetric) || metrics[0];
+      const dataBadge = badgeHtml("stat-metric", "Data", metric[1], { right: true,
+        panel: `<div class="opt-panel">${pickList("stat-metric", metrics.map(([k, t]) => [k, t]), metric[0])}</div>` });
+      const cum = cumB.series.find((c) => c.key === `${metric[0]}-cum`), per = perB.series.find((c) => c.key === metric[0]);
+      const head = (s, h) => s && { ...s, headHtml: h };
+      if (cumB === perB) STAT_CHARTS = [chartGroup(pairBox.appendChild(document.createElement("div")), { ...cumB, series: [head(cum, dataBadge), per].filter(Boolean), shared })];
+      else {
+        for (const [b, one] of [[cumB, head(cum, dataBadge)], [perB, head(per, cum ? undefined : dataBadge)]]) {
+          if (one) STAT_CHARTS.push(chartGroup(pairBox.appendChild(document.createElement("div")), { ...b, series: [one], onToggle, shared }));
         }
       }
-    }
-    STAT_CHARTS.forEach((c) => c.realign());
-    if (bars && YEAR_PINNED) STAT_CHARTS.forEach((c) => c.emphasize?.(YEAR_PINNED)); // the clicked year stays marked
+      bindBadges(pairBox);
+      pairBox.querySelectorAll('[data-pick="stat-metric"]').forEach((b) => b.onclick = () => {
+        TAB.statMetric = b.dataset.value;
+        document.onclick?.();
+        drawPair();
+      });
+      STAT_CHARTS.forEach((c) => c.realign());
+      if (bars && YEAR_PINNED) STAT_CHARTS.forEach((c) => c.emphasize?.(YEAR_PINNED)); // the clicked year stays marked
+    };
+    drawPair();
   };
+
   head.querySelectorAll('[data-pick="stat-x"]').forEach((b) => b.onclick = () => {
     head.querySelectorAll('[data-pick="stat-x"]').forEach((o) => { o.classList.toggle("on", o === b); o.setAttribute("aria-checked", o === b); });
     x = TAB[keep] = b.dataset.value;
@@ -1341,8 +1363,8 @@ function recordTiles(data, rangeLabel) {
     power: powRows.length ? tile(metricIcon("power", 18), be("Cycling power"), table(powRows), "", "Power of every ride, outdoor and indoor") : "",
     ride: outRows.length ? tile(typeIcon("ride"), be("Cycling"), table(outRows), "", "Outdoor rides") : "",
     virtual: inRows.length ? tile(typeIcon("virtual_ride"), be("Cycling virtual"), table(inRows), "", "Virtual and indoor rides: a trainer's distance and speed are records of their own") : "",
-    walk: walkRows.length ? tile(typeIcon("walk"), be("Walking & hiking"), table(walkRows), "rec-side-tile", "Walks and hikes together: distance, steps and climbing, no speeds") : "",
-    segments: segRows.length ? tile(metricIcon("route", 18), be("Segment"), table(segRows), "rec-seg-tile", "Every segment you have an effort on: the fastest times") : "",
+    walk: walkRows.length ? tile(typeIcon("walk"), be("Walking & hiking"), table(walkRows), "", "Walks and hikes together: distance, steps and climbing, no speeds") : "",
+    segments: segRows.length ? tile(metricIcon("route", 18), be("Segment"), table(segRows), "", "Every segment you have an effort on: the fastest times") : "",
   } };
 }
 
@@ -1359,12 +1381,13 @@ async function renderRecords(params, sw) {
   const { filtered, find, tile, run, ride, powAll, parts: P } = recordTiles(data, rangeLabel);
   const curveTile = (key, title, icon) => tile(metricIcon(icon, 18), title, `<div class="curve-box" data-rec-curve="${key}"></div>`, "rec-curve-tile");
   const pair = (left, right) => `${left}${right || "<div></div>"}`;
+  // the tables without a curve: side by side as many as fit, no empty places
+  const sides = [P.virtual, P.walk, P.segments].filter(Boolean).join("");
   const tiles = [
     P.run && pair(P.run, find(run, "pace").length > 1 && curveTile("run", "Running speed curve", "speed")),
     P.power && pair(P.power, powAll.length > 1 && curveTile("power", "Power curve", "power")),
     P.ride && pair(P.ride, find(ride, "ride").length > 1 && curveTile("ride", "Cycling speed curve", "speed")),
-    (P.virtual || P.walk) && pair(P.virtual || "<div></div>", P.walk),
-    P.segments && pair(P.segments),
+    sides && `<div class="rec-sides">${sides}</div>`,
   ].filter(Boolean);
   view.querySelector(".page-loader")?.remove();
   view.insertAdjacentHTML("beforeend", tiles.length ? `<div class="rec-page">${tiles.join("")}</div>` : `<div class="card">${hint("No runs or rides with records yet.")}</div>`);

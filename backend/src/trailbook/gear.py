@@ -1,4 +1,4 @@
-"""Statistics › Gear: the devices that recorded a person's activities (watch, bike computer,
+"""Gear › Electronics: the devices that recorded a person's activities (watch, bike computer,
 app, sensors; `activities.devices`, see `fitfile.devices`) and the scale (weigh-ins), and how
 much each was used. How devices are told apart and what is counted: docs/MANUAL.md › Gear.
 """
@@ -136,19 +136,16 @@ def _ordinal(a: sqlite3.Row) -> int:
     return date.fromisoformat(_moment(a)["day"]).toordinal()
 
 
-def _devices(
-    conn: sqlite3.Connection, person_id: str, also: int | None = None
-) -> tuple[list, list[_Device]]:
+def _devices(conn: sqlite3.Connection, person_id: str) -> tuple[list, list[_Device]]:
     """The person's activities, oldest first, and the devices to show, from the whole history.
-    Activities left out of the statistics are not counted (but `also`, the one being shown).
+    Activities left out of the statistics are not counted.
     Only devices with a serial number: an entry without one joins the nearest in time that it
     fits, else it is left out."""
     rows = conn.execute(
         """SELECT id, start_time_utc, utc_offset_s, devices, activity_type, time_s,
                   distance_m, ascent_m
-           FROM activities WHERE person_id = ? AND (NOT excluded OR id IS ?)
-           ORDER BY start_time_utc, id""",
-        (person_id, also),
+           FROM activities WHERE person_id = ? AND NOT excluded ORDER BY start_time_utc, id""",
+        (person_id,),
     ).fetchall()
     with_serial: dict[int, _Device] = {}
     entries: list[tuple[sqlite3.Row, tuple, dict]] = []  # entries with a serial number
@@ -197,27 +194,11 @@ def activity_ids(conn: sqlite3.Connection, person_id: str, key: str) -> tuple[di
     return {}, []
 
 
-def of_activity(conn: sqlite3.Connection, person_id: str, activity_id: int) -> list[dict]:
-    """The devices of one activity as Statistics › Gear tells them apart: {kind, maker,
-    product, name, serial, products}, the recording device first."""
-    out = []
-    for d in _devices(conn, person_id, also=activity_id)[1]:
-        if activity_id not in d.activities:
-            continue
-        labels = d.ranked()
-        kind, maker, product, name = labels[0]
-        out.append({
-            "kind": kind, "maker": maker, "product": product, "name": name, "serial": d.serial,
-            "products": list(dict.fromkeys(p for _, _, p, _ in labels if p)),
-        })  # fmt: skip
-    return sorted(out, key=lambda d: (fitfile.kind_order(d["kind"]), d["serial"]))
-
-
 def _age(a: sqlite3.Row) -> tuple[str, int]:
     return a["start_time_utc"], a["id"]
 
 
-def _spans(days: list[date]) -> list[list[str]]:
+def spans(days: list[date]) -> list[list[str]]:
     """[first day, last day] of each stretch of use, from the days in order: a break of
     BREAK_DAYS days or more without the device ends one."""
     out = [[days[0], days[0]]]
@@ -276,7 +257,7 @@ def _scales(conn, person_id: str, keep) -> list[dict]:
             "ascent_m": None, "types": [], "first": _moment(counted[0]),
             "last": _moment(counted[-1]), "last_start": counted[-1]["start_time_utc"],
             "first_start": all_of[0]["start_time_utc"],
-            "spans": _spans([date.fromisoformat(_moment(w)["day"]) for w in counted]),
+            "spans": spans([date.fromisoformat(_moment(w)["day"]) for w in counted]),
         })  # fmt: skip
     return sorted(out, key=lambda s: (s["first_start"], s["key"]))
 
@@ -330,7 +311,7 @@ def summary(conn: sqlite3.Connection, person_id: str, where=(), params=()) -> di
             "ascent_m": sum(a["ascent_m"] or 0 for a in acts),
             "first": _moment(acts[0]),
             "last": _moment(acts[-1]),
-            "spans": _spans([date.fromisoformat(_moment(a)["day"]) for a in acts]),
+            "spans": spans([date.fromisoformat(_moment(a)["day"]) for a in acts]),
             "last_start": acts[-1]["start_time_utc"],
             "types": [
                 {"type": t, "activities": n}

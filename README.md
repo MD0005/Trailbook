@@ -87,16 +87,30 @@ export, FIT/GPX/TCX files) are there to bring in older history or a second devic
 
 <table><tr><td align="center" valign="top"><a href="docs/screenshots/fitness.png"><img src="docs/screenshots/fitness.png" alt="Fitness › fitness, fatigue and form" width="520"></a><br><sub><em>Fitness › fitness, fatigue and form</em></sub></td></tr></table>
 
+**Wellbeing**
+- **Movement**: steps, floors and intensity minutes against your goals, with the best and
+  worst day of the week.
+- **Body**: weight and its trend, body composition, BMI and VO2 max.
+
+<table><tr><td align="center" valign="top"><a href="docs/screenshots/wellbeing.png"><img src="docs/screenshots/wellbeing.png" alt="Wellbeing › Movement" width="430"></a><br><sub><em>Wellbeing › Movement</em></sub></td></tr></table>
+
 **Statistics**
 - **Compare years**: distance, activities and elevation per year, and every year as a line
   with its running total.
 - **Timeline**: when, where and in what weather you train, and your explorer tiles growing.
 - **Records**: your best efforts and their curves for running, cycling, walking and hiking,
   and segments, of all time or in any period.
-- **Gear**: how much each watch, bike computer, sensor and your scale has been used, and
-  since when.
 
 <table><tr><td align="center" valign="top"><a href="docs/screenshots/statistics.png"><img src="docs/screenshots/statistics.png" alt="Statistics › Compare years" width="260"></a><br><sub><em>Statistics › Compare years</em></sub></td><td align="center" valign="top"><a href="docs/screenshots/timeline.png"><img src="docs/screenshots/timeline.png" alt="Statistics › Timeline" width="260"></a><br><sub><em>Statistics › Timeline</em></sub></td><td align="center" valign="top"><a href="docs/screenshots/records.png"><img src="docs/screenshots/records.png" alt="Statistics › Records" width="260"></a><br><sub><em>Statistics › Records</em></sub></td></tr></table>
+
+**Gear**
+- **Electronics**: how much each watch, bike computer, sensor and your scale has been used,
+  and since when; several of a kind can share one line of the chart.
+- **Equipment** (Home Assistant app): your shoes and bikes from Home Assistant gear sensors
+  (e.g. of a Garmin Connect integration): distance, wear, when they were used and the
+  activities that used them.
+
+<table><tr><td align="center" valign="top"><a href="docs/screenshots/gear.png"><img src="docs/screenshots/gear.png" alt="Gear › Electronics" width="450"></a><br><sub><em>Gear › Electronics</em></sub></td><td align="center" valign="top"><a href="docs/screenshots/equipment.png"><img src="docs/screenshots/equipment.png" alt="Gear › Equipment" width="330"></a><br><sub><em>Gear › Equipment</em></sub></td></tr></table>
 
 **And more**
 - Several people in one install; pick two to see the activities they did together.
@@ -107,7 +121,7 @@ export, FIT/GPX/TCX files) are there to bring in older history or a second devic
 - Older history from a Strava export, a folder or an upload; duplicates are skipped.
 - One-click backup and move to another device.
 - Light on resources: near-zero CPU when idle.
-- 🚧 Wellbeing — sleep, stress, HRV and more — is coming.
+- 🚧 Sleep and recovery in Wellbeing are coming.
 
 ## Installation
 
@@ -250,8 +264,8 @@ internet for:
 
 ## In development
 
-- 🚧 **Wellbeing** — sleep, stress, HRV, resting heart rate, steps and weight from Garmin
-  Connect.
+- 🚧 **Wellbeing › Sleep and Recovery** — sleep, HRV, resting heart rate, training readiness
+  and Body Battery.
 - 🚧 **More sources** — further services under *Settings › Other sources*.
 - 🚧 **Home Assistant automations** — start an import from an automation.
 

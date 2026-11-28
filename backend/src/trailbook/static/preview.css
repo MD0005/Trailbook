@@ -1247,6 +1247,7 @@ a.chart-mark { cursor: pointer; }
 .chart-tip { position: absolute; left: 0; top: 0; pointer-events: none; white-space: nowrap; z-index: 3;
              padding: 3px 8px; border-radius: 6px; font-size: 12px; background: color-mix(in srgb, var(--surface) 92%, transparent);
              box-shadow: 0 2px 8px rgba(0,0,0,.12); transition: transform .06s linear; }
+.chart-tip.curve-tip { position: fixed; z-index: 40; }
 .chart-tip-name { color: var(--muted); }
 .chart-tip-target { display: flex; align-items: center; gap: 5px; margin-top: 2px; font-size: 11px; color: var(--muted); }
 .chart-tip-swatch { width: 12px; height: 8px; border: 1px dashed var(--fg); opacity: .6; border-radius: 1px; }
@@ -1958,10 +1959,12 @@ svg.tile-chart { width: 100%; height: 100%; display: block; }
 /* Statistics › Records: tiles like the activity's top tiles - a table of best efforts (one width
    for all) beside its curve, each pair one height */
 .rec-page { display: grid; grid-template-columns: minmax(0, var(--rec-table-w)) minmax(0, 1fr); --rec-table-w: 560px; gap: 12px; align-items: stretch; font-family: Roboto, system-ui, sans-serif; }
-@media (max-width: 900px) { .rec-page { grid-template-columns: minmax(0, 1fr); } .rec-page > div:empty { display: none; } }
-.rec-page > .card { margin: 0; padding: 12px 14px; min-width: 0; }
+.rec-page > .card, .rec-sides > .card { margin: 0; padding: 12px 14px; min-width: 0; }
+/* the tables without a curve, as wide as the other tables, wrapping, each its own height */
+.rec-sides { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: flex-start; gap: 12px; }
+.rec-sides > .card { flex: none; width: var(--rec-table-w); max-width: 100%; }
+@media (max-width: 900px) { .rec-page { grid-template-columns: minmax(0, 1fr); } .rec-page > div:empty { display: none; } .rec-sides > .card { width: 100%; } }
 .rec-tile:not(.rec-curve-tile) { min-width: 0; }
-.rec-seg-tile, .rec-side-tile { width: var(--rec-table-w); max-width: 100%; justify-self: start; } /* as wide as the other tables */
 .rec-tile h3 .laurel { width: 18px; height: 18px; flex: none; } /* as large as the sport icon */
 .rec-tile h3 .rec-be { text-transform: uppercase; letter-spacing: .03em; }
 .rec-seg { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; }
@@ -2163,6 +2166,12 @@ svg.tile-chart { width: 100%; height: 100%; display: block; }
 /* ---- Home Assistant (hacards.js) ---------------------------------------------------- */
 .ha-yaml { background: var(--surface-2); border-radius: 8px; padding: 10px 12px; overflow-x: auto; margin: 0 0 10px;
            font: 12px/1.45 ui-monospace, "Cascadia Mono", Consolas, monospace; white-space: pre; }
+.ha-copy { position: relative; margin-bottom: 10px; }
+.ha-copy .ha-yaml { margin: 0; padding-right: 40px; }
+.ha-copy-btn { position: absolute; top: 6px; right: 6px; height: 28px; min-width: 28px; padding: 0 6px; display: grid; place-items: center;
+  border: 0; border-radius: 6px; background: transparent; color: var(--muted); font-size: 12px; cursor: pointer; }
+.ha-copy-btn:hover { background: transparent; color: var(--accent); filter: none; }
+.ha-copy-btn svg { width: 16px; height: 16px; }
 .ha-msg { white-space: pre-line; font-size: 13px; }
 .ha-sensors { width: 100%; table-layout: fixed; }
 .ha-sensors td:nth-child(1) { width: 32%; }
@@ -2413,7 +2422,7 @@ body.embed-detail #route-map { margin-top: 0; }
   .pair-owner { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
 }
 
-/* Statistics › Gear: a row of square cards with rings, the spans chart, the table */
+/* Gear: a row of square cards with rings, the spans chart, the table */
 .gear-rings { display: grid; gap: 12px; margin-bottom: 16px; }
 .gear-card { margin: 0; aspect-ratio: 1; min-width: 0; padding: 10px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; }
 .gear-ring { position: relative; flex: 1 1 0; min-height: 0; aspect-ratio: 1; display: grid; place-items: center; margin-bottom: 4px; }
@@ -2449,6 +2458,24 @@ tr.gear-retired td:not(:last-child), .gear-ylab.gear-retired, .gear-row.gear-ret
 .gear-row + .gear-row { border-top: 1px dashed var(--chart-grid); }
 .gear-bar { position: absolute; top: 50%; height: 20px; min-width: 4px; transform: translateY(-50%); border-radius: 6px; box-shadow: 0 1px 4px rgba(0, 0, 0, .16); }
 .gear-bar:hover { filter: brightness(.92); }
+/* a line of several devices: one rounded bar, each in its colour */
+.gear-join { overflow: hidden; background: var(--surface-2); }
+.gear-join b { position: absolute; min-width: 1px; }
+.gear-join b:hover { filter: brightness(.92); }
+.gear-sub { font-size: 11px; line-height: 1.2; color: var(--muted); white-space: nowrap; }
+/* Gear › Options: rows as in every Options panel; lists to pick several from, names with a
+   button */
+.gear-panel { min-width: 340px; max-width: min(440px, 90vw); max-height: 62vh; overflow-y: auto; }
+.gear-panel .opt-row { grid-template-columns: 96px minmax(0, 1fr); align-items: start; }
+.gear-panel .opt-row + .opt-row, .gear-panel [data-gear-join] > .opt-row { border-top: 1px solid var(--line); padding-top: 9px; margin-top: 4px; }
+.gear-panel .opt-label { padding-top: 4px; }
+.gear-panel .checks-col { gap: 2px; }
+.gear-panel .checks-col .check { min-height: 28px; margin: 0; padding: 0 6px; border-radius: 6px; }
+.gear-panel .checks-col .check:hover { background: var(--surface-2); }
+.gear-panel .check small { margin-left: 4px; color: var(--muted); }
+.opt-line { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 28px; margin-bottom: 4px; font-size: 12px; }
+.gear-panel .opt-line input { flex: 1 1 auto; min-width: 0; }
+.opt-actions { display: flex; justify-content: flex-end; margin-top: 6px; }
 .gear-cursor { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--chart-pin); pointer-events: none; }
 .gear-xaxis { position: relative; height: 34px; font-size: 11px; line-height: 1.25; color: var(--muted); }
 .gear-xaxis [data-ticks] span { position: absolute; top: 4px; white-space: nowrap; border-left: 1px solid var(--chart-frame); padding-left: 3px; }

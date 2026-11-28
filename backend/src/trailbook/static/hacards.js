@@ -113,13 +113,34 @@ actions:
       message: "{{ trigger.to_state.attributes.message }}"
 mode: queued`;
 
-function haCopyButton(text) {
-  return `<button class="badge" data-copy="${esc(text)}">Copy</button>`;
+// Text to paste in Home Assistant: a grey box with its copy icon inside.
+const ICON_COPY = svg(`<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15H4.5A1.5 1.5 0 0 1 3 13.5v-9A1.5 1.5 0 0 1 4.5 3h9A1.5 1.5 0 0 1 15 4.5V5"/>`);
+const ICON_COPIED = svg(`<path d="m5 12.5 4.5 4.5L19 7.5"/>`);
+function haCopyBox(text) {
+  return `<div class="ha-copy"><pre class="ha-yaml">${esc(text)}</pre><button type="button" class="ha-copy-btn" title="Copy" aria-label="Copy" data-copy>${ICON_COPY}</button></div>`;
+}
+// The Clipboard API exists only on https (Home Assistant is often opened over http), so the
+// older copy command stands in for it.
+async function copyText(text) {
+  try { await navigator.clipboard.writeText(text); return true; } catch (e) { /* not allowed here */ }
+  const field = document.createElement("textarea");
+  field.value = text;
+  field.setAttribute("readonly", "");
+  field.style.cssText = "position:fixed;top:0;left:0;opacity:0";
+  document.body.append(field);
+  field.select();
+  const done = document.execCommand("copy");
+  field.remove();
+  return done;
 }
 function bindCopy(root) {
   root.querySelectorAll("[data-copy]").forEach((b) => b.onclick = async () => {
-    try { await navigator.clipboard.writeText(b.dataset.copy); b.textContent = "Copied"; } catch (e) { b.textContent = "Select and copy by hand"; }
-    setTimeout(() => { b.textContent = "Copy"; }, 1500);
+    const source = b.parentElement.querySelector("pre");
+    const done = await copyText(source.textContent);
+    if (!done) getSelection().selectAllChildren(source); // left selected for Ctrl+C
+    b.innerHTML = done ? ICON_COPIED : "Press Ctrl+C";
+    b.title = done ? "Copied" : "Press Ctrl+C";
+    setTimeout(() => { b.innerHTML = ICON_COPY; b.title = "Copy"; }, 1500);
   });
 }
 
@@ -131,8 +152,7 @@ async function haAutomationTab(el) {
         <li>Home Assistant › Settings › Automations &amp; scenes › Create automation › Create new automation.</li>
         <li>⋮ › Edit in YAML, paste the text below, Save: a notification for every new record.</li>
       </ol>
-      <pre class="ha-yaml">${esc(HA_AUTOMATION)}</pre>
-      <div class="card-row">${haCopyButton(HA_AUTOMATION)}</div>
+      ${haCopyBox(HA_AUTOMATION)}
     </div>
     ${last?.title ? `<div class="card">
       <h3>Latest record sent <span class="title-note">(${esc(last.title)})</span></h3>
@@ -147,13 +167,12 @@ const haSensorValue = (s) => (s.unit === "km" ? `${num(s.value, 1)} km` : num(s.
 
 // A card per person: each sensor with its entity id, value now and an On / Off badge.
 async function haSensorsTab(el) {
-  const { addon, sensors } = await api("ha/sensors");
+  const { sensors } = await api("ha/sensors");
   const people = [...new Map(sensors.map((s) => [s.person, s.person_label]))];
   const line = (s) => `<tr data-tip="${esc(s.tip)}">
       <td><b>${esc(s.name)}</b></td><td><code>${esc(s.entity_id)}</code></td><td class="num">${haSensorValue(s)}</td>
       <td class="actions"><button class="badge ${s.enabled ? "on" : ""}" data-sensor="${esc(s.entity_id)}" aria-pressed="${s.enabled}">${s.enabled ? "On" : "Off"}</button></td></tr>`;
-  el.innerHTML = `${addon ? "" : `<div class="card">${hint("Sensors are sent only in the Home Assistant app.")}</div>`}
-    ${people.map(([pid, label]) => `<div class="card"><h3>${esc(label)}</h3><div class="table-wrap"><table class="ha-sensors">
+  el.innerHTML = `${people.map(([pid, label]) => `<div class="card"><h3>${esc(label)}</h3><div class="table-wrap"><table class="ha-sensors">
       <tbody>${sensors.filter((s) => s.person === pid).map(line).join("")}</tbody></table></div></div>`).join("")
       || `<div class="card">${hint("No sensors yet: they appear with the first activities.")}</div>`}`;
   el.querySelectorAll("[data-sensor]").forEach((b) => b.onclick = async () => {
@@ -191,7 +210,7 @@ function haDrawList() {
     ${cards.length ? `<div class="cards ha-list">${cards.map(haCardFrame).join("")}</div>`
       : `<div class="card">${hint("No cards yet. New card (top) makes one for a Home Assistant dashboard.")}</div>`}`;
   bindCopy(el);
-  bindEditButtons(el);
+  bindCardButtons(el);
 }
 
 // The creator window: a new card (`card` null) or a copy of the one edited; nothing is saved
@@ -269,19 +288,26 @@ function haDraw() {
   haDrawOptions();
 }
 
-function bindEditButtons(root) {
-  root.querySelectorAll("[data-ha-edit]").forEach((b) => b.onclick = () => haOpen(HA.cards.find((c) => c.id === b.dataset.haEdit)));
+function bindCardButtons(root) {
+  const find = (id) => HA.cards.find((c) => c.id === id);
+  root.querySelectorAll("[data-ha-edit]").forEach((b) => b.onclick = () => haOpen(find(b.dataset.haEdit)));
+  // Duplicate: a new card with the same type and settings, at the end of the list
+  root.querySelectorAll("[data-ha-dup]").forEach((b) => b.onclick = async () => {
+    const { name, kind, config } = find(b.dataset.haDup);
+    b.disabled = true; // one copy a click
+    HA.cards.push(await api("ha/cards", { method: "POST", body: JSON.stringify({ name: `${name.slice(0, 55).trim()} copy`, kind, config }) }));
+    haDrawList();
+  });
 }
 
 // A card made: its name and type, a small preview (half size, nothing to click), Edit, and the
 // text for the dashboard.
 function haCardFrame(c) {
-  const yaml = haYaml(c);
   return `<div class="card ha-item" data-ha-item="${esc(c.id)}">
     <div class="card-head"><h3>${esc(c.name)} <span class="title-note">(${esc(haLabel(HA_KINDS, c.kind))})</span></h3></div>
     <div class="ha-mini"><iframe title="${esc(c.name)}" tabindex="-1" loading="lazy" src="${haMiniSrc(c)}"></iframe></div>
-    <pre class="ha-yaml">${esc(yaml)}</pre>
-    <div class="card-row"><button class="badge" data-ha-edit="${esc(c.id)}">Edit</button>${haCopyButton(yaml)}</div>
+    ${haCopyBox(haYaml(c))}
+    <div class="card-row"><button class="badge" data-ha-edit="${esc(c.id)}">Edit</button><button class="badge" data-ha-dup="${esc(c.id)}">Duplicate</button></div>
   </div>`;
 }
 

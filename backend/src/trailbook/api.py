@@ -40,6 +40,7 @@ from . import (
     basemap,
     countries,
     db,
+    equipment,
     explorer,
     export,
     fitfile,
@@ -309,10 +310,13 @@ def _workout_filter(q) -> tuple[list[str], list]:
 
 
 def _device_filter(c: sqlite3.Connection, q, person_id: str) -> tuple[dict, list[str], list]:
-    """Activities of one device (`device`: its key on Statistics › Gear): the device
+    """Activities of one device (`device`: its key on Gear): the device
     ({name, serial}, {} when unknown) and the SQL condition; excluded activities are left out,
     as in the counts there."""
-    device, ids = gear.activity_ids(c, person_id, q["device"])
+    if q.get("equipment"):  # a shoe or bike of Gear › Equipment: its paired activities
+        device, ids = equipment.activity_ids(c, person_id, q["equipment"])
+    else:
+        device, ids = gear.activity_ids(c, person_id, q["device"])
     return device, ["id IN (SELECT value FROM json_each(?))"], [json.dumps(ids)]
 
 
@@ -412,6 +416,8 @@ def create_app(db_path: str | Path) -> Starlette:
                     "schema": db.schema_version(c),
                     "root": db.get_setting(c, "root"),
                     "desktop": update.enabled(),
+                    # the Home Assistant app: it has the HA page and Gear › Equipment
+                    "ha": homeassistant.available(),
                 }
             )
 
@@ -951,9 +957,9 @@ def create_app(db_path: str | Path) -> Starlette:
         offset = _int(request, "offset", 0, 0, 10**9)
         order = _order(q, ACTIVITY_SORTS, "date", "id")
         with closing(conn()) as c:
-            # one device of one person (a click on it on Statistics › Gear)
+            # one device of one person (a click on it on Gear)
             device = None
-            if q.get("device"):
+            if q.get("device") or q.get("equipment"):
                 device, d_where, d_params = _device_filter(c, q, _single_person(c, request))
                 where += d_where
                 params += d_params
@@ -1058,10 +1064,9 @@ def create_app(db_path: str | Path) -> Starlette:
                 b["prev"] = dict(p) if p else None
             # Own photos of devices: data/device-images/<product>.(png|jpg|webp)
             if a.get("devices"):
-                devs = gear.of_activity(c, a["person_id"], aid)
+                devs = json.loads(a["devices"])
                 for d in devs:
-                    images = (_device_image(p) for p in d.pop("products"))
-                    d["image"] = next((url for url in images if url), None)
+                    d["image"] = _device_image(d.get("product"))
                 a["devices"] = devs
             a["country_name"] = countries.names().get(a.get("country") or "")
             a["segments"] = _activity_segments(c, a)
@@ -1084,7 +1089,7 @@ def create_app(db_path: str | Path) -> Starlette:
             nw, npar = activity_filters(q, "", person=every)
             if not every:
                 nw, npar = [*nw, "person_id = ?"], [*npar, row["person_id"]]
-                if q.get("device"):
+                if q.get("device") or q.get("equipment"):
                     _, d_where, d_params = _device_filter(c, q, row["person_id"])
                     nw, npar = [*nw, *d_where], [*npar, *d_params]
             w_where, w_params = _workout_filter(q)
@@ -1989,7 +1994,7 @@ def create_app(db_path: str | Path) -> Starlette:
             "items": items, "countries": countries.names(), "steps": steps,
         })  # fmt: skip
 
-    # Statistics › Gear: every device of the person with its use, over the whole history or in
+    # Gear › Electronics: every device of the person with its use, over the whole history or in
     # the Time filter
     async def stats_gear(request: Request):
         q = request.query_params
@@ -2002,6 +2007,29 @@ def create_app(db_path: str | Path) -> Starlette:
             images = (_device_image(p) for p in d.pop("products"))
             d["image"] = next((url for url in images if url), None)
         return JSONResponse(data)
+
+    # Gear › Equipment: the person's shoes and bikes (Home Assistant sensors) and the sensors
+    # that can be added
+    async def equipment_get(request: Request):
+        def work():
+            with closing(conn()) as c:
+                return equipment.summary(c, _single_person(c, request))
+
+        return JSONResponse(await run_in_threadpool(work))
+
+    async def activity_equipment(request: Request):
+        aid = request.path_params["id"]
+
+        def work():
+            with closing(conn()) as c:
+                _activity_or_404(c, aid)
+                return {"items": equipment.of_activity(c, aid)}
+
+        return JSONResponse(await run_in_threadpool(work))
+
+    async def equipment_sensors(request: Request):
+        found = await run_in_threadpool(equipment.sensors)
+        return JSONResponse({"addon": homeassistant.available(), "sensors": found})
 
     # Statistics › Records: per sport (run, ride) and best effort (kind, key, v) the 3 best of
     # all time and, with a Time filter, the best in that time. Rides: outdoor and indoor (v = 1)
@@ -3059,6 +3087,9 @@ def create_app(db_path: str | Path) -> Starlette:
         Route("/api/suggest", suggest_next),
         Route("/api/stats/records", stats_records),
         Route("/api/stats/gear", stats_gear),
+        Route("/api/equipment", equipment_get),
+        Route("/api/equipment/sensors", equipment_sensors),
+        Route("/api/activities/{id:int}/equipment", activity_equipment),
         Route("/api/ha/records", ha_records),
         Route("/api/ha/sensors", ha_sensors),
         Route("/api/ha/sensors", ha_sensors_put, methods=["PUT"]),
