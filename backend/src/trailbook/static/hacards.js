@@ -4,6 +4,7 @@
 
 const HA_TABS = [
   ["cards", "Cards", svg(`<rect x="3" y="4" width="8" height="7" rx="1.5"/><rect x="13" y="4" width="8" height="11" rx="1.5"/><rect x="3" y="13" width="8" height="7" rx="1.5"/><rect x="13" y="17" width="8" height="3" rx="1.5"/>`)],
+  ["sensors", "Sensors", svg(`<circle cx="12" cy="12" r="2.2"/><path d="M7.8 16.2a6 6 0 0 1 0-8.4M16.2 7.8a6 6 0 0 1 0 8.4M4.9 19.1a10 10 0 0 1 0-14.2M19.1 4.9a10 10 0 0 1 0 14.2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>`)],
   ["automation", "Record automation", svg(`<path d="M8 21h8M12 17v4M7 4h10v5a5 5 0 0 1-10 0z"/><path d="M17 5h3a3 3 0 0 1-3 4M7 5H4a3 3 0 0 0 3 4"/>`)],
 ];
 const HA_KINDS = [["map", "Map"], ["activity", "Activity"], ["detail", "Activity detailed"], ["records", "Records"], ["calendar", "Calendar"]];
@@ -80,7 +81,7 @@ function haKindDefaults(kind, prev) {
   return { people: people.slice(0, 1), weeks: 2, ahead: false, summary: true };
 }
 
-// ---- the page: Home Assistant › Record automation | Cards ---------------------------------
+// ---- the page: Home Assistant › Cards | Sensors | Record automation ------------------------
 
 async function renderHa(tab, params) {
   tab = HA_TABS.some(([k]) => k === tab) ? tab : "cards";
@@ -89,6 +90,7 @@ async function renderHa(tab, params) {
   view.querySelectorAll("[data-switch=hatab]").forEach((b) => b.onclick = () => { location.hash = "#/ha/" + b.dataset.value; });
   const el = document.getElementById("tab");
   if (tab === "automation") await haAutomationTab(el);
+  else if (tab === "sensors") await haSensorsTab(el);
   else await haCardsTab(el, params);
 }
 
@@ -137,6 +139,31 @@ async function haAutomationTab(el) {
       <div class="ha-msg">${esc(last.message || "")}</div>
     </div>` : ""}`;
   bindCopy(el);
+}
+
+// ---- Sensors: what the app sends to Home Assistant (hasensors.py) --------------------------
+
+const haSensorValue = (s) => (s.unit === "km" ? `${num(s.value, 1)} km` : num(s.value, 1));
+
+// A card per person: each sensor with its entity id, value now and an On / Off badge.
+async function haSensorsTab(el) {
+  const { addon, sensors } = await api("ha/sensors");
+  const people = [...new Map(sensors.map((s) => [s.person, s.person_label]))];
+  const line = (s) => `<tr data-tip="${esc(s.tip)}">
+      <td><b>${esc(s.name)}</b></td><td><code>${esc(s.entity_id)}</code></td><td class="num">${haSensorValue(s)}</td>
+      <td class="actions"><button class="badge ${s.enabled ? "on" : ""}" data-sensor="${esc(s.entity_id)}" aria-pressed="${s.enabled}">${s.enabled ? "On" : "Off"}</button></td></tr>`;
+  el.innerHTML = `${addon ? "" : `<div class="card">${hint("Sensors are sent only in the Home Assistant app.")}</div>`}
+    ${people.map(([pid, label]) => `<div class="card"><h3>${esc(label)}</h3><div class="table-wrap"><table class="ha-sensors">
+      <tbody>${sensors.filter((s) => s.person === pid).map(line).join("")}</tbody></table></div></div>`).join("")
+      || `<div class="card">${hint("No sensors yet: they appear with the first activities.")}</div>`}`;
+  el.querySelectorAll("[data-sensor]").forEach((b) => b.onclick = async () => {
+    const s = sensors.find((x) => x.entity_id === b.dataset.sensor);
+    await api("ha/sensors", { method: "PUT", body: JSON.stringify({ person: s.person, key: s.key, enabled: !s.enabled }) });
+    s.enabled = !s.enabled;
+    b.classList.toggle("on", s.enabled);
+    b.setAttribute("aria-pressed", s.enabled);
+    b.textContent = s.enabled ? "On" : "Off";
+  });
 }
 
 // ---- Cards: the creator ------------------------------------------------------------------

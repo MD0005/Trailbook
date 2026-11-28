@@ -47,6 +47,7 @@ from . import (
     garmin,
     gear,
     hacards,
+    hasensors,
     homeassistant,
     icu,
     icufiles,
@@ -1057,9 +1058,10 @@ def create_app(db_path: str | Path) -> Starlette:
                 b["prev"] = dict(p) if p else None
             # Own photos of devices: data/device-images/<product>.(png|jpg|webp)
             if a.get("devices"):
-                devs = json.loads(a["devices"])
+                devs = gear.of_activity(c, a["person_id"], aid)
                 for d in devs:
-                    d["image"] = _device_image(d.get("product"))
+                    images = (_device_image(p) for p in d.pop("products"))
+                    d["image"] = next((url for url in images if url), None)
                 a["devices"] = devs
             a["country_name"] = countries.names().get(a.get("country") or "")
             a["segments"] = _activity_segments(c, a)
@@ -2099,6 +2101,31 @@ def create_app(db_path: str | Path) -> Starlette:
         with closing(conn()) as c:
             return JSONResponse(records.payload(records.latest(c)))
 
+    # The sensors per person (hasensors.py): every one there is, and switching it on or off.
+    def _publish_sensors() -> None:
+        with closing(conn()) as c:
+            hasensors.refresh_and_publish(c)
+
+    async def ha_sensors(request: Request):
+        def work():
+            with closing(conn()) as c:
+                return hasensors.sensors(c)
+
+        found = await run_in_threadpool(work)
+        for s in found:
+            del s["history"], s["attributes"]
+        return JSONResponse({"addon": homeassistant.available(), "sensors": found})
+
+    async def ha_sensors_put(request: Request):
+        body = await request.json()
+        enabled = body.get("enabled")
+        if not isinstance(enabled, bool):
+            raise HTTPException(400, "enabled must be true or false")
+        with closing(conn()) as c:
+            if not hasensors.set_enabled(c, body.get("person"), body.get("key"), enabled):
+                raise HTTPException(404, "sensor not found")
+        return Response(status_code=204, background=BackgroundTask(_publish_sensors))
+
     # Dashboard cards (hacards.py): made here, shown by the Lovelace card `trailbook-card`.
     async def ha_setup(request: Request):
         return JSONResponse(
@@ -3033,6 +3060,8 @@ def create_app(db_path: str | Path) -> Starlette:
         Route("/api/stats/records", stats_records),
         Route("/api/stats/gear", stats_gear),
         Route("/api/ha/records", ha_records),
+        Route("/api/ha/sensors", ha_sensors),
+        Route("/api/ha/sensors", ha_sensors_put, methods=["PUT"]),
         Route("/api/ha/setup", ha_setup),
         Route("/api/ha/cards", ha_cards_list),
         Route("/api/ha/cards", ha_cards_create, methods=["POST"]),
@@ -3230,7 +3259,8 @@ def create_app(db_path: str | Path) -> Starlette:
 
     # Record events Home Assistant did not get (it was restarting or away) are sent again, and
     # the sensor is put back (state 0) when HA lost it: a pushed state does not survive an HA
-    # restart, and before the first record there would be no entity at all.
+    # restart, and before the first record there would be no entity at all. The people's
+    # sensors are brought up to date the same way (a new day, an edited or deleted activity).
     async def ha_records_loop():
         while True:
 
@@ -3244,6 +3274,7 @@ def create_app(db_path: str | Path) -> Starlette:
                 await run_in_threadpool(work)
             except Exception:  # noqa: BLE001 - keep the loop alive
                 log.exception("Records for Home Assistant failed")
+            await run_in_threadpool(_publish_sensors)
             await asyncio.sleep(HA_RECORDS_RETRY_S)
 
     @asynccontextmanager

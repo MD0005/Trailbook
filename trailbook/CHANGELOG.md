@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.1.28
+
+### Added
+- Home Assistant sensors for every person: VO2 max (running), running and cycling distance of
+  4 weeks and of the year, distance of all activities this year, with their history.
+- Home Assistant › Sensors: the list of them with an On / Off button for each.
+
+### Changed
+- Statistics › Gear and the activity page list only devices with a serial number; entries
+  without one count for the matching device.
+- A watch that sends its heart rate counts as that watch, not as a separate heart rate strap.
+- Unknown sensors and devices used only a few times long ago are no longer shown.
+- Statistics › Gear: All time starts with the first device.
+
+### Fixed
+- A smart trainer is no longer shown under a watch's name.
+
 ## 0.1.27
 
 ### Added

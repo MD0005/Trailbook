@@ -1,5 +1,7 @@
 import json
+from datetime import date
 
+import pytest
 from starlette.testclient import TestClient
 
 from trailbook import db, fitfile, gear
@@ -9,6 +11,12 @@ from trailbook.api import create_app
 WATCH = ("watch", "Garmin", "fr965", "Forerunner 965")
 STRAP = ("hr_strap", "Garmin", "hrm_dual", "HRM-Dual")
 METER = ("power_meter", "Favero", "assioma_uno", "Assioma Uno")
+
+
+@pytest.fixture(autouse=True)
+def _every_device(monkeypatch):
+    """Rare devices of long ago are shown too (their own test turns the rule on again)."""
+    monkeypatch.setattr(gear, "RARE_USES", 0)
 
 
 def _d(label, serial=None, battery=None, level=None):
@@ -67,11 +75,11 @@ def test_same_model_told_apart_by_serial(tmp_path):
     c = _conn(tmp_path)
     _activity(c, "2026-01-01", [_d(STRAP, 222)])
     _activity(c, "2026-02-01", [_d(STRAP, 333)])
-    _activity(c, "2026-03-01", [_d(STRAP)])  # which of the two? not known: on its own
+    _activity(c, "2026-02-20", [_d(STRAP)])  # no serial: the one used closest in time
+    _activity(c, "2025-12-20", [_d(STRAP)])
     found = _by_key(gear.summary(c, "ann"))
-    assert set(found) == {"sn222", "sn333", "hr_strap:hrm_dual"}
-    assert found["hr_strap:hrm_dual"]["serial"] is None
-    assert found["sn222"]["activities"] == 1
+    assert set(found) == {"sn222", "sn333"}
+    assert (found["sn222"]["activities"], found["sn333"]["activities"]) == (2, 2)
 
 
 def test_one_serial_under_several_labels(tmp_path):
@@ -87,19 +95,58 @@ def test_one_serial_under_several_labels(tmp_path):
     assert meter["products"] == ["assioma_uno"]
 
 
-def test_entries_without_serial_join_the_only_candidate(tmp_path):
+def test_entries_without_serial_join_a_device_or_are_left_out(tmp_path):
     c = _conn(tmp_path)
     _activity(c, "2026-01-01", [_d(WATCH, 111), _d(METER, 444), _d(STRAP, 222)])
     _activity(c, "2026-01-02", [_d(STRAP)])  # same product
-    _activity(c, "2026-01-03", [_d(("hr_strap", "Tacx", "forerunner", "Forerunner"))])  # name
-    _activity(c, "2026-01-04", [_d(("watch", "Garmin", None, "Watch"))])  # kind, no model
+    _activity(c, "2026-01-03", [_d(("hr_strap", "Tacx", "forerunner", "Forerunner"))])  # watch
+    _activity(c, "2026-01-04", [_d(("watch", "Garmin", None, "Watch"))])  # wrist heart rate
     _activity(c, "2026-01-05", [_d(("power_meter", None, "10", "Power meter"))])  # number
     _activity(c, "2026-01-06", [_d(("foot_pod", "Garmin", None, "Foot pod"))])  # no candidate
+    _activity(c, "2026-01-07", [_d(("watch", "Virtualtraining", "1", "Watch"))])  # no watch
+    _activity(c, "2026-01-08", [_d(("hr_strap", "Garmin", "18", "Heart rate monitor"))])
     found = _by_key(gear.summary(c, "ann"))
-    assert set(found) == {"sn111", "sn222", "sn444", "foot_pod:foot pod"}
+    assert set(found) == {"sn111", "sn222", "sn444"}
     assert found["sn111"]["activities"] == 3
-    assert found["sn222"]["activities"] == 2
+    assert found["sn222"]["activities"] == 3
     assert found["sn444"]["activities"] == 2
+    assert (found["sn111"]["kind"], found["sn111"]["name"]) == ("watch", "Forerunner 965")
+
+
+def test_a_watch_sending_heart_rate_is_the_watch(tmp_path):
+    c = _conn(tmp_path)
+    sending = ("hr_strap", "Tacx", "forerunner_965", "Forerunner 965")
+    _activity(c, "2026-01-01", [_d(WATCH, 111)])
+    # the bike computer records, the watch sends its heart rate under a number of its own
+    for day in ("2026-01-02", "2026-01-03"):
+        _activity(c, day, [_d(sending, 555)], kind="ride")
+    (watch,) = gear.summary(c, "ann")["devices"]
+    assert (watch["key"], watch["kind"], watch["activities"]) == ("sn111", "watch", 3)
+
+
+def test_unknown_sensors_and_misread_names(tmp_path):
+    c = _conn(tmp_path)
+    trainer = ("trainer", "Tacx", None, "Smart trainer")
+    misread = ("sensor", "Tacx", "fenix5s_plus", "fēnix 5S plus")
+    _activity(c, "2026-01-01", [_d(trainer, 666), _d(("sensor", None, "3299", "Sensor"), 7)])
+    for day in ("2026-01-02", "2026-01-03"):
+        _activity(c, day, [_d(misread, 666)])
+    (found,) = gear.summary(c, "ann")["devices"]
+    assert (found["kind"], found["name"], found["activities"]) == ("trainer", "Smart trainer", 3)
+
+
+def test_rare_devices_of_long_ago_are_left_out(tmp_path, monkeypatch):
+    monkeypatch.setattr(gear, "RARE_USES", 5)
+    monkeypatch.setattr(gear, "_today", lambda: date(2026, 11, 27))
+    c = _conn(tmp_path)
+    _activity(c, "2025-01-01", [_d(STRAP, 222)])  # once, long ago: a test or a mistake
+    for n in range(1, 6):  # often enough
+        _activity(c, f"2025-02-0{n}", [_d(WATCH, 111)])
+    _activity(c, "2026-11-01", [_d(METER, 444)])  # new
+    data = gear.summary(c, "ann")
+    assert [d["key"] for d in data["devices"]] == ["sn444", "sn111"]
+    assert data["first_day"] == "2025-02-01"  # the first device shown, not the first activity
+    assert gear.activity_ids(c, "ann", "sn222") == ({}, [])
 
 
 def test_activity_counted_once_and_excluded_left_out(tmp_path):
@@ -133,6 +180,8 @@ def test_time_filter_counts_only_its_activities(tmp_path):
     _activity(c, "2026-02-02", None)
     data = gear.summary(c, "ann", *_since("2026-01-01"))
     assert (data["first_day"], data["without"]) == ("2026-02-01", 1)
+    _activity(c, "2025-01-01", None)  # before the first device: not on the time axis
+    assert gear.summary(c, "ann")["first_day"] == "2025-05-01"
     found = _by_key(data)
     assert set(found) == {"sn111", "sn333"}
     assert found["sn111"]["activities"] == 1
@@ -228,6 +277,9 @@ def test_activities_of_one_device(tmp_path):
     # previous / next stay within the device
     one = client.get(f"/api/activities/{first}?device=sn222").json()
     assert one["next_id"] == third
+    # the activity page names the device the entry joined
+    gear_tile = client.get(f"/api/activities/{third}").json()["devices"]
+    assert [(d["name"], d["serial"]) for d in gear_tile] == [("HRM-Dual", 222)]
 
 
 def test_api(tmp_path):

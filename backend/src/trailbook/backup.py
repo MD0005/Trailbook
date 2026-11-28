@@ -40,7 +40,8 @@ EXPORT_RE = re.compile(r"^trailbook-export-[0-9A-Za-z_.-]+\.zip$")
 FILE_SUFFIXES = (".fit", ".zip", ".gz", ".gpx", ".tcx")  # watched folder: these only
 PARTIAL_SUFFIXES = (".part", ".tmp")  # unfinished writes, never exported
 # Machine-specific or transient settings that must not move with the database.
-TRANSIENT_SETTINGS = ("import_progress", "garmin_ha_notified")  # garmin.HA_NOTIFIED_SETTING
+# garmin.HA_NOTIFIED_SETTING, hasensors.SENT_SETTING
+TRANSIENT_SETTINGS = ("import_progress", "garmin_ha_notified", "ha_sensors_sent")
 
 ProgressFn = Callable[..., None]
 

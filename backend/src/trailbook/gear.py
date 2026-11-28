@@ -5,6 +5,7 @@ much each was used. How devices are told apart and what is counted: docs/MANUAL.
 
 import json
 import sqlite3
+from bisect import bisect_left
 from collections import Counter
 from datetime import date, datetime, timedelta
 
@@ -12,11 +13,29 @@ from . import fitfile
 
 BREAK_DAYS = 30  # this long without a device ends a stretch of its use
 BATTERY_STATUSES = ("new", "good", "ok", "low", "critical")  # FIT battery_status worth showing
+# A device used fewer than RARE_USES times and not in the last RECENT_DAYS days is taken for a
+# test or a mistake in a file and not shown anywhere.
+RARE_USES = 5
+RECENT_DAYS = 61  # two months
+WATCH_NAMES = ("forerunner", "fēnix", "fenix", "epix", "venu", "vívoactive", "vivoactive",
+               "instinct", "enduro", "marq", "descent", "approach")  # fmt: skip
 
 
-def _named(product: str | None) -> bool:
-    """The file names the model (a bare product number or nothing does not)."""
-    return bool(product) and not product.isdigit()
+def _today() -> date:
+    return date.today()
+
+
+def _watch_model(label: tuple) -> bool:
+    return label[3].lower().startswith(WATCH_NAMES)
+
+
+def _named(label: tuple) -> bool:
+    """The file names the model (a bare product number or nothing does not). A watch model on a
+    sensor or a trainer is no name either: another maker's product number read as Garmin's."""
+    kind, _, product, _ = label
+    if not product or product.isdigit():
+        return False
+    return not (kind in ("sensor", "trainer") and _watch_model(label))
 
 
 class _Device:
@@ -26,8 +45,10 @@ class _Device:
         self.activities: dict[int, sqlite3.Row] = {}  # one entry per activity
         self.batteries: dict[int, dict] = {}  # activity id -> {level, status} the file gave
 
-    def add(self, activity: sqlite3.Row, label: tuple, entry: dict) -> None:
-        self.labels[label] += 1
+    def add(self, activity: sqlite3.Row, label: tuple | None, entry: dict) -> None:
+        """`label`: None for an entry that joins the device and does not name it."""
+        if label:
+            self.labels[label] += 1
         self.activities[activity["id"]] = activity
         level, status = entry.get("level"), entry.get("battery")
         status = status if status in BATTERY_STATUSES else None
@@ -44,37 +65,65 @@ class _Device:
         return {**self.batteries[last["id"]], "day": _moment(last)["day"]}
 
     def ranked(self) -> list[tuple]:
-        """The labels, the one that says most about the device first: with a model name, then
-        the most common (a training app lists sensors under its own maker, or with no name)."""
+        """The labels, the one that says most about the device first: with a model name, then a
+        known kind, then the most common (a training app lists sensors under its own maker, or
+        with no name)."""
         return sorted(
-            self.labels, key=lambda x: (not _named(x[2]), -self.labels[x], str(x))
-        )  # fmt: skip
+            self.labels,
+            key=lambda x: (not _named(x), x[0] == "sensor", -self.labels[x], str(x)),
+        )
 
 
-def _only(found: list[_Device]) -> _Device | None:
-    return found[0] if len(found) == 1 else None
-
-
-def _match(label: tuple, known: list[_Device]) -> _Device | None:
-    """The one device with a serial number that an entry without one belongs to, or None when
-    there is none or more than one to choose from: by the product; else by a name that is the
-    start of its name ("Forerunner" is the Forerunner 965); else, for an entry that names no
-    model, by the kind of device."""
-    kind, _, product, name = label
-    if product:
-        same = [
+def _candidates(label: tuple, known: list[_Device]) -> list[_Device]:
+    """The devices with a serial number an entry without one can belong to. A watch sending
+    its heart rate (listed by its model, or as a "Watch") is one of the watches of that model;
+    else the devices of the same product; for an entry that names no model, of the same kind
+    (not for unknown sensors)."""
+    kind, maker, product, name = label
+    sending = kind == "watch" and product is None and maker in (None, "Garmin")
+    if sending or (kind in ("watch", "hr_strap") and _watch_model(label)):
+        watches = [d for d in known if d.ranked()[0][0] == "watch"]
+        if name == "Watch":
+            return watches
+        start = f"{name} ".lower()
+        return [d for d in watches if f"{d.ranked()[0][3]} ".lower().startswith(start)]
+    if _named(label):
+        return [
             d for d in known
             if any(str(p).lower() == product.lower() for _, _, p, _ in d.labels if p)
         ]  # fmt: skip
-        if same:
-            return _only(same)
-    start = f"{name} ".lower()
-    longer = [d for d in known if d.ranked()[0][3].lower().startswith(start)]
-    if longer:
-        return _only(longer)
-    if _named(product) or kind == "sensor":
-        return None
-    return _only([d for d in known if d.ranked()[0][0] == kind])
+    if kind == "sensor":
+        return []
+    same = [d for d in known if d.ranked()[0][0] == kind]
+    if kind in ("watch", "bike_computer", "app"):  # what recorded: of the same maker
+        same = [d for d in same if d.ranked()[0][1] == maker]
+    return same
+
+
+def _nearest(found: list[_Device], days: dict[str, list[int]], day: int) -> _Device:
+    """The device used closest in time to `day` (`days`: each one's own days, in order);
+    equally close: the most used."""
+
+    def distance(d: _Device) -> tuple:
+        own = days[d.key]
+        i = bisect_left(own, day)
+        return min(abs(x - day) for x in own[max(i - 1, 0) : i + 1]), -len(own), d.key
+
+    return min(found, key=distance)
+
+
+def _kept(uses: int, last_start: str) -> bool:
+    """Used often enough, or lately."""
+    since = _today() - timedelta(days=RECENT_DAYS)
+    return uses >= RARE_USES or last_start[:10] >= since.isoformat()
+
+
+def _shown(d: _Device) -> bool:
+    """Not an unknown sensor, and not a rare device of long ago."""
+    label = d.ranked()[0]
+    if label[0] == "sensor" and not _named(label):
+        return False
+    return _kept(len(d.activities), max(map(_age, d.activities.values()))[0])
 
 
 def _moment(a: sqlite3.Row) -> dict:
@@ -83,42 +132,60 @@ def _moment(a: sqlite3.Row) -> dict:
     return {"day": local.date().isoformat(), "activity_id": a["id"]}
 
 
-def _devices(conn: sqlite3.Connection, person_id: str) -> tuple[list, list[_Device]]:
-    """The person's activities, oldest first, and the devices in them over the whole history.
-    Activities left out of the statistics are not counted."""
+def _ordinal(a: sqlite3.Row) -> int:
+    return date.fromisoformat(_moment(a)["day"]).toordinal()
+
+
+def _devices(
+    conn: sqlite3.Connection, person_id: str, also: int | None = None
+) -> tuple[list, list[_Device]]:
+    """The person's activities, oldest first, and the devices to show, from the whole history.
+    Activities left out of the statistics are not counted (but `also`, the one being shown).
+    Only devices with a serial number: an entry without one joins the nearest in time that it
+    fits, else it is left out."""
     rows = conn.execute(
         """SELECT id, start_time_utc, utc_offset_s, devices, activity_type, time_s,
                   distance_m, ascent_m
-           FROM activities WHERE person_id = ? AND NOT excluded ORDER BY start_time_utc, id""",
-        (person_id,),
+           FROM activities WHERE person_id = ? AND (NOT excluded OR id IS ?)
+           ORDER BY start_time_utc, id""",
+        (person_id, also),
     ).fetchall()
     with_serial: dict[int, _Device] = {}
-    loose: list[tuple[sqlite3.Row, tuple, dict]] = []  # entries without a serial number
+    entries: list[tuple[sqlite3.Row, tuple, dict]] = []  # entries with a serial number
+    loose: list[tuple[sqlite3.Row, tuple, dict]] = []  # and without one
     for a in rows:
         for e in json.loads(a["devices"]) if a["devices"] else []:
             label = (e.get("kind") or "sensor", e.get("maker"), e.get("product"),
                      e.get("name") or "Sensor")  # fmt: skip
             serial = e.get("serial")
-            if serial:
-                if serial not in with_serial:
-                    with_serial[serial] = _Device(f"sn{serial}", serial)
-                with_serial[serial].add(a, label, e)
-            else:
+            if not serial:
                 loose.append((a, label, e))
-    # matched against the devices as their serial-numbered entries describe them
-    known = list(with_serial.values())
-    targets = {label: _match(label, known) for label in dict.fromkeys(x for _, x, _ in loose)}
-    others: dict[tuple, _Device] = {}
-    for a, label, e in loose:
-        device = targets[label]
-        if device is None:
-            kind, _, product, name = label
-            key = (kind, (product or name).lower())
-            if key not in others:
-                others[key] = _Device(":".join(key), None)
-            device = others[key]
-        device.add(a, label, e)
-    return rows, [*known, *others.values()]
+                continue
+            if serial not in with_serial:
+                with_serial[serial] = _Device(f"sn{serial}", serial)
+            with_serial[serial].add(a, label, e)
+            entries.append((a, label, e))
+    # A watch sending its heart rate may do so under a number of its own: those entries join
+    # the watch too.
+    straps = {
+        d.serial: d for d in with_serial.values()
+        if all(x[0] == "hr_strap" and _watch_model(x) for x in d.labels)
+    }  # fmt: skip
+    known = [d for d in with_serial.values() if d.serial not in straps]
+    moved = {s for s, d in straps.items() if _candidates(d.ranked()[0], known)}
+    loose += [x for x in entries if x[2]["serial"] in moved]
+    found = [d for d in with_serial.values() if d.serial not in moved]
+    # matched against the devices as their own entries with a serial number describe them
+    candidates = {x: _candidates(x, known) for x in dict.fromkeys(x for _, x, _ in loose)}
+    days = {d.key: sorted(map(_ordinal, d.activities.values())) for d in known}
+    joins = [
+        (_nearest(candidates[label], days, _ordinal(a)), a, e)
+        for a, label, e in loose
+        if candidates[label]
+    ]
+    for device, a, e in joins:
+        device.add(a, None, e)  # counted for it; its name stays its own
+    return rows, [d for d in found if _shown(d)]
 
 
 def activity_ids(conn: sqlite3.Connection, person_id: str, key: str) -> tuple[dict, list[int]]:
@@ -128,6 +195,22 @@ def activity_ids(conn: sqlite3.Connection, person_id: str, key: str) -> tuple[di
         if d.key == key:
             return {"name": d.ranked()[0][3], "serial": d.serial}, list(d.activities)
     return {}, []
+
+
+def of_activity(conn: sqlite3.Connection, person_id: str, activity_id: int) -> list[dict]:
+    """The devices of one activity as Statistics › Gear tells them apart: {kind, maker,
+    product, name, serial, products}, the recording device first."""
+    out = []
+    for d in _devices(conn, person_id, also=activity_id)[1]:
+        if activity_id not in d.activities:
+            continue
+        labels = d.ranked()
+        kind, maker, product, name = labels[0]
+        out.append({
+            "kind": kind, "maker": maker, "product": product, "name": name, "serial": d.serial,
+            "products": list(dict.fromkeys(p for _, _, p, _ in labels if p)),
+        })  # fmt: skip
+    return sorted(out, key=lambda d: (fitfile.kind_order(d["kind"]), d["serial"]))
 
 
 def _age(a: sqlite3.Row) -> tuple[str, int]:
@@ -181,7 +264,7 @@ def _scales(conn, person_id: str, keep) -> list[dict]:
     out = []
     for serial, all_of in groups.items():
         counted = [w for w in all_of if w["start_time_utc"] in keep]
-        if not counted:
+        if not counted or not _kept(len(all_of), all_of[-1]["start_time_utc"]):
             continue
         product = serials.get(serial)
         name = fitfile.device_name("garmin", fitfile.product_name(product)) or "Index scale"
@@ -199,7 +282,7 @@ def _scales(conn, person_id: str, keep) -> list[dict]:
 
 
 def summary(conn: sqlite3.Connection, person_id: str, where=(), params=()) -> dict:
-    """{first_day, without, devices}: the first day with something counted, the number of
+    """{first_day, without, devices}: the first day a device was used, the number of
     activities with no device information and one entry per device, the last used first.
     `where` / `params` (a Time filter on start_time_utc, utc_offset_s) limit what is counted;
     which entries are one device, their names, `order` and the battery come from the whole
@@ -264,6 +347,5 @@ def summary(conn: sqlite3.Connection, person_id: str, where=(), params=()) -> di
     out.sort(key=lambda d: (d["last_start"], d["time_s"] or 0, d["key"]), reverse=True)
     for d in out:
         del d["last_start"]
-    days = [d["first"]["day"] for d in out] + ([_moment(counted[0])["day"]] if counted else [])
-    first = min(days, default=None)
+    first = min((d["first"]["day"] for d in out), default=None)
     return {"first_day": first, "without": without, "devices": out}

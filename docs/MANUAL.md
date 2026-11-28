@@ -457,15 +457,25 @@ takes longer.
 - **Source**: the devices each activity's FIT file names (`device_info`): the watch or bike
   computer or app that recorded it and the connected sensors; built-in sensors are not listed.
   Activities left out of the statistics are not counted; activities without device information
-  (GPX, TCX, Strava files) are only counted under the table.
+  (GPX and TCX files, also those in a Strava export: Trailbook reads no device from them) are
+  only counted under the table.
 - **One device = one serial number**, whatever the files call it (a training app lists sensors
-  under its own maker, sometimes as another kind or without a model). Shown as the most common
-  entry that names a model, else the most common entry. Two devices of one model with two serial
-  numbers stay two.
-- **Entries without a serial number** (some files leave it out) join the only device with one
-  that fits, tried in this order: the same product; a name that begins with the entry's name
-  ("Forerunner" → Forerunner 965); for an entry that names no model, the same kind (not for
-  unknown sensors). Several candidates, or none: a device of its own, "no serial".
+  under its own maker, sometimes as another kind or without a model). Shown as an entry that
+  names a model, else one of a known kind, else the most common; a watch model given for a
+  sensor or a trainer is a misread product number, not a name. Two devices of one model with
+  two serial numbers stay two.
+- **Entries without a serial number** (some files leave it out) are counted for a device with
+  one: a watch sending its heart rate (by its model, or listed as "Watch") for the watch of
+  that model; else for a device of the same product; an entry that names no model for a device
+  of the same kind (a recording watch, bike computer or app: of the same maker too; never an
+  unknown sensor). Of several candidates the one used closest in time. Without a candidate the
+  entry is left out.
+- **A watch sending its heart rate under a number of its own** (listed as a heart rate strap
+  with a watch's name) is counted for the watch of that model.
+- **Left out everywhere** (this tab and the activity page): anything without a serial number,
+  unknown sensors (no model: just "Sensor") and a device with fewer than 5 activities none of
+  which is in the last 61 days (a test or a mistake in a file). A new device shows from its
+  first activity. The scale from Garmin Connect is the exception to the serial number rule.
 - A device listed twice in one activity (a watch recording and sending its heart rate) counts
   once.
 - **Activities, distance, time, elevation gain**: sums over the activities with the device in
@@ -480,7 +490,8 @@ takes longer.
 - **Rings**: time of the device / time of the most used device that has a card (retired devices
   have none).
 - **First and last used**: the local days of its first and last activity in the Time filter.
-- **In use**: a stretch of use runs from an activity to the next as long as fewer than 30 days
+- **In use**: with All time the axis starts on the first day a shown device was used, not
+  with the first activity. A stretch of use runs from an activity to the next as long as fewer than 30 days
   without the device lie between them; 30 days or more start a new stretch.
 - **Battery**: from the last activity (whole history) whose file says something. The watch or
   bike computer that recorded it logs its own level; the value is the last one, at the end of
@@ -776,6 +787,31 @@ can go: run 12 m/s, walk and hike 6, ride 30, swim 4, water 15, winter 40, other
    corrected positions (when that is within the limit) or by the speed before it.
 3. Speed samples with the same test: the speed from the corrected distance there.
 4. Distance, average and top speed of the activity and its laps computed again.
+
+## Sensors (Home Assistant)
+
+Home Assistant › Sensors lists them; only the Home Assistant app sends them. Every person with
+at least one activity (not archived, not the unassigned ones) has their own, on until switched
+off. Entity id: `sensor.trailbook_<person>_<key>`, the person's id in small letters, digits and
+underscores (`Michał Nowak` → `michal_nowak`); renaming the person changes only the shown name.
+
+| Key | Value |
+|---|---|
+| `vo2max_run` | The watch's VO2 max estimate after the latest run that has one (ml/kg/min, as Fitness shows it for running); attribute `date`. No estimate ever: no sensor. |
+| `run_distance_28d` | Running distance (km) of the last 28 local days, today included. |
+| `ride_distance_28d` | Cycling distance (km) of the last 28 days; virtual and e-bike rides count. |
+| `run_ride_distance_year` | Running + cycling distance (km) since 1 January; attributes `run_km`, `ride_km`. |
+| `distance_year` | Distance (km) of every activity since 1 January, whatever its type (motor sports too). |
+
+- The sports are the activity groups of the app (running includes treadmill, trail and virtual
+  runs). Activities excluded from the statistics add no distance. Values have one decimal.
+- **Sent** after each import, then checked every 5 minutes: a new day, an edited or deleted
+  activity, or a restart of Home Assistant (which forgets pushed states) is caught up then.
+- **History**: each sensor's value at the end of every day since the person's first activity
+  goes into Home Assistant's long-term statistics (filed at 12:00 UTC; today is left to Home
+  Assistant). A calendar year is sent again only when one of its values changes.
+- **Off**, or a person archived or without activities: the sensor is removed from Home
+  Assistant; the statistics already there stay. A sensor that appears again is on.
 
 ## Record notifications (Home Assistant)
 

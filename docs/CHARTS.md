@@ -233,7 +233,7 @@ The activity charts of both people, one column each (SPEC §10a), coupled on one
   left empty, in the device's colour — the same as its ring and table dot, given by the order
   of first use over the whole history. Retired devices: the rows below the others, bar and
   picture strongly faded (25 %). X axis: the days of the Time filter (All time: from the
-  first activity to today), the date steps and labels of the Fitness page, no axis title.
+  first day a device was used to today), the date steps and labels of the Fitness page, no axis title.
   The scale's bars are the days weighed. Hovering a row lights the device's card and table row, and the other way round.
   Hovering the plot: a vertical line with the exact date in a flag on the x axis; hovering a
   bar: its dates, then the device, its serial number, first and last date, activities, time and

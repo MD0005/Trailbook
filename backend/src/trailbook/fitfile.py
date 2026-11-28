@@ -690,6 +690,13 @@ _DEVICE_KIND = {
 }  # fmt: skip
 _KIND_ORDER = ("watch", "bike_computer", "app", "power_meter", "hr_strap", "trainer", "radar",
                "light", "speed_cadence", "foot_pod", "shifting", "sensor")  # fmt: skip
+
+
+def kind_order(kind: str) -> int:
+    """Where a kind of device comes in a list: the recording devices first."""
+    return _KIND_ORDER.index(kind) if kind in _KIND_ORDER else len(_KIND_ORDER)
+
+
 _NAME_PREFIX = {
     "fr": "Forerunner", "edge": "Edge", "fenix": "fēnix", "epix": "epix", "venu": "Venu",
     "vivoactive": "vívoactive", "instinct": "Instinct", "enduro": "Enduro", "marq": "MARQ",

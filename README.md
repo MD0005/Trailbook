@@ -26,6 +26,7 @@ export, FIT/GPX/TCX files) are there to bring in older history or a second devic
   - [Windows app](#windows-app)
   - [Docker](#docker)
 - [First steps](#first-steps)
+- [Sensors in Home Assistant](#sensors-in-home-assistant)
 - [Records in Home Assistant](#records-in-home-assistant)
 - [Updating](#updating)
 - [Privacy](#privacy)
@@ -99,6 +100,7 @@ export, FIT/GPX/TCX files) are there to bring in older history or a second devic
 
 **And more**
 - Several people in one install; pick two to see the activities they did together.
+- Home Assistant sensors per person: VO2 max, running and cycling distance, with history.
 - New records as Home Assistant notifications and a sensor for your dashboards.
 - A built-in manual that explains every number.
 - Garmin Connect as the main source: the whole history, then every new activity on its own.
@@ -179,6 +181,15 @@ The same image runs on any machine with Docker (amd64 or arm64, e.g. a Raspberry
 
 In Home Assistant the watched folder must be inside a folder the app can see: `/share` (for example
 `/share/trailbook`), `/media` (read only) or the app's own config folder.
+
+## Sensors in Home Assistant
+
+The Home Assistant app creates sensors for every person by itself, for example
+`sensor.trailbook_anna_run_distance_28d`: VO2 max (running), running and cycling over the last
+4 weeks, running and cycling this year, and the distance of all activities this year. Their
+history since the first activity goes into Home Assistant's long-term statistics. See the list,
+with what each one counts, under **Home Assistant › Sensors**, and switch off the ones you do
+not want.
 
 ## Records in Home Assistant
 

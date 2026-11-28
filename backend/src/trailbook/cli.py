@@ -17,6 +17,7 @@ from . import (
     backup,
     db,
     garmin,
+    hasensors,
     importer,
     jobs,
     records,
@@ -178,6 +179,7 @@ def cmd_scan(conn, args) -> int:
 
             kinds = workout.backfill(conn, progress=workout_progress)
             records.refresh_and_publish(conn)  # new top-3 places -> Home Assistant
+            hasensors.refresh_and_publish(conn)  # the people's sensors
             if kinds:
                 out(f"Workout kind detected for {kinds} activities.")
             if matched:

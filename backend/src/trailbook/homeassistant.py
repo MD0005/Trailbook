@@ -23,16 +23,16 @@ def available() -> bool:
     return bool(os.environ.get("SUPERVISOR_TOKEN"))
 
 
-def _request(path: str, data: dict | None = None) -> int | None:
-    """HTTP status of a call to Home Assistant's REST API (POST with `data`, else GET); None
-    without a token or when it did not answer."""
+def _request(path: str, data: dict | None = None, method: str | None = None) -> int | None:
+    """HTTP status of a call to Home Assistant's REST API (`method`, else POST with `data`,
+    else GET); None without a token or when it did not answer."""
     token = os.environ.get("SUPERVISOR_TOKEN")
     if not token:
         return None
     req = urllib.request.Request(
         f"{API_URL}/{path}",
         data=None if data is None else json.dumps(data).encode(),
-        method="GET" if data is None else "POST",
+        method=method or ("GET" if data is None else "POST"),
         headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
     )
     try:
@@ -60,6 +60,12 @@ def has_state(entity_id: str) -> bool | None:
     """Whether Home Assistant knows the entity now (None: no answer)."""
     status = _request(f"states/{entity_id}")
     return None if status is None else status == 200
+
+
+def remove_state(entity_id: str) -> bool:
+    """Remove an entity made with `set_state` (also fine when it is already gone)."""
+    status = _request(f"states/{entity_id}", method="DELETE")
+    return status is not None and (200 <= status < 300 or status == 404)
 
 
 def notify(notification_id: str, title: str, message: str) -> bool:

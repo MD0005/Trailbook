@@ -172,7 +172,7 @@ def install() -> dict:
 def register_resource(url: str) -> str:
     """Add (or point to the new version) the card's dashboard resource. Fails (ValueError)
     when the dashboards are in YAML mode: then the resource is added by hand."""
-    with _Ws() as ws:
+    with Ws() as ws:
         found = ws.call({"type": "lovelace/resources"})
         mine = [r for r in found if str(r.get("url", "")).split("?")[0] == LOCAL_PATH]
         if mine and mine[0]["url"] == url:
@@ -191,11 +191,11 @@ def register_resource(url: str) -> str:
         return "registered"
 
 
-class _Ws:
+class Ws:
     """A minimal websocket client for Home Assistant's API through the Supervisor (text
     frames only, one call at a time)."""
 
-    def __enter__(self) -> _Ws:
+    def __enter__(self) -> Ws:
         token = os.environ.get("SUPERVISOR_TOKEN") or ""
         self.sock = socket.create_connection((WS_HOST, 80), timeout=TIMEOUT_S)
         key = base64.b64encode(os.urandom(16)).decode()
